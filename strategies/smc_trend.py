@@ -60,6 +60,30 @@ class SMCTrend(IStrategy):
     can_short = True
     stoploss = -0.03  # 3% initial stop
     use_custom_stoploss = False
+
+    # --- Protections ---
+    @property
+    def protections(self):
+        return [
+            {
+                "method": "MaxDrawdown",
+                "lookback_period_candles": 48,   # 48 hours window
+                "trade_limit": 10,               # Min trades before activation
+                "stop_duration_candles": 12,      # Pause 12 hours
+                "max_allowed_drawdown": 0.15,     # 15% max drawdown
+            },
+            {
+                "method": "StoplossGuard",
+                "lookback_period_candles": 24,   # 24 hours window
+                "trade_limit": 4,                # 4 stop losses in window
+                "stop_duration_candles": 6,       # Pause 6 hours
+                "only_per_pair": False,           # Global
+            },
+        ]
+
+    # --- Live macro data cache ---
+    _live_confidence: float | None = None
+    _live_confidence_time: datetime | None = None
     trailing_stop = False
 
     # Pyramid: allow adding to winning positions
@@ -94,6 +118,47 @@ class SMCTrend(IStrategy):
 
     # --- Futures settings ---
     leverage_default = 3.0
+
+    def bot_loop_start(self, current_time: datetime, **kwargs) -> None:
+        """Fetch live macro data from Global Confidence Engine every hour.
+
+        Only runs in live/dry_run mode. Throttled to 1 call per hour.
+        Results cached on self._live_confidence for use in leverage/sizing.
+        """
+        if self.config.get("runmode", {}).value not in ("live", "dry_run"):
+            return
+
+        # Throttle: fetch every 60 minutes
+        if (self._live_confidence_time is not None
+                and (current_time - self._live_confidence_time).total_seconds() < 3600):
+            return
+
+        try:
+            from market_monitor.confidence_engine import GlobalConfidenceEngine
+            engine = GlobalConfidenceEngine()
+            result = engine.calculate(current_time)
+            self._live_confidence = result["score"]
+            self._live_confidence_time = current_time
+
+            # Notify on regime change
+            if _TG_AVAILABLE:
+                old_regime = getattr(self, "_last_regime", None)
+                new_regime = result["regime"]
+                if old_regime and old_regime != new_regime:
+                    notify_confidence_change(
+                        old_regime, new_regime, result["score"],
+                        f"宏觀: {result['sandboxes']['macro']:.2f} | "
+                        f"情緒: {result['sandboxes']['sentiment']:.2f}"
+                    )
+                self._last_regime = new_regime
+
+            logger.info(
+                "Confidence Engine: %.2f (%s) | Macro=%.2f Sentiment=%.2f",
+                result["score"], result["regime"],
+                result["sandboxes"]["macro"], result["sandboxes"]["sentiment"]
+            )
+        except Exception as e:
+            logger.warning("Confidence Engine fetch failed: %s", e)
 
     def informative_pairs(self):
         """Pull 4H data for HTF trend bias."""
@@ -403,11 +468,15 @@ class SMCTrend(IStrategy):
           conf=0.9 → 2.62x
           conf=1.0 → 3.0x (max)
         """
-        dataframe, _ = self.dp.get_analyzed_dataframe(pair, self.timeframe)
-        if len(dataframe) == 0:
-            return 1.0
+        # Use live macro confidence if available, else fall back to dataframe
+        if self._live_confidence is not None:
+            confidence = self._live_confidence
+        else:
+            dataframe, _ = self.dp.get_analyzed_dataframe(pair, self.timeframe)
+            if len(dataframe) == 0:
+                return 1.0
+            confidence = dataframe.iloc[-1].get("confidence", 0.5)
 
-        confidence = dataframe.iloc[-1].get("confidence", 0.5)
         max_lev = self.max_leverage.value
 
         # Quadratic scaling: aggressive only at high confidence
