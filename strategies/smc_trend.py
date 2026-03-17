@@ -216,28 +216,68 @@ class SMCTrend(IStrategy):
             htf_swing = smc.swing_highs_lows(htf_df, swing_length=htf_sl)
             htf_bos = smc.bos_choch(htf_df, htf_swing, close_break=True)
 
-            # Propagate HTF trend to 1H dataframe
-            # Latest BOS direction = trend bias
+            # 4H BOS/CHoCH for trend
             htf_df["htf_bos"] = htf_bos["BOS"]
             htf_df["htf_choch"] = htf_bos["CHOCH"]
-            htf_df = htf_df[["date", "htf_bos", "htf_choch"]].copy()
-            htf_df["date"] = pd.to_datetime(htf_df["date"])
+
+            # 4H Order Blocks — detect OB zones on HTF
+            htf_ob = smc.ob(htf_df, htf_swing, close_mitigation=True)
+            htf_df["htf_ob"] = htf_ob["OB"]
+            htf_df["htf_ob_top"] = htf_ob["Top"]
+            htf_df["htf_ob_bottom"] = htf_ob["Bottom"]
+
+            # 4H FVG — detect FVG zones on HTF
+            htf_fvg = smc.fvg(htf_df)
+            htf_df["htf_fvg"] = htf_fvg["FVG"]
+            htf_df["htf_fvg_top"] = htf_fvg["Top"]
+            htf_df["htf_fvg_bottom"] = htf_fvg["Bottom"]
+
+            # Forward-fill latest 4H OB/FVG zones onto 1H
+            # Keep the most recent OB/FVG levels active
+            htf_df["htf_ob_top"] = htf_df["htf_ob_top"].ffill()
+            htf_df["htf_ob_bottom"] = htf_df["htf_ob_bottom"].ffill()
+            htf_df["htf_ob"] = htf_df["htf_ob"].ffill()
+            htf_df["htf_fvg_top"] = htf_df["htf_fvg_top"].ffill()
+            htf_df["htf_fvg_bottom"] = htf_df["htf_fvg_bottom"].ffill()
+
+            merge_cols = [
+                "date", "htf_bos", "htf_choch",
+                "htf_ob_top", "htf_ob_bottom", "htf_ob",
+                "htf_fvg_top", "htf_fvg_bottom",
+            ]
+            htf_merge = htf_df[merge_cols].copy()
+            htf_merge["date"] = pd.to_datetime(htf_merge["date"])
             dataframe["date"] = pd.to_datetime(dataframe["date"])
 
-            # Forward-fill HTF bias onto 1H candles
             dataframe = pd.merge_asof(
                 dataframe.sort_values("date"),
-                htf_df.sort_values("date"),
+                htf_merge.sort_values("date"),
                 on="date",
                 direction="backward",
             )
 
             # Compute running trend from latest BOS
             dataframe["htf_trend"] = _compute_trend(dataframe, "htf_bos", "htf_choch")
+
+            # 4H zone alignment: is 1H price within a 4H OB or FVG zone?
+            dataframe["in_htf_ob_zone"] = (
+                (dataframe["close"] >= dataframe["htf_ob_bottom"])
+                & (dataframe["close"] <= dataframe["htf_ob_top"])
+            ).fillna(False)
+
+            dataframe["in_htf_fvg_zone"] = (
+                (dataframe["close"] >= dataframe["htf_fvg_bottom"])
+                & (dataframe["close"] <= dataframe["htf_fvg_top"])
+            ).fillna(False)
+
+            dataframe["htf_zone_aligned"] = (
+                dataframe["in_htf_ob_zone"] | dataframe["in_htf_fvg_zone"]
+            )
         else:
             dataframe["htf_trend"] = 0
             dataframe["htf_bos"] = np.nan
             dataframe["htf_choch"] = np.nan
+            dataframe["htf_zone_aligned"] = True  # Default: don't filter
 
         # =============================================
         # Premium / Discount zones
@@ -357,11 +397,17 @@ class SMCTrend(IStrategy):
             & (dataframe["confidence"] >= 0.5)
         )
 
+        # 4H zone alignment: Grade A always, Grade B requires 4H zone
+        htf_zone = dataframe.get("htf_zone_aligned", True)
+
         dataframe.loc[
             (
                 (dataframe["htf_trend"] > 0)                    # 4H bullish
                 & (dataframe["in_ote_long"] == True)             # OTE zone (discount)
-                & (zone_long_a | zone_long_b)                    # Grade A or B zone
+                & (
+                    zone_long_a                                   # Grade A: always OK
+                    | (zone_long_b & htf_zone)                   # Grade B: needs 4H zone
+                )
                 & adam_long_filter                                # Adam projection up
                 & (dataframe["fr_ok_long"] == True)              # Funding rate OK
                 & (dataframe["vol_regime_ok"] == True)           # Volatility normal
@@ -383,7 +429,10 @@ class SMCTrend(IStrategy):
             (
                 (dataframe["htf_trend"] < 0)                    # 4H bearish
                 & (dataframe["in_ote_short"] == True)            # Premium zone OTE
-                & (zone_short_a | zone_short_b)                  # Grade A or B zone
+                & (
+                    zone_short_a                                  # Grade A: always OK
+                    | (zone_short_b & htf_zone)                  # Grade B: needs 4H zone
+                )
                 & adam_short_filter                               # Adam projection down
                 & (dataframe["fr_ok_short"] == True)             # Funding rate OK
                 & (dataframe["vol_regime_ok"] == True)           # Volatility normal
