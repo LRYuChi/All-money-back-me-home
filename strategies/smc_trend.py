@@ -349,14 +349,19 @@ class SMCTrend(IStrategy):
         confidence_ok = dataframe["confidence"] > 0.2
 
         # ===== LONG ENTRY =====
+        # Grade A: OB+FVG confluence (strongest, always allowed)
+        # Grade B: OB or FVG alone (requires higher confidence ≥ 0.5)
+        zone_long_a = dataframe["ob_fvg_confluence_bull"] == True
+        zone_long_b = (
+            (dataframe["in_bullish_ob"] | dataframe["in_bullish_fvg"])
+            & (dataframe["confidence"] >= 0.5)
+        )
+
         dataframe.loc[
             (
                 (dataframe["htf_trend"] > 0)                    # 4H bullish
                 & (dataframe["in_ote_long"] == True)             # OTE zone (discount)
-                & (
-                    (dataframe["in_bullish_ob"] == True)          # At bullish OB
-                    | (dataframe["in_bullish_fvg"] == True)       # Or at bullish FVG
-                )
+                & (zone_long_a | zone_long_b)                    # Grade A or B zone
                 & adam_long_filter                                # Adam projection up
                 & (dataframe["fr_ok_long"] == True)              # Funding rate OK
                 & (dataframe["vol_regime_ok"] == True)           # Volatility normal
@@ -368,14 +373,17 @@ class SMCTrend(IStrategy):
         ] = 1
 
         # ===== SHORT ENTRY =====
+        zone_short_a = dataframe["ob_fvg_confluence_bear"] == True
+        zone_short_b = (
+            (dataframe["in_bearish_ob"] | dataframe["in_bearish_fvg"])
+            & (dataframe["confidence"] >= 0.5)
+        )
+
         dataframe.loc[
             (
                 (dataframe["htf_trend"] < 0)                    # 4H bearish
                 & (dataframe["in_ote_short"] == True)            # Premium zone OTE
-                & (
-                    (dataframe["in_bearish_ob"] == True)          # At bearish OB
-                    | (dataframe["in_bearish_fvg"] == True)       # Or at bearish FVG
-                )
+                & (zone_short_a | zone_short_b)                  # Grade A or B zone
                 & adam_short_filter                               # Adam projection down
                 & (dataframe["fr_ok_short"] == True)             # Funding rate OK
                 & (dataframe["vol_regime_ok"] == True)           # Volatility normal
@@ -634,12 +642,18 @@ def _add_premium_discount(df: DataFrame) -> DataFrame:
 
 
 def _detect_active_zones(df: DataFrame) -> DataFrame:
-    """Detect if current price is within an active (unmitigated) OB or FVG."""
+    """Detect if current price is within an active (unmitigated) OB or FVG.
 
+    Also detects OB+FVG confluence (Grade A zones):
+    - Direct overlap: OB and FVG price ranges intersect
+    - Proximity: distance between OB and FVG edges < 0.5 × ATR
+    """
     df["in_bullish_ob"] = False
     df["in_bearish_ob"] = False
     df["in_bullish_fvg"] = False
     df["in_bearish_fvg"] = False
+    df["ob_fvg_confluence_bull"] = False  # Grade A: OB+FVG overlap
+    df["ob_fvg_confluence_bear"] = False
 
     # Track active (unmitigated) order blocks
     active_obs = []  # list of (type, top, bottom, index)
@@ -723,6 +737,11 @@ def _detect_active_zones(df: DataFrame) -> DataFrame:
                     df.at[df.index[i], "in_bearish_fvg"] = True
 
         active_fvgs = remaining
+
+    # ===== OB+FVG Confluence (Grade A) =====
+    # Price is in both OB and FVG simultaneously = strongest entry zone
+    df["ob_fvg_confluence_bull"] = df["in_bullish_ob"] & df["in_bullish_fvg"]
+    df["ob_fvg_confluence_bear"] = df["in_bearish_ob"] & df["in_bearish_fvg"]
 
     return df
 
