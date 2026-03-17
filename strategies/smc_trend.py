@@ -464,7 +464,32 @@ class SMCTrend(IStrategy):
     def confirm_trade_entry(self, pair: str, order_type: str, amount: float,
                             rate: float, time_in_force: str, current_time: datetime,
                             entry_tag: str | None, side: str, **kwargs) -> bool:
-        """進場確認 — 發送繁體中文 Telegram 通知."""
+        """進場確認 — Guard Pipeline 風控 + 繁體中文 Telegram 通知."""
+        # === Guard Pipeline check (live/dry_run only) ===
+        if self.config.get("runmode", {}).value in ("live", "dry_run"):
+            try:
+                import asyncio
+                from guards.base import GuardContext
+                from guards.pipeline import create_default_pipeline
+
+                ctx = GuardContext(
+                    symbol=pair,
+                    side="short" if side == "short" else "long",
+                    amount=amount * rate,
+                    leverage=self.leverage_default,
+                    account_balance=self.wallets.get_total("USDT") if self.wallets else 1000,
+                )
+                pipeline = create_default_pipeline()
+                rejection = asyncio.get_event_loop().run_until_complete(pipeline.run(ctx))
+                if rejection:
+                    logger.warning("Guard rejected %s %s: %s", pair, side, rejection)
+                    if _TG_AVAILABLE:
+                        from market_monitor.telegram_zh import send_message
+                        send_message(f"🛡️ *Guard 攔截*\n{pair} {side}\n原因: {rejection}")
+                    return False
+            except Exception as e:
+                logger.warning("Guard Pipeline error: %s", e)
+
         if _TG_AVAILABLE:
             dataframe, _ = self.dp.get_analyzed_dataframe(pair, self.timeframe)
             confidence = 0.5
