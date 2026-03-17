@@ -1,0 +1,51 @@
+# Multi-market indicator watchlist
+# Used by market_monitor for daily scanning (observation only, no auto-trading)
+
+us_stocks:
+  indices:
+    - "^GSPC"     # S&P 500
+    - "^IXIC"     # Nasdaq Composite
+    - "^DJI"      # Dow Jones
+  stocks:
+    - "AAPL"
+    - "NVDA"
+    - "TSMC"
+    - "MSFT"
+    - "GOOGL"
+  macro:
+    - "^VIX"      # Volatility Index
+    - "^TNX"      # 10-Year Treasury Yield
+    - "DX-Y.NYB"  # US Dollar Index
+
+tw_stocks:
+  indices:
+    - "^TWII"     # Taiwan Weighted Index
+  stocks:
+    - "2330"      # TSMC
+    - "2317"      # Hon Hai (Foxconn)
+    - "2454"      # MediaTek
+    - "2382"      # Quanta Computer
+
+crypto:
+  symbols:
+    - "BTC/USDT"
+    - "ETH/USDT"
+    - "SOL/USDT"
+
+indicators:
+  technical:
+    - name: "RSI"
+      period: 14
+    - name: "SMA"
+      periods: [20, 50, 200]
+    - name: "MACD"
+      fast: 12
+      slow: 26
+      signal: 9
+    - name: "BB"
+      period: 20
+      std: 2
+  alerts:
+    rsi_overbought: 70
+    rsi_oversold: 30
+    price_above_ma200: true
