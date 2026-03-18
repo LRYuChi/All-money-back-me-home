@@ -58,11 +58,51 @@ def _get_confidence() -> dict:
         }
     except Exception as e:
         logger.warning("Confidence engine error: %s", e)
-        return {
-            "score": 0.5, "regime": "UNKNOWN",
-            "event_multiplier": 1.0,
-            "sandboxes": {}, "factors": {}, "guidance": {},
-        }
+
+    # Fallback: build from available macro data
+    score = 0.5
+    regime = "CAUTIOUS"
+    sandboxes = {"macro": 0.4, "sentiment": 0.5, "capital": 0.5, "haven": 0.5}
+
+    # Try to get VIX/Fear&Greed for better fallback
+    try:
+        import yfinance as yf
+        vix_df = yf.Ticker("^VIX").history(period="5d")
+        if not vix_df.empty:
+            vix_val = float(vix_df["Close"].iloc[-1])
+            sandboxes["sentiment"] = max(0, min(1, 1 - vix_val / 50))
+    except Exception:
+        pass
+
+    try:
+        fg = _fetch_json("https://api.alternative.me/fng/?limit=1")
+        if fg and fg.get("data"):
+            fg_val = int(fg["data"][0]["value"])
+            sandboxes["macro"] = fg_val / 100
+    except Exception:
+        pass
+
+    avg = sum(sandboxes.values()) / len(sandboxes)
+    score = round(avg, 2)
+    if score >= 0.7: regime = "AGGRESSIVE"
+    elif score >= 0.5: regime = "NORMAL"
+    elif score >= 0.35: regime = "CAUTIOUS"
+    elif score >= 0.2: regime = "DEFENSIVE"
+    else: regime = "HIBERNATE"
+
+    guidance = {
+        "position_pct": 100 if score >= 0.7 else 75 if score >= 0.5 else 50 if score >= 0.35 else 25,
+        "leverage": round(1.0 + 2.0 * score ** 2, 1),
+        "threshold_mult": round(1.0 / max(score, 0.1), 1),
+    }
+
+    return {
+        "score": score, "regime": regime,
+        "event_multiplier": 1.0,
+        "sandboxes": sandboxes,
+        "factors": {},
+        "guidance": guidance,
+    }
 
 
 def _get_crypto_overview() -> list[dict]:

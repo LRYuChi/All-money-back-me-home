@@ -7,7 +7,7 @@ interface ConfidenceData {
   regime: string;
   event_multiplier: number;
   sandboxes: Record<string, number>;
-  guidance: { position_pct: number; leverage: number };
+  guidance: { position_pct?: number; leverage?: number };
 }
 
 const REGIME_STYLE: Record<string, { label: string; color: string; bg: string }> = {
@@ -24,66 +24,84 @@ const SANDBOX_ZH: Record<string, string> = {
 
 export function ConfidencePanel({ data }: { data: ConfidenceData }) {
   const r = REGIME_STYLE[data.regime] || REGIME_STYLE.CAUTIOUS;
-  const g = data.guidance || { position_pct: 0, leverage: 0 };
+  const g = data.guidance || {};
+  const positionPct = g.position_pct ?? Math.round(data.score * 100);
+  const leverage = g.leverage ?? Math.round((1 + 2 * data.score ** 2) * 10) / 10;
 
   const radarData = Object.entries(data.sandboxes || {}).map(([k, v]) => ({
     label: SANDBOX_ZH[k] || k,
     value: v,
   }));
 
+  const hasRadar = radarData.length >= 3;
+
   return (
     <div className={`rounded-lg border p-4 ${r.bg}`}>
-      <div className="flex justify-between items-center mb-2">
-        <h3 className="text-sm font-medium text-gray-400">信心引擎</h3>
-        <div className="flex items-center gap-2">
-          <span className={`text-2xl font-bold ${r.color}`}>{(data.score * 100).toFixed(0)}</span>
-          <span className={`text-xs px-2 py-0.5 rounded ${r.color} bg-white/5`}>{r.label}</span>
+      {/* Header */}
+      <div className="flex justify-between items-center mb-3">
+        <h3 className="text-base font-semibold text-gray-300">信心引擎</h3>
+        <div className="flex items-center gap-3">
+          <span className={`text-3xl font-bold ${r.color}`}>{(data.score * 100).toFixed(0)}</span>
+          <span className={`text-sm px-2.5 py-1 rounded font-medium ${r.color} bg-white/5`}>{r.label}</span>
         </div>
       </div>
 
       {/* Progress bar */}
-      <div className="w-full bg-gray-700/50 rounded-full h-1.5 mb-3">
+      <div className="w-full bg-gray-700/50 rounded-full h-2 mb-4">
         <div
-          className={`h-1.5 rounded-full transition-all ${
-            data.score > 0.6 ? 'bg-green-500' : data.score > 0.4 ? 'bg-yellow-500' : 'bg-red-500'
+          className={`h-2 rounded-full transition-all ${
+            data.score > 0.6 ? 'bg-green-500' : data.score > 0.4 ? 'bg-yellow-500' : data.score > 0.2 ? 'bg-orange-500' : 'bg-red-500'
           }`}
           style={{ width: `${data.score * 100}%` }}
         />
       </div>
 
-      <div className="flex items-start gap-3">
-        {radarData.length >= 3 && (
+      {/* Content */}
+      <div className="flex items-start gap-4">
+        {hasRadar && (
           <div className="flex-shrink-0">
-            <RadarChart data={radarData} size={130} />
+            <RadarChart data={radarData} size={140} />
           </div>
         )}
-        <div className="flex-1 space-y-1.5 text-xs">
+        <div className="flex-1 space-y-2">
+          {/* Sandbox scores */}
           {Object.entries(data.sandboxes || {}).map(([k, v]) => (
-            <div key={k} className="flex justify-between">
-              <span className="text-gray-500">{SANDBOX_ZH[k] || k}</span>
-              <span className={v > 0.55 ? 'text-green-400' : v < 0.45 ? 'text-red-400' : 'text-gray-400'}>
-                {(v * 100).toFixed(0)}
-              </span>
+            <div key={k} className="flex justify-between items-center text-sm">
+              <span className="text-gray-400">{SANDBOX_ZH[k] || k}</span>
+              <div className="flex items-center gap-2">
+                <div className="w-16 bg-gray-700/50 rounded-full h-1.5">
+                  <div
+                    className={`h-1.5 rounded-full ${v > 0.55 ? 'bg-green-500' : v < 0.45 ? 'bg-red-500' : 'bg-yellow-500'}`}
+                    style={{ width: `${v * 100}%` }}
+                  />
+                </div>
+                <span className={`font-mono w-8 text-right ${v > 0.55 ? 'text-green-400' : v < 0.45 ? 'text-red-400' : 'text-gray-400'}`}>
+                  {(v * 100).toFixed(0)}
+                </span>
+              </div>
             </div>
           ))}
-          <div className="pt-1.5 border-t border-gray-700/50 space-y-1">
-            <div className="flex justify-between">
-              <span className="text-gray-500">建議倉位</span>
-              <span className="text-white font-medium">{g.position_pct}%</span>
+
+          {/* Guidance */}
+          <div className="pt-2 border-t border-gray-700/50 grid grid-cols-2 gap-3">
+            <div>
+              <div className="text-gray-500 text-xs">建議倉位</div>
+              <div className="text-white text-xl font-bold">{positionPct}%</div>
             </div>
-            <div className="flex justify-between">
-              <span className="text-gray-500">建議槓桿</span>
-              <span className="text-white font-medium">{g.leverage}x</span>
+            <div>
+              <div className="text-gray-500 text-xs">建議槓桿</div>
+              <div className="text-white text-xl font-bold">{leverage}x</div>
             </div>
           </div>
+
           {data.event_multiplier < 1 && (
-            <div className="text-yellow-400 text-[10px]">⚠️ 事件覆蓋 ×{data.event_multiplier}</div>
+            <div className="text-yellow-400 text-xs">⚠️ 事件覆蓋 ×{data.event_multiplier}（FOMC/CPI）</div>
           )}
         </div>
       </div>
-      <div className="text-gray-600 text-[9px] mt-2 leading-tight">
-        信心引擎綜合動量、趨勢、量能、波動品質、市場健康、活動時段六大因子，評估當前環境是否適合交易。
-        分數越高代表多因子匯合程度越強，系統會自動調整倉位大小和槓桿倍數。
+
+      <div className="text-gray-600 text-[10px] mt-3 leading-relaxed">
+        信心引擎綜合動量、趨勢、量能、波動品質、市場健康、活動時段六大因子，評估當前環境是否適合交易。分數越高代表多因子匯合程度越強，系統自動調整倉位與槓桿。
       </div>
     </div>
   );
