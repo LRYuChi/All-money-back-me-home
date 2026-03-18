@@ -485,7 +485,34 @@ class SMCTrend(IStrategy):
     def confirm_trade_entry(self, pair: str, order_type: str, amount: float,
                             rate: float, time_in_force: str, current_time: datetime,
                             entry_tag: str | None, side: str, **kwargs) -> bool:
-        """進場確認 — Guard Pipeline 風控 + 繁體中文 Telegram 通知."""
+        """進場確認 — 極端行情熔斷 + Guard Pipeline + Telegram."""
+        # === Extreme Market Circuit Breaker ===
+        # Block ALL entries during market crashes/panics
+        dataframe, _ = self.dp.get_analyzed_dataframe(pair, self.timeframe)
+        if len(dataframe) > 24:
+            last = dataframe.iloc[-1]
+            # 1. BTC 24h crash > -10% → full stop
+            btc_24h = dataframe["close"].pct_change(24).iloc[-1]
+            if abs(btc_24h) > 0.10:
+                logger.warning("CIRCUIT BREAKER: BTC 24h move %.1f%% — blocking entry", btc_24h * 100)
+                if _TG_AVAILABLE:
+                    from market_monitor.telegram_zh import send_message
+                    send_message(f"🚨 *熔斷機制啟動*\nBTC 24h 變動 {btc_24h*100:.1f}%\n所有進場已暫停")
+                return False
+
+            # 2. ATR spike > 3x average → extreme volatility
+            atr = last.get("atr", 0)
+            atr_ma = dataframe["atr"].rolling(50).mean().iloc[-1] if len(dataframe) > 50 else atr
+            if atr > 0 and atr_ma > 0 and atr / atr_ma > 3.0:
+                logger.warning("CIRCUIT BREAKER: ATR spike %.1fx — blocking entry", atr / atr_ma)
+                return False
+
+            # 3. Confidence HIBERNATE → block (already checked but double-safe)
+            confidence = last.get("confidence", 0.5)
+            if confidence < 0.15:
+                logger.warning("CIRCUIT BREAKER: Confidence %.2f (HIBERNATE) — blocking entry", confidence)
+                return False
+
         # === Guard Pipeline check (live/dry_run only) ===
         if self.config.get("runmode", {}).value in ("live", "dry_run"):
             try:
