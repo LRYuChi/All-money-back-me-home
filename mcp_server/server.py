@@ -34,8 +34,8 @@ except ImportError:
 mcp = FastMCP("all-money-back-me-home")
 
 # Freqtrade API config
-FT_API = "http://127.0.0.1:8080/api/v1"
-FT_AUTH = "freqtrade:freqtrade"
+FT_API = os.environ.get("FT_API_URL", "http://127.0.0.1:8080/api/v1")
+FT_AUTH = os.environ.get("FT_AUTH", "freqtrade:freqtrade")
 
 
 def _ft_api(endpoint: str) -> dict | None:
@@ -72,7 +72,7 @@ def confidence_score() -> str:
     """取得當前全局信心引擎分數（0.0-1.0）。
     包含四個沙盒的個別分數和市場狀態判斷。"""
     try:
-        os.environ.setdefault("FRED_API_KEY", "08b56172e3e44a8a78b96231d168a55a")
+        os.environ.setdefault("FRED_API_KEY", os.getenv("FRED_API_KEY", ""))
         from market_monitor.confidence_engine import GlobalConfidenceEngine
         engine = GlobalConfidenceEngine()
         result = engine.calculate()

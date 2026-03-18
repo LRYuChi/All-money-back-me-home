@@ -1,0 +1,8 @@
+# All Money Back Me Home — Scheduled Tasks
+# Install: crontab cron/crontab
+
+# Hourly scanner — every hour at :05
+5 * * * * cd /opt/ambmh && docker compose -f docker-compose.prod.yml exec -T api python -m src.jobs.hourly_scanner >> /var/log/ambmh/scanner.log 2>&1
+
+# Daily market report — every day at 08:00 UTC (16:00 Taiwan)
+0 8 * * * cd /opt/ambmh && docker compose -f docker-compose.prod.yml exec -T api python -m src.jobs.daily_report >> /var/log/ambmh/daily.log 2>&1

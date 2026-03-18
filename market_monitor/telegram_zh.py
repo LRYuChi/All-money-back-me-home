@@ -14,11 +14,11 @@ from datetime import datetime
 logger = logging.getLogger(__name__)
 
 # 從環境變數或直接設定
-BOT_TOKEN = os.environ.get(
-    "TELEGRAM_TOKEN",
-    "8292658498:AAHZyipy4H0UNtZE8T9BZlryavWVIEL-aGc"
-)
-CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID", "1481081110")
+BOT_TOKEN = os.environ.get("TELEGRAM_TOKEN", "")
+CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID", "")
+
+if not BOT_TOKEN or not CHAT_ID:
+    logger.warning("TELEGRAM_TOKEN 或 TELEGRAM_CHAT_ID 未設定，Telegram 通知已停用")
 
 
 def send_message(text: str, parse_mode: str = "Markdown") -> bool:

@@ -35,7 +35,7 @@ class TWStockFetcher(BaseFetcher):
                 ticker = yf.Ticker(symbol)
                 df = ticker.history(start=start_date, end=end_date)
                 df = self.normalize_columns(df)
-                df = df[[c for c in df.columns if c in ["open", "high", "low", "close", "volume"]]]
+                df = df[[c for c in df.columns if c in ["Open", "High", "Low", "Close", "Volume"]]]
                 return df if self.validate(df) else pd.DataFrame()
 
             # For individual TW stocks, use twstock
@@ -52,11 +52,11 @@ class TWStockFetcher(BaseFetcher):
                 for d in data:
                     all_data.append({
                         "date": d.date,
-                        "open": d.open,
-                        "high": d.high,
-                        "low": d.low,
-                        "close": d.close,
-                        "volume": d.capacity,
+                        "Open": d.open,
+                        "High": d.high,
+                        "Low": d.low,
+                        "Close": d.close,
+                        "Volume": d.capacity,
                     })
                 # Move to next month
                 if current.month == 12:
@@ -68,7 +68,7 @@ class TWStockFetcher(BaseFetcher):
                 return pd.DataFrame()
 
             df = pd.DataFrame(all_data)
-            df["date"] = pd.to_datetime(df["date"])
+            df["date"] = pd.to_datetime(df["date"], utc=True)
             df = df.set_index("date").sort_index()
             df = df[(df.index >= start_date)]
             if end_date:

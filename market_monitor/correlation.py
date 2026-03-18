@@ -36,9 +36,9 @@ def fetch_correlation_data(period: str = "6mo") -> pd.DataFrame | None:
         try:
             df = yf.Ticker(ticker).history(period=period)
             if len(df) > 0:
-                # Normalize timezone-aware index to date only
+                # Normalize to date-only index (tz-naive) for cross-asset alignment
                 closes = df["Close"].copy()
-                closes.index = closes.index.normalize()
+                closes.index = closes.index.tz_localize(None).normalize()
                 frames[name] = closes.pct_change().dropna()
         except Exception:
             pass

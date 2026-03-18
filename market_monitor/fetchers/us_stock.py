@@ -32,7 +32,7 @@ class USStockFetcher(BaseFetcher):
 
             df = self.normalize_columns(df)
             # yfinance uses 'stock splits' and 'dividends' columns we don't need
-            df = df[[c for c in df.columns if c in ["open", "high", "low", "close", "volume"]]]
+            df = df[[c for c in df.columns if c in ["Open", "High", "Low", "Close", "Volume"]]]
 
             if self.validate(df):
                 return df

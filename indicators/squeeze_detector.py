@@ -1,5 +1,10 @@
 """Bollinger Band / Keltner Channel Squeeze Detector.
 
+.. deprecated::
+    This module is superseded by
+    ``apps/api/src/strategy/layer2_signal_engine/volatility_indicators.py``
+    which is used by all strategy layers. This file is kept for reference only.
+
 Detects volatility compression (squeeze) — when Bollinger Bands contract inside
 Keltner Channels, indicating energy buildup before a breakout.
 

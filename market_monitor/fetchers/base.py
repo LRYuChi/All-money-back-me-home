@@ -10,7 +10,7 @@ import pandas as pd
 
 logger = logging.getLogger(__name__)
 
-REQUIRED_COLUMNS = ["open", "high", "low", "close", "volume"]
+REQUIRED_COLUMNS = ["Open", "High", "Low", "Close", "Volume"]
 
 
 class BaseFetcher(ABC):
@@ -41,6 +41,6 @@ class BaseFetcher(ABC):
         return True
 
     def normalize_columns(self, df: pd.DataFrame) -> pd.DataFrame:
-        """Normalize column names to lowercase."""
-        df.columns = [c.lower().strip() for c in df.columns]
+        """Normalize column names to Title Case (Open, High, Low, Close, Volume)."""
+        df.columns = [c.strip().title() for c in df.columns]
         return df
