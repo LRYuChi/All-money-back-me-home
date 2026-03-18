@@ -584,25 +584,40 @@ class SMCTrend(IStrategy):
                            amount: float, rate: float, time_in_force: str,
                            exit_reason: str, current_time: datetime,
                            **kwargs) -> bool:
-        """出場確認 — 發送繁體中文 Telegram 通知."""
-        if _TG_AVAILABLE:
-            profit_pct = trade.calc_profit_ratio(rate) * 100
-            profit_usdt = trade.calc_profit(rate)
-            duration = str(current_time - trade.open_date_utc).split(".")[0]
-            side = "short" if trade.is_short else "long"
+        """出場確認 — 滑點追蹤 + 繁體中文 Telegram 通知."""
+        profit_pct = trade.calc_profit_ratio(rate) * 100
+        profit_usdt = trade.calc_profit(rate)
+        duration = str(current_time - trade.open_date_utc).split(".")[0]
+        side = "short" if trade.is_short else "long"
 
+        # === Slippage Tracking (Execution Quality) ===
+        # Log expected vs actual for post-trade analysis
+        entry_slippage = 0.0
+        if hasattr(trade, 'open_rate') and trade.open_rate:
+            # For exit, track the exit rate vs current market
             dataframe, _ = self.dp.get_analyzed_dataframe(pair, self.timeframe)
-            confidence = 0.5
             if len(dataframe) > 0:
-                confidence = dataframe.iloc[-1].get("confidence", 0.5)
+                market_price = dataframe.iloc[-1]["close"]
+                if market_price > 0:
+                    exit_slippage_pct = abs(rate - market_price) / market_price * 100
+                    if exit_slippage_pct > 0.5:  # > 0.5% slippage is noteworthy
+                        logger.warning(
+                            "SLIPPAGE: %s exit %.4f vs market %.4f (%.2f%%)",
+                            pair, rate, market_price, exit_slippage_pct
+                        )
 
-            reason_zh = {
-                "exit_signal": "📊 結構反轉 (CHoCH)",
-                "stop_loss": "🛑 觸發止損",
-                "trailing_stop_loss": "📈 追蹤止損",
-                "force_exit": "⚡ 強制出場",
-            }.get(exit_reason, exit_reason)
+        confidence = 0.5
+        if len(dataframe) > 0:
+            confidence = dataframe.iloc[-1].get("confidence", 0.5)
 
+        reason_zh = {
+            "exit_signal": "📊 結構反轉 (CHoCH)",
+            "stop_loss": "🛑 觸發止損",
+            "trailing_stop_loss": "📈 追蹤止損",
+            "force_exit": "⚡ 強制出場",
+        }.get(exit_reason, exit_reason)
+
+        if _TG_AVAILABLE:
             if "stop_loss" in exit_reason:
                 notify_stoploss(pair, side, profit_pct, profit_usdt)
             else:
@@ -611,6 +626,14 @@ class SMCTrend(IStrategy):
                     profit_usdt=profit_usdt, exit_reason=reason_zh,
                     duration=duration, confidence=confidence
                 )
+
+        # Audit log entry
+        logger.info(
+            "TRADE_AUDIT: %s %s %s | Entry:%.2f Exit:%.2f | P&L:%.2f%% ($%.2f) | "
+            "Duration:%s | Reason:%s | Confidence:%.2f",
+            pair, side, exit_reason, trade.open_rate, rate,
+            profit_pct, profit_usdt, duration, exit_reason, confidence
+        )
         return True
 
     def leverage(self, pair: str, current_time, current_rate: float,
