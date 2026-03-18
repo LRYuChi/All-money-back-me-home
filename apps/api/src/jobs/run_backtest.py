@@ -162,7 +162,8 @@ def main() -> None:
 
 def _save_results(data: dict, args) -> None:
     """Save backtest results to JSON."""
-    out_dir = Path(os.environ.get("DATA_DIR", str(Path(__file__).resolve().parents[4] / "data"))) / "backtest"
+    data_dir = Path(os.environ["DATA_DIR"]) if "DATA_DIR" in os.environ else Path(__file__).resolve().parents[4] / "data"
+    out_dir = data_dir / "backtest"
     out_dir.mkdir(parents=True, exist_ok=True)
 
     ts = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")

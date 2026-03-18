@@ -15,7 +15,7 @@ from typing import Any
 from .supabase_client import get_supabase
 
 
-_DATA_DIR = Path(os.environ.get("DATA_DIR", str(Path(__file__).resolve().parents[4] / "data")))
+_DATA_DIR = Path(os.environ["DATA_DIR"]) if "DATA_DIR" in os.environ else Path(__file__).resolve().parents[4] / "data"
 _DATA_DIR.mkdir(parents=True, exist_ok=True)
 _STATE_FILE = _DATA_DIR / "paper_trades.json"
 
