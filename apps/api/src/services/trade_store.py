@@ -117,8 +117,9 @@ class TradeStore:
             closed = self.get_closed_trades(source)
             snapshot = self.get_latest_capital_snapshot(source)
 
-            capital = snapshot.get("capital", 0) if snapshot else 0
             initial_capital = float(os.environ.get("INITIAL_CAPITAL", "300.0"))
+            # If no snapshot exists yet, capital = initial_capital (not 0)
+            capital = snapshot.get("capital", initial_capital) if snapshot else initial_capital
 
             return {
                 "capital": capital,
