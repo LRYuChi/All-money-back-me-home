@@ -500,14 +500,42 @@ class SMCTrend(IStrategy):
         if _TG_AVAILABLE:
             dataframe, _ = self.dp.get_analyzed_dataframe(pair, self.timeframe)
             confidence = 0.5
+            details = {}
             if len(dataframe) > 0:
-                confidence = dataframe.iloc[-1].get("confidence", 0.5)
+                last = dataframe.iloc[-1]
+                confidence = last.get("confidence", 0.5)
+
+                # Build detailed entry reasons
+                details = {
+                    "htf_trend": last.get("htf_trend", 0),
+                    "in_ob": bool(last.get("in_bullish_ob") or last.get("in_bearish_ob")),
+                    "in_fvg": bool(last.get("in_bullish_fvg") or last.get("in_bearish_fvg")),
+                    "confluence": bool(last.get("ob_fvg_confluence_bull") or last.get("ob_fvg_confluence_bear")),
+                    "in_ote": bool(last.get("in_ote_long") or last.get("in_ote_short")),
+                    "adam_bullish": last.get("adam_bullish"),
+                    "adam_slope": last.get("adam_slope", 0),
+                    "in_killzone": bool(last.get("in_killzone")),
+                    "utc_hour": last.get("utc_hour", 0),
+                    "htf_zone_aligned": bool(last.get("htf_zone_aligned")),
+                    "ob_range": f"{last.get('ob_bottom', 0):,.0f}-{last.get('ob_top', 0):,.0f}" if last.get("ob_top") else None,
+                    "fvg_range": f"{last.get('fvg_bottom', 0):,.0f}-{last.get('fvg_top', 0):,.0f}" if last.get("fvg_top") else None,
+                    # Confidence factor breakdown (approximate from raw)
+                    "confidence_factors": {
+                        "momentum": float(last.get("adam_slope", 0) > 0) * 0.7 + 0.3,
+                        "trend": 0.7 if last.get("htf_trend", 0) != 0 else 0.3,
+                        "volume": min(float(last.get("volume", 0)) / (float(dataframe["volume"].rolling(20).mean().iloc[-1]) + 1e-10) * 0.5, 1.0) if len(dataframe) > 20 else 0.5,
+                        "volatility": 0.6,  # Approximate
+                        "health": confidence,
+                    },
+                    "missing_sources": _get_missing_sources(),
+                }
+
             lev = 1.0 + (self.max_leverage.value - 1.0) * (confidence ** 2)
             notify_entry(
                 pair=pair, side=side, rate=rate,
                 stake=amount * rate, leverage=round(lev, 1),
                 confidence=confidence,
-                reason="SMC OB/FVG + 亞當投影 + OTE"
+                details=details,
             )
         return True
 
@@ -676,6 +704,22 @@ class SMCTrend(IStrategy):
             notify_pyramid(pair, filled_entries, stake, current_profit * 100, confidence)
 
         return stake
+
+
+def _get_missing_sources() -> list[str]:
+    """Check which data sources are unavailable."""
+    missing = []
+    import os
+    if not os.environ.get("FRED_API_KEY"):
+        missing.append("FRED NFCI/M2 (API Key 未設定)")
+    try:
+        import yfinance as yf
+        df = yf.Ticker("DX-Y.NYB").history(period="1d")
+        if df.empty:
+            missing.append("DXY 美元指數 (yfinance 無法取得)")
+    except Exception:
+        missing.append("DXY 美元指數 (yfinance 錯誤)")
+    return missing
 
 
 # =============================================

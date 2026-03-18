@@ -54,21 +54,72 @@ def notify_startup(strategy: str, pairs: list[str], wallet: float = 1000):
 
 
 def notify_entry(pair: str, side: str, rate: float, stake: float,
-                 leverage: float, confidence: float, reason: str = ""):
-    """進場通知."""
+                 leverage: float, confidence: float, reason: str = "",
+                 details: dict | None = None):
+    """進場通知 — 包含完整進場原因分析."""
     direction = "📈 做多" if side == "long" else "📉 做空"
     conf_emoji = "🔥" if confidence >= 0.8 else "✅" if confidence >= 0.6 else "⚠️"
 
-    send_message(
+    msg = (
         f"{direction} *進場通知*\n\n"
         f"💱 交易對: `{pair}`\n"
-        f"💲 進場價: `{rate:.2f}`\n"
-        f"💰 倉位: `{stake:.2f} USDT`\n"
+        f"💲 進場價: `{rate:,.2f}`\n"
+        f"💰 倉位: `{stake:,.2f} USDT`\n"
         f"⚡ 槓桿: `{leverage:.1f}x`\n"
-        f"{conf_emoji} 信心指數: `{confidence:.2f}`\n"
-        f"📝 原因: {reason}\n"
-        f"⏰ {datetime.now().strftime('%H:%M:%S')}"
     )
+
+    # 詳細進場原因
+    if details:
+        msg += "\n📊 *進場原因:*\n"
+        if details.get("htf_trend"):
+            trend_zh = "多頭 BOS" if details["htf_trend"] > 0 else "空頭 BOS"
+            msg += f"  ✅ 4H 趨勢: {trend_zh}\n"
+        if details.get("in_ob"):
+            msg += f"  ✅ Order Block: {details.get('ob_range', '活躍區間')}\n"
+        if details.get("in_fvg"):
+            msg += f"  ✅ Fair Value Gap: {details.get('fvg_range', '活躍區間')}\n"
+        if details.get("confluence"):
+            msg += "  🔥 OB+FVG 匯合（Grade A）\n"
+        if details.get("in_ote"):
+            msg += "  ✅ OTE 折扣/溢價區\n"
+        if details.get("adam_bullish") is not None:
+            adam_dir = "向上" if details["adam_bullish"] else "向下"
+            slope = details.get("adam_slope", 0)
+            msg += f"  ✅ 亞當投影: {adam_dir} (slope {slope:+.3f})\n"
+        if details.get("in_killzone"):
+            hour = details.get("utc_hour", 0)
+            if 7 <= hour <= 10:
+                kz = "倫敦開盤"
+            elif 12 <= hour <= 14:
+                kz = "紐約開盤"
+            elif 15 <= hour <= 17:
+                kz = "倫敦收盤"
+            else:
+                kz = f"UTC {hour}:00"
+            msg += f"  ✅ Killzone: {kz}\n"
+        if details.get("htf_zone_aligned"):
+            msg += "  ✅ 4H OB/FVG 區域對齊\n"
+
+    # 信心引擎分解
+    msg += f"\n{conf_emoji} *信心引擎:* `{confidence:.2f}`\n"
+    if details and details.get("confidence_factors"):
+        cf = details["confidence_factors"]
+        msg += (
+            f"  動量: {cf.get('momentum', 0):.2f} | "
+            f"趨勢: {cf.get('trend', 0):.2f} | "
+            f"量能: {cf.get('volume', 0):.2f}\n"
+            f"  波動: {cf.get('volatility', 0):.2f} | "
+            f"健康: {cf.get('health', 0):.2f}\n"
+        )
+
+    # 缺失數據源警告
+    if details and details.get("missing_sources"):
+        msg += "\n⚠️ *缺失數據源:*\n"
+        for src in details["missing_sources"]:
+            msg += f"  ❌ {src}\n"
+
+    msg += f"\n⏰ {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
+    send_message(msg)
 
 
 def notify_exit(pair: str, side: str, profit_pct: float, profit_usdt: float,

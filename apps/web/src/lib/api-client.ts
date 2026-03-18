@@ -1,4 +1,9 @@
-const API_BASE_URL = process.env.API_BASE_URL || 'http://localhost:8000';
+// Client-side: use relative URL (nginx proxies /api/ to api:8000)
+// Server-side: use Docker internal URL
+const API_BASE_URL =
+  typeof window !== 'undefined'
+    ? ''  // Browser: relative path, proxied by nginx
+    : (process.env.API_BASE_URL || 'http://api:8000');
 
 interface RequestOptions extends Omit<RequestInit, 'body'> {
   body?: unknown;
