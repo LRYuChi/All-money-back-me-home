@@ -37,10 +37,10 @@ interface AnalysisResponse {
 }
 
 const SYMBOLS = [
-  { raw: 'BTC/USDT', display: 'BTC/USDT' },
-  { raw: 'ETH/USDT', display: 'ETH/USDT' },
-  { raw: 'SOL/USDT', display: 'SOL/USDT' },
-  { raw: 'BNB/USDT', display: 'BNB/USDT' },
+  { raw: 'BTCUSDT', display: 'BTC/USDT' },
+  { raw: 'ETHUSDT', display: 'ETH/USDT' },
+  { raw: 'SOLUSDT', display: 'SOL/USDT' },
+  { raw: 'BNBUSDT', display: 'BNB/USDT' },
 ];
 
 const STATE_ZH: Record<string, string> = {
