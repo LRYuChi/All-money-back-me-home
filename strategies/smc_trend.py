@@ -309,14 +309,28 @@ class SMCTrend(IStrategy):
         dataframe = adam_projection(dataframe, lookback=self.adam_lookback.value)
 
         # =============================================
-        # Killzone time filter (UTC)
+        # Killzone + MiroFish Activity Multiplier (UTC)
         # =============================================
+        # Inspired by MiroFish agent activity model:
+        # Real-world market participation follows predictable
+        # hourly patterns. Weight each hour by expected activity.
         dataframe["utc_hour"] = dataframe["date"].dt.hour
-        dataframe["in_killzone"] = (
-            dataframe["utc_hour"].between(7, 10)   # London Open
-            | dataframe["utc_hour"].between(12, 14)  # New York Open
-            | dataframe["utc_hour"].between(15, 17)  # London Close / Silver Bullet
-        )
+
+        # Activity multiplier per UTC hour (crypto-calibrated)
+        # Based on combined US/EU/Asia trading patterns
+        activity_map = {
+            0: 0.3,  1: 0.2,  2: 0.15, 3: 0.10,  # Asia wind-down
+            4: 0.10, 5: 0.15, 6: 0.3,  7: 0.7,    # London pre-market
+            8: 0.9,  9: 1.0, 10: 0.9,              # London open peak
+            11: 0.7, 12: 0.9, 13: 1.2, 14: 1.5,    # NY open overlap
+            15: 1.3, 16: 1.0, 17: 0.8,              # London close / Silver Bullet
+            18: 0.6, 19: 0.5, 20: 0.7, 21: 0.8,    # US afternoon + Asia wake
+            22: 0.5, 23: 0.4,                        # US close
+        }
+        dataframe["activity_mult"] = dataframe["utc_hour"].map(activity_map).fillna(0.3)
+
+        # Killzone = high activity hours (multiplier >= 0.7)
+        dataframe["in_killzone"] = dataframe["activity_mult"] >= 0.7
 
         # =============================================
         # Active OB/FVG zone detection
@@ -605,24 +619,33 @@ class SMCTrend(IStrategy):
                             max_stake: float, leverage: float,
                             entry_tag: str | None, side: str,
                             **kwargs) -> float:
-        """Continuous position sizing by confidence.
+        """Continuous position sizing by confidence × activity regime.
 
-        scale = 0.3 + 0.9 × confidence  (range: 0.3x to 1.2x)
-          conf=0.2 → 0.48x (defensive)
-          conf=0.5 → 0.75x (cautious)
-          conf=0.7 → 0.93x (normal)
-          conf=0.9 → 1.11x (aggressive)
-          conf=1.0 → 1.20x (max wind)
+        base_scale = 0.3 + 0.9 × confidence  (range: 0.3x to 1.2x)
+        final_scale = base_scale × activity_boost
+
+        Activity boost (MiroFish): peak hours get 10% extra,
+        dead hours get 20% reduction.
         """
         pair = kwargs.get("pair", "")
         dataframe, _ = self.dp.get_analyzed_dataframe(pair, self.timeframe)
         if len(dataframe) == 0:
             return proposed_stake
 
-        confidence = dataframe.iloc[-1].get("confidence", 0.5)
+        last = dataframe.iloc[-1]
+        confidence = last.get("confidence", 0.5)
+        activity = last.get("activity_mult", 0.5)
 
-        # Linear scaling with floor and ceiling
+        # Base scaling by confidence
         scale = 0.3 + 0.9 * confidence
+
+        # Activity boost: peak hours (>1.0) get up to +10%
+        # Dead hours (<0.3) get -20% (thinner liquidity = smaller size)
+        if activity >= 1.0:
+            scale *= 1.1
+        elif activity < 0.3:
+            scale *= 0.8
+
         adjusted = proposed_stake * scale
 
         if min_stake is not None:
@@ -874,13 +897,14 @@ def _detect_active_zones(df: DataFrame) -> DataFrame:
 def _calculate_confidence(df: DataFrame) -> DataFrame:
     """Calculate confidence score — optimized to capture favorable environments.
 
-    Five factors designed to detect and ride momentum windows:
+    Six factors designed to detect and ride momentum windows:
 
-    1. Momentum (30%): Multi-period price momentum — catches the wind
+    1. Momentum (25%): Multi-period price momentum — catches the wind
     2. Trend alignment (25%): HTF trend direction + strength — confirms direction
-    3. Volume conviction (15%): Volume expanding with trend — smart money participating
-    4. Volatility quality (15%): ATR expanding in trend = good; ATR spiking in chop = bad
-    5. Market health (15%): Price vs MA structure — overall regime
+    3. Volume conviction (12%): Volume expanding with trend — smart money participating
+    4. Volatility quality (13%): ATR expanding in trend = good; ATR spiking in chop = bad
+    5. Market health (13%): Price vs MA structure — overall regime
+    6. Activity regime (12%): MiroFish-inspired hourly participation model
 
     Key design: FAST response to regime changes, AGGRESSIVE when aligned.
     """
@@ -1005,14 +1029,26 @@ def _calculate_confidence(df: DataFrame) -> DataFrame:
         health_score = np.clip(health_score + fr_penalty, 0, 1)
 
     # ==========================================================
-    # COMBINE — weighted sum
+    # 6. ACTIVITY REGIME (12%) — MiroFish-inspired participation model
+    # ==========================================================
+    # Higher activity hours = more market participants = cleaner signals
+    if "activity_mult" in df.columns:
+        activity_score = df["activity_mult"].values
+        # Normalize: 1.5 (peak) → 1.0, 0.1 (dead) → 0.07
+        activity_score = np.clip(activity_score / 1.5, 0.05, 1.0)
+    else:
+        activity_score = np.full(n, 0.5)
+
+    # ==========================================================
+    # COMBINE — weighted sum (6 factors)
     # ==========================================================
     raw_confidence = (
-        0.30 * momentum_score
+        0.25 * momentum_score
         + 0.25 * trend_score
-        + 0.15 * volume_score
-        + 0.15 * volatility_score
-        + 0.15 * health_score
+        + 0.12 * volume_score
+        + 0.13 * volatility_score
+        + 0.13 * health_score
+        + 0.12 * activity_score
     )
 
     # FAST EMA smoothing (span=5 = 5 hours, responsive to changes)
