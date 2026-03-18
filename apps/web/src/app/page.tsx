@@ -66,6 +66,31 @@ export default function DashboardPage() {
   }
   if (!data) return null;
 
+  // Generate market alerts
+  const alerts: { level: 'danger' | 'warning' | 'info'; msg: string }[] = [];
+  // VIX spike
+  if (data.macro.vix && data.macro.vix.price > 30)
+    alerts.push({ level: 'danger', msg: `VIX ${data.macro.vix.price.toFixed(1)} — 市場恐慌，波動極高` });
+  else if (data.macro.vix && data.macro.vix.price > 25)
+    alerts.push({ level: 'warning', msg: `VIX ${data.macro.vix.price.toFixed(1)} — 波動升高，謹慎交易` });
+  // Fear & Greed extreme
+  if (data.macro.fear_greed && data.macro.fear_greed.value <= 20)
+    alerts.push({ level: 'warning', msg: `極度恐懼 (${data.macro.fear_greed.value}) — 潛在反彈機會` });
+  if (data.macro.fear_greed && data.macro.fear_greed.value >= 80)
+    alerts.push({ level: 'warning', msg: `極度貪婪 (${data.macro.fear_greed.value}) — 注意回調風險` });
+  // BTC big move
+  const btcData = data.crypto.find(c => c.name === 'BTC');
+  if (btcData && btcData.change_pct && Math.abs(btcData.change_pct) > 5)
+    alerts.push({ level: 'danger', msg: `BTC ${btcData.change_pct > 0 ? '暴漲' : '暴跌'} ${btcData.change_pct.toFixed(1)}%` });
+  // Confidence regime
+  if (data.confidence.regime === 'HIBERNATE')
+    alerts.push({ level: 'danger', msg: '信心引擎: 休眠模式 — 所有交易已暫停' });
+  else if (data.confidence.regime === 'DEFENSIVE')
+    alerts.push({ level: 'warning', msg: '信心引擎: 防禦模式 — 僅允許高品質訊號' });
+  // Event overlay
+  if (data.confidence.event_multiplier < 1)
+    alerts.push({ level: 'info', msg: `事件覆蓋 ×${data.confidence.event_multiplier} — FOMC/CPI 降低風險暴露` });
+
   // Prepare ticker tape items
   const tickerItems = [
     ...data.crypto.filter(c => c.price).map(c => ({ name: c.name, price: c.price!, change_pct: c.change_pct || 0 })),
@@ -87,6 +112,18 @@ export default function DashboardPage() {
       <TickerTape items={tickerItems} />
 
       <div className="px-4 py-3 space-y-3 max-w-7xl mx-auto">
+        {/* Alert Banners */}
+        {alerts.map((a, i) => (
+          <div key={i} className={`rounded-lg px-4 py-2 text-sm flex items-center gap-2 ${
+            a.level === 'danger' ? 'bg-red-500/15 border border-red-500/30 text-red-400' :
+            a.level === 'warning' ? 'bg-yellow-500/15 border border-yellow-500/30 text-yellow-400' :
+            'bg-blue-500/15 border border-blue-500/30 text-blue-400'
+          }`}>
+            <span>{a.level === 'danger' ? '🚨' : a.level === 'warning' ? '⚠️' : 'ℹ️'}</span>
+            <span>{a.msg}</span>
+          </div>
+        ))}
+
         {/* Header */}
         <div className="flex justify-between items-center">
           <h1 className="text-lg font-semibold text-white">Trading Dashboard</h1>
