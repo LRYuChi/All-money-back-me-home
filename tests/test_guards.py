@@ -1,7 +1,5 @@
 """Tests for the guard pipeline."""
 
-import asyncio
-import time
 
 import pytest
 

@@ -15,7 +15,6 @@ Usage:
 import json
 import os
 import subprocess
-import sys
 from datetime import datetime, timedelta
 from pathlib import Path
 
@@ -62,7 +61,6 @@ def build_segments():
     """Build 8 WFO segments with IS/OOS splits."""
     segment_days = TOTAL_DAYS // NUM_SEGMENTS
     is_days = int(segment_days * IS_RATIO)
-    oos_days = segment_days - is_days
 
     segments = []
     for i in range(NUM_SEGMENTS):

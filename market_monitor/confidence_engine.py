@@ -82,18 +82,27 @@ def fetch_fear_greed() -> float:
         return 50.0  # Neutral default
 
 
+_btc_d_cache: dict = {"value": 50.0, "ts": 0}
+
 def fetch_btc_dominance() -> float:
-    """Fetch BTC dominance % from CoinGecko."""
+    """Fetch BTC dominance % from CoinGecko (cached 30 min to avoid 429)."""
+    import time
+    now = time.time()
+    if now - _btc_d_cache["ts"] < 1800:  # 30 min cache
+        return _btc_d_cache["value"]
     try:
         import urllib.request
         url = "https://api.coingecko.com/api/v3/global"
         req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
         with urllib.request.urlopen(req, timeout=10) as resp:
             data = json.loads(resp.read())
-            return float(data["data"]["market_cap_percentage"]["btc"])
+            val = float(data["data"]["market_cap_percentage"]["btc"])
+            _btc_d_cache["value"] = val
+            _btc_d_cache["ts"] = now
+            return val
     except Exception as e:
         logger.warning("BTC.D fetch failed: %s", e)
-        return 50.0
+        return _btc_d_cache["value"]
 
 
 def fetch_stablecoin_mcap() -> float:
@@ -396,7 +405,7 @@ class EventOverlay:
     def get_multiplier(self, dt: datetime | None = None) -> float:
         """Get event-based confidence multiplier (0.0-1.0)."""
         if dt is None:
-            dt = datetime.utcnow()
+            dt = datetime.now()
 
         date_str = dt.strftime("%Y-%m-%d")
         multiplier = 1.0
@@ -523,7 +532,7 @@ class GlobalConfidenceEngine:
                 "haven": {k: round(v, 4) for k, v in haven_scores.items()},
             },
             "guidance": self._regime_guidance(regime),
-            "timestamp": (dt or datetime.utcnow()).isoformat(),
+            "timestamp": (dt or datetime.now()).isoformat(),
         }
 
     @staticmethod
@@ -568,12 +577,12 @@ def main():
     print(f"  Regime:  {result['regime']}")
     print(f"  Event:   ×{result['event_multiplier']:.1f}")
 
-    print(f"\n  Sandboxes:")
+    print("\n  Sandboxes:")
     for name, val in result["sandboxes"].items():
         bar = "█" * int(val * 20) + "░" * (20 - int(val * 20))
         print(f"    {name:>12}: {bar} {val:.2f}")
 
-    print(f"\n  Factors:")
+    print("\n  Factors:")
     for sandbox, factors in result["factors"].items():
         print(f"    [{sandbox}]")
         for k, v in factors.items():
@@ -581,7 +590,7 @@ def main():
             print(f"      {k:>18}: {v:.2f} {indicator}")
 
     g = result["guidance"]
-    print(f"\n  Guidance:")
+    print("\n  Guidance:")
     print(f"    Position:  {g['position_pct']}%")
     print(f"    Leverage:  {g['leverage']}x")
     print(f"    Threshold: ×{g['threshold_mult']}")

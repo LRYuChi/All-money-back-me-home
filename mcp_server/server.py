@@ -19,7 +19,6 @@ import os
 import subprocess
 import sys
 import urllib.request
-from datetime import datetime
 from pathlib import Path
 
 # Add project root
@@ -211,7 +210,7 @@ def strategy_info() -> str:
             wfo = json.load(f)
         lines.extend([
             "",
-            f"SMCTrend WFO 結果:",
+            "SMCTrend WFO 結果:",
             f"  Avg OOS Profit: {wfo.get('avg_oos', 0):.2f}%",
             f"  WFO Efficiency: {wfo.get('wfo_efficiency', 0):.2f}",
             f"  Robust: {wfo.get('robust_count', 0)}/8",

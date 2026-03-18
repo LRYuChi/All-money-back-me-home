@@ -11,7 +11,6 @@ from __future__ import annotations
 
 import logging
 
-import numpy as np
 import pandas as pd
 
 logger = logging.getLogger(__name__)
@@ -77,7 +76,7 @@ def generate_correlation_report(returns: pd.DataFrame) -> str:
     # Short-term correlations (7-day)
     corr_7d = rolling_correlation(returns, "BTC", 7)
 
-    lines = ["📊 *跨市場相關性分析*", f"(BTC vs 傳統市場 — 30日滾動)", ""]
+    lines = ["📊 *跨市場相關性分析*", "(BTC vs 傳統市場 — 30日滾動)", ""]
 
     if corr_30d.empty:
         return "相關性數據不足"

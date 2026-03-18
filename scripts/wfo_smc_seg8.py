@@ -162,7 +162,7 @@ def main():
         with open(wfo_path, "w") as f:
             json.dump(wfo, f, indent=2, default=str)
 
-        print(f"\nUpdated WFO report:")
+        print("\nUpdated WFO report:")
         print(f"  Avg IS:  {wfo['avg_is']:.2f}%")
         print(f"  Avg OOS: {wfo['avg_oos']:.2f}%")
         print(f"  WFO ER:  {wfo['wfo_efficiency']:.2f}")

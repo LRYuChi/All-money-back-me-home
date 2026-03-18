@@ -137,7 +137,7 @@ def _calc_indicators(df: pd.DataFrame, name: str) -> dict:
 def generate_report(data: dict) -> str:
     """Generate formatted market report in Traditional Chinese."""
     now = datetime.now().strftime("%Y-%m-%d %H:%M")
-    lines = [f"📊 *每日市場指標報告*", f"📅 {now}", ""]
+    lines = ["📊 *每日市場指標報告*", f"📅 {now}", ""]
 
     # US Indices
     lines.append("【美股指數】")

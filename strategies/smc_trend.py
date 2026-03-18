@@ -41,7 +41,7 @@ from indicators.adam_projection import adam_projection
 try:
     from market_monitor.telegram_zh import (
         notify_entry, notify_exit, notify_stoploss, notify_pyramid,
-        notify_startup, notify_confidence_change
+        notify_confidence_change,
     )
     _TG_AVAILABLE = True
 except ImportError:
@@ -129,16 +129,23 @@ class SMCTrend(IStrategy):
             return
 
         # Throttle: fetch every 60 minutes
-        if (self._live_confidence_time is not None
-                and (current_time - self._live_confidence_time).total_seconds() < 3600):
-            return
+        if self._live_confidence_time is not None:
+            try:
+                elapsed = (current_time - self._live_confidence_time).total_seconds()
+            except TypeError:
+                # Handle naive vs aware datetime mismatch
+                elapsed = 0
+            if elapsed < 3600:
+                return
 
         try:
+            import os
+            os.environ.setdefault("FRED_API_KEY", "08b56172e3e44a8a78b96231d168a55a")
             from market_monitor.confidence_engine import GlobalConfidenceEngine
             engine = GlobalConfidenceEngine()
-            result = engine.calculate(current_time)
+            result = engine.calculate()  # Use engine's own timestamp
             self._live_confidence = result["score"]
-            self._live_confidence_time = current_time
+            self._live_confidence_time = datetime.now()
 
             # Notify on regime change
             if _TG_AVAILABLE:
@@ -500,7 +507,7 @@ class SMCTrend(IStrategy):
                 pair=pair, side=side, rate=rate,
                 stake=amount * rate, leverage=round(lev, 1),
                 confidence=confidence,
-                reason=f"SMC OB/FVG + 亞當投影 + OTE"
+                reason="SMC OB/FVG + 亞當投影 + OTE"
             )
         return True
 
@@ -835,8 +842,6 @@ def _calculate_confidence(df: DataFrame) -> DataFrame:
     """
     n = len(df)
     close_s = pd.Series(df["close"].values, index=df.index)
-    high_s = pd.Series(df["high"].values, index=df.index)
-    low_s = pd.Series(df["low"].values, index=df.index)
     atr_s = pd.Series(df.get("atr", pd.Series(np.zeros(n))).values, index=df.index)
     volume_s = pd.Series(df["volume"].values, index=df.index)
     htf_trend = df.get("htf_trend", pd.Series(np.zeros(n), index=df.index)).values

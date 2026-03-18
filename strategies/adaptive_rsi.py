@@ -10,8 +10,6 @@ Designed for USDT perpetual futures on OKX via Freqtrade.
 from __future__ import annotations
 
 import logging
-from datetime import datetime
-from typing import Optional
 
 import numpy as np
 import talib.abstract as ta

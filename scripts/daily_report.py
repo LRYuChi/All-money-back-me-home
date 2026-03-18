@@ -10,7 +10,6 @@ Usage:
 """
 
 import json
-import os
 import sys
 import urllib.request
 from pathlib import Path
@@ -57,7 +56,6 @@ def main():
 
     if profit:
         total_profit = profit.get("profit_all_coin", 0)
-        closed = profit.get("closed_trade_count", 0)
         winning = profit.get("winning_trades", 0)
         losing = profit.get("losing_trades", 0)
         open_trades = len(status) if status else 0
