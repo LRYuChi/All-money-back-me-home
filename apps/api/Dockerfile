@@ -19,6 +19,9 @@ COPY --from=builder /install /usr/local
 # Copy application source
 COPY src/ ./src/
 
+# Add src/ to Python path so `from strategy.xxx` imports work
+ENV PYTHONPATH=/app/src
+
 EXPOSE 8000
 
 CMD ["uvicorn", "src.main:app", "--host", "0.0.0.0", "--port", "8000"]
