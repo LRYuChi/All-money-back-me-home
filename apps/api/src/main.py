@@ -5,6 +5,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from src.routers import analysis, market_data
 from src.routers.strategy import router as strategy_router
+from src.routers.dashboard import router as dashboard_router
 
 app = FastAPI(
     title="AMBMH API - 交易策略輔助顧問系統",
@@ -25,6 +26,7 @@ app.add_middleware(
 app.include_router(analysis.router)
 app.include_router(market_data.router)
 app.include_router(strategy_router)
+app.include_router(dashboard_router)
 
 
 @app.get("/health")
