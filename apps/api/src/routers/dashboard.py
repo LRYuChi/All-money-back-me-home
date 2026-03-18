@@ -181,30 +181,41 @@ def _get_trading_status() -> dict:
 
 
 def _get_correlations() -> dict:
-    """Get cross-market correlations."""
+    """Get cross-market correlations using yfinance directly."""
     try:
-        import sys
-        sys.path.insert(0, str(__import__("pathlib").Path(__file__).resolve().parents[4]))
-        from market_monitor.correlation import fetch_correlation_data, rolling_correlation
-        returns = fetch_correlation_data("3mo")
-        if returns is None or returns.empty:
+        import yfinance as yf
+        import pandas as pd
+
+        tickers = {"SPY": "SPY", "Gold": "GC=F", "Oil": "CL=F", "TWII": "^TWII"}
+        btc = yf.Ticker("BTC-USD").history(period="3mo")
+        if btc.empty:
             return {}
 
-        corr = rolling_correlation(returns, "BTC", 30)
-        if corr.empty:
-            return {}
+        btc_ret = btc["Close"].pct_change().dropna()
+        btc_ret.index = btc_ret.index.normalize()
 
-        latest = corr.iloc[-1]
         result = {}
-        for pair in latest.index:
-            val = float(latest[pair])
-            asset = pair.replace("BTC-", "")
-            strength = "強" if abs(val) > 0.7 else "中" if abs(val) > 0.4 else "弱"
-            direction = "正" if val > 0 else "負"
-            result[asset] = {
-                "value": round(val, 2),
-                "label": f"{strength}{direction}相關",
-            }
+        for name, ticker in tickers.items():
+            try:
+                df = yf.Ticker(ticker).history(period="3mo")
+                if df.empty:
+                    continue
+                asset_ret = df["Close"].pct_change().dropna()
+                asset_ret.index = asset_ret.index.normalize()
+
+                combined = pd.DataFrame({"btc": btc_ret, "asset": asset_ret}).dropna()
+                if len(combined) < 20:
+                    continue
+
+                corr_val = float(combined["btc"].rolling(30).corr(combined["asset"]).dropna().iloc[-1])
+                strength = "強" if abs(corr_val) > 0.7 else "中" if abs(corr_val) > 0.4 else "弱"
+                direction = "正" if corr_val > 0 else "負"
+                result[name] = {
+                    "value": round(corr_val, 2),
+                    "label": f"{strength}{direction}相關",
+                }
+            except Exception:
+                continue
         return result
     except Exception:
         return {}

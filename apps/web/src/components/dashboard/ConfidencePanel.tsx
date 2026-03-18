@@ -81,6 +81,10 @@ export function ConfidencePanel({ data }: { data: ConfidenceData }) {
           )}
         </div>
       </div>
+      <div className="text-gray-600 text-[9px] mt-2 leading-tight">
+        信心引擎綜合動量、趨勢、量能、波動品質、市場健康、活動時段六大因子，評估當前環境是否適合交易。
+        分數越高代表多因子匯合程度越強，系統會自動調整倉位大小和槓桿倍數。
+      </div>
     </div>
   );
 }
