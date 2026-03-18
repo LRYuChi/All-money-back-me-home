@@ -21,6 +21,10 @@ COPY src/ ./src/
 
 # Add src/ to Python path so `from strategy.xxx` imports work
 ENV PYTHONPATH=/app/src
+ENV DATA_DIR=/app/data
+
+# Create data directory
+RUN mkdir -p /app/data
 
 EXPOSE 8000
 
