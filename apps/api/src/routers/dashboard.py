@@ -207,35 +207,39 @@ def _get_correlations() -> dict:
 
 
 def _get_freqtrade_status() -> dict:
-    """Get Freqtrade bot status."""
-    try:
-        import base64
-        auth = base64.b64encode(b"freqtrade:freqtrade").decode()
-        req = urllib.request.Request(
-            "http://localhost:8080/api/v1/show_config",
-            headers={"Authorization": f"Basic {auth}"},
-        )
-        with urllib.request.urlopen(req, timeout=5) as resp:
-            config = json.loads(resp.read())
+    """Get Freqtrade bot status via Docker network."""
+    # In Docker: use service name 'freqtrade'. On host: use localhost.
+    ft_hosts = ["freqtrade:8080", "localhost:8080"]
+    for host in ft_hosts:
+        try:
+            import base64
+            auth = base64.b64encode(b"freqtrade:freqtrade").decode()
+            headers = {"Authorization": f"Basic {auth}"}
 
-        # Get profit
-        req2 = urllib.request.Request(
-            "http://localhost:8080/api/v1/profit",
-            headers={"Authorization": f"Basic {auth}"},
-        )
-        with urllib.request.urlopen(req2, timeout=5) as resp2:
-            profit = json.loads(resp2.read())
+            req = urllib.request.Request(
+                f"http://{host}/api/v1/show_config", headers=headers,
+            )
+            with urllib.request.urlopen(req, timeout=5) as resp:
+                config = json.loads(resp.read())
 
-        return {
-            "state": config.get("state", "unknown"),
-            "strategy": config.get("strategy", "unknown"),
-            "dry_run": config.get("dry_run", True),
-            "trading_mode": config.get("trading_mode", ""),
-            "trade_count": profit.get("trade_count", 0),
-            "profit": round(profit.get("profit_all_coin", 0), 2),
-        }
-    except Exception:
-        return {"state": "offline", "strategy": "unknown"}
+            req2 = urllib.request.Request(
+                f"http://{host}/api/v1/profit", headers=headers,
+            )
+            with urllib.request.urlopen(req2, timeout=5) as resp2:
+                profit = json.loads(resp2.read())
+
+            return {
+                "state": config.get("state", "unknown"),
+                "strategy": config.get("strategy", "unknown"),
+                "dry_run": config.get("dry_run", True),
+                "trading_mode": config.get("trading_mode", ""),
+                "trade_count": profit.get("trade_count", 0),
+                "profit": round(profit.get("profit_all_coin", 0), 2),
+            }
+        except Exception:
+            continue
+
+    return {"state": "offline", "strategy": "unknown"}
 
 
 def _get_next_killzone() -> dict:
