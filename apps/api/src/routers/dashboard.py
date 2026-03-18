@@ -94,11 +94,15 @@ def _get_crypto_overview() -> list[dict]:
                 rs = gain / (loss + 1e-10)
                 rsi = float((100 - 100 / (1 + rs)).iloc[-1])
 
+                # Sparkline data: last 24 hourly-equivalent points
+                sparkline = [round(float(v), 2) for v in close.tail(24).values]
+
                 results.append({
                     "name": s["name"],
                     "price": round(price, 2),
                     "change_pct": round(chg, 2),
                     "rsi": round(rsi, 1),
+                    "sparkline": sparkline,
                 })
             except Exception:
                 results.append({"name": s["name"], "error": "fetch failed"})

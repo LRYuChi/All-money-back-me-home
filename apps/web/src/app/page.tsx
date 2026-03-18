@@ -3,6 +3,10 @@
 import { useEffect, useState, useCallback } from 'react';
 import Link from 'next/link';
 import { apiClient } from '@/lib/api-client';
+import { RadarChart } from '@/components/charts/RadarChart';
+import { GaugeChart } from '@/components/charts/GaugeChart';
+import { Sparkline } from '@/components/charts/Sparkline';
+import { HeatMap } from '@/components/charts/HeatMap';
 
 interface DashboardData {
   timestamp: string;
@@ -28,6 +32,7 @@ interface CryptoItem {
   price?: number;
   change_pct?: number;
   rsi?: number;
+  sparkline?: number[];
   error?: string;
 }
 
@@ -127,6 +132,19 @@ export default function DashboardPage() {
   const regime = REGIME_ZH[data.confidence.regime] || REGIME_ZH.CAUTIOUS;
   const g = data.confidence.guidance || { position_pct: 0, leverage: 0 };
 
+  // Prepare radar data
+  const radarData = Object.entries(data.confidence.sandboxes || {}).map(([k, v]) => ({
+    label: { macro: '宏觀', sentiment: '情緒', capital: '資金', haven: '避險' }[k] || k,
+    value: v,
+  }));
+
+  // Prepare correlation heatmap data
+  const heatmapData = Object.entries(data.correlations || {}).map(([asset, info]) => ({
+    label: `BTC-${asset}`,
+    value: info.value,
+    detail: info.label,
+  }));
+
   return (
     <div className="space-y-4 max-w-7xl mx-auto">
       {/* Header */}
@@ -149,18 +167,23 @@ export default function DashboardPage() {
             </div>
           </div>
           <ProgressBar value={data.confidence.score} />
-          <div className="grid grid-cols-3 md:grid-cols-6 gap-2 mt-3 text-sm">
-            {Object.entries(data.confidence.sandboxes || {}).map(([k, v]) => {
-              const names: Record<string, string> = {
-                macro: '宏觀', sentiment: '情緒', capital: '資金', haven: '避險',
-              };
-              return (
-                <div key={k} className="text-center">
-                  <div className="text-gray-500">{names[k] || k}</div>
-                  <div className={pctColor(v - 0.5)}>{fmt(v)}</div>
-                </div>
-              );
-            })}
+          <div className="flex items-center gap-4 mt-3">
+            <div className="flex-shrink-0">
+              <RadarChart data={radarData} size={160} />
+            </div>
+            <div className="grid grid-cols-2 gap-2 text-sm flex-1">
+              {Object.entries(data.confidence.sandboxes || {}).map(([k, v]) => {
+                const names: Record<string, string> = {
+                  macro: '宏觀', sentiment: '情緒', capital: '資金', haven: '避險',
+                };
+                return (
+                  <div key={k} className="flex justify-between">
+                    <span className="text-gray-500">{names[k] || k}</span>
+                    <span className={pctColor(v - 0.5)}>{fmt(v)}</span>
+                  </div>
+                );
+              })}
+            </div>
           </div>
           <div className="mt-3 text-sm text-gray-400 flex gap-4">
             <span>建議倉位: <strong className="text-white">{g.position_pct}%</strong></span>
@@ -219,17 +242,18 @@ export default function DashboardPage() {
           </div>
           <div className="space-y-3">
             {data.crypto.map((c) => (
-              <div key={c.name} className="flex justify-between items-center">
+              <div key={c.name} className="flex items-center gap-3">
                 <span className="text-white font-medium w-12">{c.name}</span>
                 {c.error ? (
                   <span className="text-gray-500 text-sm">{c.error}</span>
                 ) : (
                   <>
-                    <span className="text-white">${fmt(c.price || 0)}</span>
-                    <span className={`text-sm ${pctColor(c.change_pct || 0)}`}>
+                    <span className="text-white flex-shrink-0">${fmt(c.price || 0)}</span>
+                    <span className={`text-sm flex-shrink-0 ${pctColor(c.change_pct || 0)}`}>
                       {(c.change_pct || 0) > 0 ? '+' : ''}{fmt(c.change_pct || 0)}%
                     </span>
-                    <span className={`text-sm ${(c.rsi || 50) > 70 ? 'text-red-400' : (c.rsi || 50) < 30 ? 'text-green-400' : 'text-gray-400'}`}>
+                    {c.sparkline && <Sparkline data={c.sparkline} width={80} height={24} />}
+                    <span className={`text-xs flex-shrink-0 ${(c.rsi || 50) > 70 ? 'text-red-400' : (c.rsi || 50) < 30 ? 'text-green-400' : 'text-gray-400'}`}>
                       RSI:{Math.round(c.rsi || 0)}
                     </span>
                   </>
@@ -275,15 +299,29 @@ export default function DashboardPage() {
         {/* Macro Indicators */}
         <div className="bg-gray-800 rounded-xl p-5 border border-gray-700">
           <h2 className="text-lg font-semibold text-white mb-3">🌍 宏觀指標</h2>
-          <div className="grid grid-cols-2 gap-3 text-sm">
+          {/* Gauge charts row */}
+          <div className="flex justify-around mb-3">
             {data.macro.vix && (
-              <div className="flex justify-between">
-                <span className="text-gray-400">VIX</span>
-                <span className={data.macro.vix.price > 25 ? 'text-red-400' : 'text-green-400'}>
-                  {fmt(data.macro.vix.price)} {data.macro.vix.price > 25 ? '⚠️' : ''}
-                </span>
-              </div>
+              <GaugeChart
+                value={data.macro.vix.price}
+                min={10} max={50}
+                label="VIX 波動率"
+                size={110}
+                thresholds={{ low: 20, high: 30 }}
+              />
             )}
+            {data.macro.fear_greed && (
+              <GaugeChart
+                value={data.macro.fear_greed.value}
+                min={0} max={100}
+                label={`恐懼貪婪 (${data.macro.fear_greed.classification})`}
+                size={110}
+                thresholds={{ low: 30, high: 70 }}
+              />
+            )}
+          </div>
+          {/* Text indicators */}
+          <div className="grid grid-cols-2 gap-2 text-sm">
             {data.macro.yield_10y && (
               <div className="flex justify-between">
                 <span className="text-gray-400">10Y殖利率</span>
@@ -294,7 +332,7 @@ export default function DashboardPage() {
               <div className="flex justify-between">
                 <span className="text-gray-400">黃金</span>
                 <span className={pctColor(data.macro.gold.change_pct)}>
-                  ${fmt(data.macro.gold.price, 0)} ({data.macro.gold.change_pct > 0 ? '+' : ''}{fmt(data.macro.gold.change_pct)}%)
+                  ${fmt(data.macro.gold.price, 0)}
                 </span>
               </div>
             )}
@@ -302,15 +340,7 @@ export default function DashboardPage() {
               <div className="flex justify-between">
                 <span className="text-gray-400">原油</span>
                 <span className={pctColor(data.macro.oil.change_pct)}>
-                  ${fmt(data.macro.oil.price)} ({data.macro.oil.change_pct > 0 ? '+' : ''}{fmt(data.macro.oil.change_pct)}%)
-                </span>
-              </div>
-            )}
-            {data.macro.fear_greed && (
-              <div className="flex justify-between">
-                <span className="text-gray-400">恐懼貪婪</span>
-                <span className={data.macro.fear_greed.value < 30 ? 'text-red-400' : data.macro.fear_greed.value > 70 ? 'text-green-400' : 'text-yellow-400'}>
-                  {data.macro.fear_greed.value} ({data.macro.fear_greed.classification})
+                  ${fmt(data.macro.oil.price)}
                 </span>
               </div>
             )}
@@ -326,26 +356,7 @@ export default function DashboardPage() {
         {/* Cross-Market Correlations */}
         <div className="bg-gray-800 rounded-xl p-5 border border-gray-700">
           <h2 className="text-lg font-semibold text-white mb-3">📈 跨市場相關性 (30日)</h2>
-          <div className="space-y-2 text-sm">
-            {Object.entries(data.correlations || {}).map(([asset, info]) => (
-              <div key={asset} className="flex justify-between items-center">
-                <span className="text-gray-400">BTC-{asset}</span>
-                <div className="flex items-center gap-2">
-                  <div className="w-20 bg-gray-700 rounded-full h-2">
-                    <div
-                      className={`h-2 rounded-full ${info.value > 0 ? 'bg-green-500' : 'bg-red-500'}`}
-                      style={{ width: `${Math.abs(info.value) * 100}%`, marginLeft: info.value < 0 ? 'auto' : 0 }}
-                    />
-                  </div>
-                  <span className={pctColor(info.value)}>{info.value > 0 ? '+' : ''}{fmt(info.value)}</span>
-                  <span className="text-gray-500 text-xs">{info.label}</span>
-                </div>
-              </div>
-            ))}
-            {Object.keys(data.correlations || {}).length === 0 && (
-              <div className="text-gray-500">數據載入中...</div>
-            )}
-          </div>
+          <HeatMap data={heatmapData} />
         </div>
       </div>
 
