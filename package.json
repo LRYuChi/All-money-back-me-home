@@ -1,0 +1,16 @@
+{
+  "name": "all-money-back-me-home",
+  "private": true,
+  "workspaces": ["apps/*", "packages/*"],
+  "scripts": {
+    "dev": "turbo dev",
+    "build": "turbo build",
+    "lint": "turbo lint",
+    "dev:web": "turbo dev --filter=web",
+    "dev:api": "cd apps/api && uvicorn src.main:app --reload --port 8000"
+  },
+  "devDependencies": {
+    "turbo": "^2.4.0"
+  },
+  "packageManager": "npm@10.0.0"
+}

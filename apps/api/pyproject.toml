@@ -1,0 +1,37 @@
+[project]
+name = "ambmh-api"
+version = "0.1.0"
+description = "AMBMH API - Multi-market trading strategy advisory analysis engine"
+requires-python = ">=3.11"
+dependencies = [
+    "fastapi[standard]>=0.115.0",
+    "uvicorn[standard]>=0.34.0",
+    "pandas>=2.2.0",
+    "numpy>=1.26.0",
+    "pandas-ta>=0.3.14b1",
+    "yfinance>=0.2.40",
+    "ccxt>=4.4.0",
+    "httpx>=0.27.0",
+    "supabase>=2.9.0",
+    "pydantic>=2.9.0",
+    "pydantic-settings>=2.6.0",
+    "python-dotenv>=1.0.0",
+    "apscheduler>=3.10.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.3.0",
+    "pytest-asyncio>=0.24.0",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+asyncio_mode = "auto"
