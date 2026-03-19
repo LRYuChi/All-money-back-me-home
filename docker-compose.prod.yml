@@ -94,6 +94,27 @@ services:
         max-size: "10m"
         max-file: "3"
 
+  telegram-bot:
+    build: ./apps/api
+    command: python -m market_monitor.telegram_bot
+    volumes:
+      - trade-data:/app/data
+      - ./market_monitor:/app/market_monitor
+      - ./agent:/app/agent
+      - ./guards:/app/guards
+    environment:
+      - TG_AI_BOT_TOKEN=${TG_AI_BOT_TOKEN}
+      - TELEGRAM_CHAT_ID=${TELEGRAM_CHAT_ID}
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}
+      - ANTHROPIC_BASE_URL=${ANTHROPIC_BASE_URL}
+      - DATA_DIR=/app/data
+    restart: unless-stopped
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
 volumes:
   trade-data:
   ft-data:
