@@ -64,28 +64,29 @@ class SMCTrend(IStrategy):
     INTERFACE_VERSION = 3
 
     # --- Strategy settings ---
-    timeframe = "1h"
+    timeframe = "15m"
     can_short = True
     stoploss = -0.05  # 5% hard stop (absolute maximum, last resort)
     use_custom_stoploss = True
 
     # --- Protections ---
+    # Note: candle counts adjusted for 15m (4x more candles per hour than 1h)
     @property
     def protections(self):
         return [
             {
                 "method": "MaxDrawdown",
-                "lookback_period_candles": 48,   # 48 hours window
-                "trade_limit": 10,               # Min trades before activation
-                "stop_duration_candles": 12,      # Pause 12 hours
-                "max_allowed_drawdown": 0.15,     # 15% max drawdown
+                "lookback_period_candles": 192,  # 48 hours × 4 candles/h
+                "trade_limit": 10,
+                "stop_duration_candles": 48,      # 12 hours × 4
+                "max_allowed_drawdown": 0.15,
             },
             {
                 "method": "StoplossGuard",
-                "lookback_period_candles": 24,   # 24 hours window
-                "trade_limit": 4,                # 4 stop losses in window
-                "stop_duration_candles": 6,       # Pause 6 hours
-                "only_per_pair": False,           # Global
+                "lookback_period_candles": 96,   # 24 hours × 4
+                "trade_limit": 4,
+                "stop_duration_candles": 24,      # 6 hours × 4
+                "only_per_pair": False,
             },
         ]
 
@@ -105,7 +106,7 @@ class SMCTrend(IStrategy):
     position_adjustment_enable = True
     max_entry_position_adjustment = 2  # Up to 2 add-ons (3 total entries)
 
-    startup_candle_count = 200
+    startup_candle_count = 400  # 400 × 15m = ~4 days warmup
 
     # --- Hyperparameters ---
     swing_length = IntParameter(5, 20, default=10, space="buy",
@@ -631,10 +632,12 @@ class SMCTrend(IStrategy):
         # === Extreme Market Circuit Breaker ===
         # Block ALL entries during market crashes/panics
         dataframe, _ = self.dp.get_analyzed_dataframe(pair, self.timeframe)
-        if len(dataframe) > 24:
+        # Candles per 24h depends on timeframe
+        _candles_24h = {"1h": 24, "15m": 96, "5m": 288}.get(self.timeframe, 24)
+        if len(dataframe) > _candles_24h:
             last = dataframe.iloc[-1]
             # 1. BTC 24h crash > -10% → full stop
-            btc_24h = dataframe["close"].pct_change(24).iloc[-1]
+            btc_24h = dataframe["close"].pct_change(_candles_24h).iloc[-1]
             if abs(btc_24h) > 0.10:
                 logger.warning("CIRCUIT BREAKER: BTC 24h move %.1f%% — blocking entry", btc_24h * 100)
                 if _TG_AVAILABLE:
