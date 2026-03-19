@@ -260,18 +260,104 @@ Agent Tier: {self.tier}
 
 
 # =============================================
+# Rule-Based Analysis (no Claude API needed)
+# =============================================
+
+def run_rule_based_analysis() -> dict:
+    """Run a pure rule-based analysis — no LLM required.
+
+    Uses RegimeDetector + market data to generate a structured report
+    and log a decision. Can run as a cron job without API key.
+    """
+    from agent.regime_detector import RegimeDetector
+
+    executor = ToolExecutor()
+    memory = AgentMemory()
+    detector = RegimeDetector()
+
+    logger.info("=== Rule-Based Analysis ===")
+
+    # 1. Detect regime
+    regime = detector.detect()
+    logger.info("Regime: %s (confidence: %.0f%%)", regime["regime"], regime["confidence"] * 100)
+
+    # 2. Get positions
+    positions = executor.execute("get_open_positions", {})
+
+    # 3. Build report
+    guidance = regime.get("guidance", {})
+    factors = regime.get("factors", {})
+
+    report = {
+        "regime": regime["regime"],
+        "regime_confidence": regime["confidence"],
+        "guidance": guidance,
+        "factors": factors,
+        "open_positions": len(positions.get("positions", [])),
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+    }
+
+    # 4. Log decision
+    decision_id = memory.log_decision(
+        action="rule_based_analysis",
+        reason=f"Regime: {regime['regime']} — {guidance.get('description', '')}",
+        confidence=regime["confidence"],
+        context=report,
+        regime=regime["regime"],
+    )
+
+    # 5. Send Telegram report
+    try:
+        from market_monitor.telegram_zh import send_message
+
+        conf = factors.get("confidence", {})
+        fg = factors.get("fear_greed", "?")
+        btc_env = factors.get("btc_env", "?")
+
+        msg = f"""🤖 *Agent 分析報告* (規則模式)
+━━━━━━━━━━━━━━━━
+機制: {regime['regime']} ({regime['confidence']:.0%})
+建議: {guidance.get('description', '')}
+風險: {guidance.get('risk_level', '?')}
+槓桿上限: {guidance.get('leverage_cap', '?')}x
+
+信心: {conf.get('score', '?')} ({conf.get('regime', '?')})
+F&G: {fg}
+BTC Env: {btc_env}
+持倉: {len(positions.get('positions', []))} 個
+
+決策ID: {decision_id}"""
+
+        send_message(msg)
+    except Exception as e:
+        logger.warning("Telegram send failed: %s", e)
+
+    logger.info("Analysis complete. Decision ID: %s", decision_id)
+    return report
+
+
+# =============================================
 # Entry Point
 # =============================================
 
 def main():
-    brain = AgentBrain()
-
     mode = os.environ.get("AGENT_MODE", "loop")
-    if mode == "once":
-        # Single analysis run (for testing)
+
+    if mode == "rule":
+        # Rule-based analysis (no Claude API needed)
+        run_rule_based_analysis()
+    elif mode == "once":
+        brain = AgentBrain()
         brain.run_full_analysis()
     else:
-        brain.run_forever()
+        # Check if Claude API is available
+        api_key = os.environ.get("ANTHROPIC_API_KEY", "")
+        if not api_key:
+            logger.warning("No ANTHROPIC_API_KEY — falling back to rule-based mode")
+            run_rule_based_analysis()
+        else:
+            brain = AgentBrain()
+            brain.run_forever()
 
 
 if __name__ == "__main__":
