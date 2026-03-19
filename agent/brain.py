@@ -137,21 +137,19 @@ class AgentBrain:
         # 2. Build analysis prompt
         prompt = self._build_analysis_prompt(market, regime, positions)
 
-        # 3. Call Claude with tools
+        # 3. Call Claude with tools — multi-turn loop
         system = load_prompt("analyst")
-        response = call_claude(system, prompt, tools=self.tools)
-
-        if "error" in response:
-            logger.error("AI analysis failed: %s — falling back to rule-based", response["error"])
-            run_rule_based_analysis()
-            return
-
-        # 4. Process response — execute any tool calls
-        self._process_response(response, context={
+        context = {
             "cycle": "full_analysis",
             "regime": regime.get("regime", "UNKNOWN"),
             "confidence": market.get("confidence", {}).get("score", 0),
-        })
+        }
+
+        result = self._run_agent_loop(system, prompt, context, max_turns=5)
+        if result is None:
+            logger.error("AI analysis failed — falling back to rule-based")
+            run_rule_based_analysis()
+            return
 
         self._last_quick_check = time.time()  # Reset quick check timer
 
@@ -221,14 +219,63 @@ Agent Tier: {self.tier}
 重要: 使用 log_decision 記錄你的分析結論。
 {'如果需要調整風險/槓桿，使用對應的 tools。' if self.tier >= 1 else '目前為觀察者模式 (Tier 0)，只能讀取數據和記錄決策。'}"""
 
-    def _process_response(self, response: dict, context: dict) -> None:
-        """Process Claude's response, executing any tool calls."""
-        for block in response.get("content", []):
-            if hasattr(block, "type"):
+    def _run_agent_loop(self, system: str, user_prompt: str, context: dict,
+                        max_turns: int = 5, model: str = "claude-sonnet-4-6") -> str | None:
+        """Run a multi-turn agent loop with tool use.
+
+        Claude calls tools → we execute → send results back → Claude continues.
+        Repeats until Claude stops calling tools or max_turns reached.
+        """
+        import anthropic
+
+        try:
+            client = anthropic.Anthropic()
+        except Exception as e:
+            logger.error("Anthropic client init failed: %s", e)
+            return None
+
+        messages = [{"role": "user", "content": user_prompt}]
+        final_text = ""
+
+        for turn in range(max_turns):
+            try:
+                response = client.messages.create(
+                    model=model,
+                    max_tokens=2048,
+                    system=system,
+                    messages=messages,
+                    tools=self.tools,
+                )
+            except Exception as e:
+                logger.error("Claude API call failed (turn %d): %s", turn, e)
+                return None
+
+            logger.info("Turn %d: stop_reason=%s, blocks=%d",
+                        turn, response.stop_reason, len(response.content))
+
+            # Process response blocks
+            tool_results = []
+            for block in response.content:
                 if block.type == "text":
-                    logger.info("Agent: %s", block.text[:200])
+                    logger.info("Agent: %s", block.text[:300])
+                    final_text += block.text + "\n"
                 elif block.type == "tool_use":
-                    self._handle_tool_call(block.name, block.input, context)
+                    result = self._handle_tool_call(block.name, block.input, context)
+                    tool_results.append({
+                        "type": "tool_result",
+                        "tool_use_id": block.id,
+                        "content": json.dumps(result, ensure_ascii=False, default=str)[:3000],
+                    })
+
+            # If no more tool calls, we're done
+            if response.stop_reason == "end_turn" or not tool_results:
+                break
+
+            # Send tool results back to Claude for next turn
+            messages.append({"role": "assistant", "content": response.content})
+            messages.append({"role": "user", "content": tool_results})
+
+        return final_text or "Analysis completed (tools only)"
 
     def _handle_tool_call(self, name: str, args: dict, context: dict) -> dict:
         """Validate and execute a tool call."""
