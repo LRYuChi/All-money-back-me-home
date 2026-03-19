@@ -31,10 +31,12 @@ from freqtrade.strategy import DecimalParameter, IntParameter, IStrategy
 from pandas import DataFrame
 from smartmoneyconcepts import smc
 
-# Add project root to path for indicators import
+# Add paths for imports (guards, indicators, market_monitor, agent)
+_strategy_dir = str(Path(__file__).resolve().parent)
 _proj_root = str(Path(__file__).resolve().parent.parent)
-if _proj_root not in sys.path:
-    sys.path.insert(0, _proj_root)
+for _p in [_strategy_dir, _proj_root]:
+    if _p not in sys.path:
+        sys.path.insert(0, _p)
 
 from indicators.adam_projection import adam_projection
 
