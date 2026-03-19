@@ -328,7 +328,8 @@ def _query_ft_bot(host: str) -> dict | None:
     """Query a single Freqtrade bot via REST API."""
     try:
         import base64
-        auth = base64.b64encode(b"freqtrade:freqtrade").decode()
+        _ft_creds = f"{os.environ.get('FT_USER', 'freqtrade')}:{os.environ.get('FT_PASS', 'freqtrade')}"
+        auth = base64.b64encode(_ft_creds.encode()).decode()
         headers = {"Authorization": f"Basic {auth}"}
 
         req = urllib.request.Request(

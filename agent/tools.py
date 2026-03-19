@@ -376,7 +376,8 @@ class ToolExecutor:
         import base64
         import urllib.request
         try:
-            auth = base64.b64encode(b"freqtrade:freqtrade").decode()
+            _ft_creds = f"{os.environ.get('FT_USER', 'freqtrade')}:{os.environ.get('FT_PASS', 'freqtrade')}"
+            auth = base64.b64encode(_ft_creds.encode()).decode()
             req = urllib.request.Request(
                 f"http://freqtrade:8080/api/v1/{endpoint}",
                 headers={"Authorization": f"Basic {auth}"},

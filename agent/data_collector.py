@@ -130,7 +130,8 @@ def get_freqtrade_status() -> dict:
 
     for host in hosts:
         try:
-            auth = base64.b64encode(b"freqtrade:freqtrade").decode()
+            _ft_creds = f"{os.environ.get('FT_USER', 'freqtrade')}:{os.environ.get('FT_PASS', 'freqtrade')}"
+            auth = base64.b64encode(_ft_creds.encode()).decode()
             headers = {"Authorization": f"Basic {auth}"}
 
             # Positions

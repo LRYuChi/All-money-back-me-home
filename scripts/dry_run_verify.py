@@ -26,7 +26,8 @@ PROJECT_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(PROJECT_ROOT))
 
 FT_API = "http://localhost:8080/api/v1"
-FT_AUTH = base64.b64encode(b"freqtrade:freqtrade").decode()
+_ft_creds = f"{os.environ.get('FT_USER', 'freqtrade')}:{os.environ.get('FT_PASS', 'freqtrade')}"
+FT_AUTH = base64.b64encode(_ft_creds.encode()).decode()
 
 
 def ft_get(endpoint: str):

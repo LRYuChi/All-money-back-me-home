@@ -21,7 +21,7 @@ sys.path.insert(0, str(PROJECT_ROOT))
 from market_monitor.telegram_zh import notify_daily_report, send_message
 
 API_URL = "http://127.0.0.1:8080/api/v1"
-API_AUTH = "freqtrade:freqtrade"
+API_AUTH = f"{os.environ.get('FT_USER', 'freqtrade')}:{os.environ.get('FT_PASS', 'freqtrade')}"
 
 
 def api_get(endpoint: str) -> dict | None:

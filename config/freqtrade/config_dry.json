@@ -73,8 +73,8 @@
         "listen_ip_address": "0.0.0.0",
         "listen_port": 8080,
         "username": "freqtrade",
-        "password": "freqtrade",
-        "jwt_secret_key": "somethingRandomSomethingRandom123",
+        "password": "CHANGE_ME_IN_CONFIG_SECRETS",
+        "jwt_secret_key": "CHANGE_ME_IN_CONFIG_SECRETS",
         "verbosity": "error"
     }
 }

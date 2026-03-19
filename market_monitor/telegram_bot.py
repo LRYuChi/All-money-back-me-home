@@ -171,7 +171,8 @@ def read_guard_state() -> dict:
 def query_ft(endpoint: str):
     for host in ["freqtrade:8080", "localhost:8080"]:
         try:
-            auth = base64.b64encode(b"freqtrade:freqtrade").decode()
+            _ft_creds = f"{os.environ.get('FT_USER', 'freqtrade')}:{os.environ.get('FT_PASS', 'freqtrade')}"
+            auth = base64.b64encode(_ft_creds.encode()).decode()
             req = urllib.request.Request(
                 f"http://{host}/api/v1/{endpoint}",
                 headers={"Authorization": f"Basic {auth}"},
@@ -906,6 +907,17 @@ def run_polling():
         return
 
     logger.info("Telegram AI Bot starting...")
+
+    # Clear any stale webhook/polling connections to prevent 409 Conflict
+    try:
+        req = urllib.request.Request(
+            f"https://api.telegram.org/bot{BOT_TOKEN}/deleteWebhook?drop_pending_updates=false"
+        )
+        urllib.request.urlopen(req, timeout=10)
+        logger.info("Cleared stale webhook/polling connections")
+    except Exception as e:
+        logger.warning("Failed to clear webhook: %s", e)
+
     setup_bot_commands()
 
     offset = 0
