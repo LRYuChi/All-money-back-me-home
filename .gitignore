@@ -4,6 +4,7 @@
 .env.*.local
 config/freqtrade/config_secrets.json
 config/freqtrade/config_secrets_demo.json
+config/freqtrade/config_telegram.json
 
 # Python
 __pycache__/

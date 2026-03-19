@@ -69,7 +69,7 @@ services:
     image: freqtradeorg/freqtrade:stable
     entrypoint: ["/bin/sh", "-c"]
     command:
-      - "pip install --no-cache-dir smartmoneyconcepts --no-deps -q 2>/dev/null; pip install --no-cache-dir yfinance fredapi -q 2>/dev/null; freqtrade trade --strategy SMCTrend -c /freqtrade/config/config_dry.json -c /freqtrade/config/config_secrets.json --strategy-path /freqtrade/user_data/strategies"
+      - "pip install --no-cache-dir smartmoneyconcepts --no-deps -q 2>/dev/null; pip install --no-cache-dir yfinance fredapi -q 2>/dev/null; freqtrade trade --strategy SMCTrend -c /freqtrade/config/config_dry.json -c /freqtrade/config/config_secrets.json -c /freqtrade/config/config_telegram.json --strategy-path /freqtrade/user_data/strategies"
     volumes:
       - ./strategies:/freqtrade/user_data/strategies
       - ./indicators:/freqtrade/user_data/strategies/indicators

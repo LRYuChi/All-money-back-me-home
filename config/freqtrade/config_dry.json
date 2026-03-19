@@ -51,9 +51,9 @@
         }
     ],
     "telegram": {
-        "enabled": true,
-        "token": "${TELEGRAM_TOKEN}",
-        "chat_id": "${TELEGRAM_CHAT_ID}",
+        "enabled": false,
+        "token": "",
+        "chat_id": "",
         "notification_settings": {
             "status": "on",
             "warning": "on",
