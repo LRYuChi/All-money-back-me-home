@@ -8,7 +8,10 @@ import pandas as pd
 import yfinance as yf
 
 # Add project root so we can import market_monitor
-_PROJECT_ROOT = Path(__file__).resolve().parents[4]
+try:
+    _PROJECT_ROOT = Path(__file__).resolve().parents[4]
+except IndexError:
+    _PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
 if str(_PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(_PROJECT_ROOT))
 
