@@ -62,7 +62,7 @@ def _http_get_json(url: str, headers: dict | None = None, timeout: int = 10) -> 
 
 
 def fetch_economic_calendar(days_ahead: int = 7) -> list[Report]:
-    """Fetch upcoming economic events from Finnhub."""
+    """Fetch upcoming economic events from Finnhub (requires premium plan)."""
     if not FINNHUB_API_KEY:
         logger.info("FINNHUB_API_KEY not set — skipping economic calendar")
         return []
@@ -165,9 +165,14 @@ def fetch_crypto_news(limit: int = 15) -> list[Report]:
         logger.info("CRYPTOPANIC_API_KEY not set — skipping crypto news")
         return []
 
-    url = f"https://cryptopanic.com/api/v1/posts/?auth_token={CRYPTOPANIC_API_KEY}&filter=important&public=true"
-    data = _http_get_json(url)
-    if not data or "results" not in data:
+    # Try v1 first, then free/v1 fallback
+    for api_path in ["v1", "free/v1"]:
+        url = f"https://cryptopanic.com/api/{api_path}/posts/?auth_token={CRYPTOPANIC_API_KEY}&public=true"
+        data = _http_get_json(url)
+        if data and "results" in data:
+            break
+    else:
+        logger.warning("CryptoPanic API unavailable (all paths returned error)")
         return []
 
     reports = []
@@ -260,6 +265,26 @@ def collect_all() -> list[Report]:
     # Crypto
     all_reports.extend(fetch_crypto_news())
     all_reports.extend(fetch_crypto_fear_greed())
+
+    # Finnhub crypto news (free tier — search for BTC/crypto keywords)
+    if FINNHUB_API_KEY:
+        url = f"https://finnhub.io/api/v1/news?category=crypto&token={FINNHUB_API_KEY}"
+        data = _http_get_json(url)
+        if data and isinstance(data, list):
+            for item in data[:8]:
+                all_reports.append(Report(
+                    source="finnhub",
+                    category="crypto",
+                    title=item.get("headline", ""),
+                    content=item.get("summary", "")[:300],
+                    sentiment="neutral",
+                    relevance=0.6,
+                    timestamp=datetime.fromtimestamp(
+                        item.get("datetime", 0), tz=timezone.utc
+                    ).isoformat() if item.get("datetime") else "",
+                    url=item.get("url", ""),
+                ))
+            logger.info("Fetched %d Finnhub crypto news", min(len(data), 8))
 
     # Deduplicate by title (case-insensitive)
     seen = set()
