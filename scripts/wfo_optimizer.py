@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Walk-Forward Optimization (WFO) for TAHZANCrypto.
+"""Walk-Forward Optimization (WFO) for SMCTrend.
 
 Dynamic parameter optimization with:
 - 8-segment rolling walk-forward
@@ -27,7 +27,7 @@ os.chdir(PROJECT_ROOT)
 # =============================================
 # Configuration
 # =============================================
-STRATEGY = "TAHZANCrypto"
+STRATEGY = "SMCTrend"
 TIMEFRAME = "1h"
 NUM_SEGMENTS = 8
 IS_RATIO = 0.60  # 60% In-Sample
@@ -229,7 +229,7 @@ def calculate_z_score(is_returns: list[float], oos_return: float) -> float:
 
 def main():
     print("=" * 70)
-    print("TAHZAN WFO Optimizer")
+    print("SMCTrend WFO Optimizer")
     print(f"Strategy: {STRATEGY}")
     print(f"Segments: {NUM_SEGMENTS}, IS/OOS split: {IS_RATIO*100:.0f}/{OOS_RATIO*100:.0f}")
     print(f"Date range: {START_DATE.date()} → {END_DATE.date()} ({TOTAL_DAYS} days)")

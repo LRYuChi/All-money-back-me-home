@@ -56,6 +56,20 @@ else
     docker compose -f docker-compose.prod.yml logs --tail=20 web
 fi
 
+# Freqtrade bots health check (may take longer to start)
+echo "  Waiting for Freqtrade bots (10s)..."
+sleep 10
+
+for bot in "freqtrade-trend:8080" "freqtrade-scalp:8081"; do
+    name="${bot%%:*}"
+    port="${bot##*:}"
+    if curl -sf -u freqtrade:freqtrade "http://localhost:${port}/api/v1/show_config" > /dev/null 2>&1; then
+        echo "  ${name}: OK"
+    else
+        echo "  ${name}: STARTING (check logs: docker compose -f docker-compose.prod.yml logs ${name})"
+    fi
+done
+
 echo ""
 echo "=== Deploy complete! ==="
 docker compose -f docker-compose.prod.yml ps

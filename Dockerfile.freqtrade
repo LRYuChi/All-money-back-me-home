@@ -1,0 +1,21 @@
+FROM freqtradeorg/freqtrade:stable
+
+# Install additional Python dependencies required by strategies
+RUN pip install --no-cache-dir \
+    smartmoneyconcepts \
+    fastmcp \
+    pyyaml \
+    python-dotenv \
+    "python-telegram-bot>=20.0" \
+    "yfinance>=0.2.0" \
+    twstock \
+    "pydantic>=2.0.0"
+
+# Copy project modules
+COPY strategies/ /freqtrade/strategies/
+COPY indicators/ /freqtrade/indicators/
+COPY guards/ /freqtrade/guards/
+COPY market_monitor/ /freqtrade/market_monitor/
+COPY config/freqtrade/ /freqtrade/config/freqtrade/
+
+WORKDIR /freqtrade

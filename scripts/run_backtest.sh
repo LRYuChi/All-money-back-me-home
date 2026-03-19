@@ -1,12 +1,12 @@
 #!/bin/bash
 # Quick backtest runner for All-money-back-me-home
 # Usage: ./scripts/run_backtest.sh [strategy_name] [timerange]
-# Example: ./scripts/run_backtest.sh AdaptiveRSI 20240601-20260317
+# Example: ./scripts/run_backtest.sh SMCTrend 20240601-20260317
 
 set -e
 cd "$(dirname "$0")/.."
 
-STRATEGY="${1:-AdaptiveRSI}"
+STRATEGY="${1:-SMCTrend}"
 TIMERANGE="${2:-20240317-20260317}"
 
 source .venv/bin/activate

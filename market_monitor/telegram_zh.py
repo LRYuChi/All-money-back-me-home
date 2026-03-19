@@ -73,7 +73,8 @@ def notify_entry(pair: str, side: str, rate: float, stake: float,
         msg += "\n📊 *進場原因:*\n"
         if details.get("htf_trend"):
             trend_zh = "多頭 BOS" if details["htf_trend"] > 0 else "空頭 BOS"
-            msg += f"  ✅ 4H 趨勢: {trend_zh}\n"
+            htf_label = details.get("htf_label", "4H")
+            msg += f"  ✅ {htf_label} 趨勢: {trend_zh}\n"
         if details.get("in_ob"):
             msg += f"  ✅ Order Block: {details.get('ob_range', '活躍區間')}\n"
         if details.get("in_fvg"):
@@ -98,7 +99,8 @@ def notify_entry(pair: str, side: str, rate: float, stake: float,
                 kz = f"UTC {hour}:00"
             msg += f"  ✅ Killzone: {kz}\n"
         if details.get("htf_zone_aligned"):
-            msg += "  ✅ 4H OB/FVG 區域對齊\n"
+            htf_label = details.get("htf_label", "4H")
+            msg += f"  ✅ {htf_label} OB/FVG 區域對齊\n"
 
     # 信心引擎分解
     msg += f"\n{conf_emoji} *信心引擎:* `{confidence:.2f}`\n"

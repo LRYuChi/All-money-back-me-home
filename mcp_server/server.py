@@ -144,7 +144,7 @@ def trading_status() -> str:
 def run_backtest(strategy: str = "SMCTrend", timerange: str = "20240317-20260317") -> str:
     """執行策略回測。
     Args:
-        strategy: 策略名稱（SMCTrend, TAHZANCrypto, AdaptiveRSI, ATRTrend）
+        strategy: 策略名稱（SMCTrend, SMCScalp）
         timerange: 回測區間（格式 YYYYMMDD-YYYYMMDD）
     """
     try:
@@ -181,10 +181,8 @@ def run_backtest(strategy: str = "SMCTrend", timerange: str = "20240317-20260317
 def strategy_info() -> str:
     """列出所有可用策略及其當前參數設定。"""
     strategies = {
-        "SMCTrend": "SMC + 亞當理論 + 信心引擎 + 金字塔加碼（主力策略）",
-        "TAHZANCrypto": "TAHZAN v5.7 環境感知動能獵殺系統",
-        "AdaptiveRSI": "自適應 RSI（波動率動態週期）",
-        "ATRTrend": "ATR Keltner Channel 趨勢策略",
+        "SMCTrend": "SMC + 亞當理論 + 信心引擎 + 金字塔加碼（主力策略, 1H 進場 + 4H 趨勢）",
+        "SMCScalp": "SMC 短線 — 15m 進場 + 1H 趨勢 + 動態風格切換（高信心波段/低信心 Scalping）",
     }
 
     lines = ["可用策略:"]

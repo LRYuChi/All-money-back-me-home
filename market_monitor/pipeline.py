@@ -70,13 +70,37 @@ def fetch_market_data() -> dict:
         except Exception as e:
             logger.warning("Failed %s: %s", ticker, e)
 
-    # === Taiwan Index ===
+    # === Taiwan Index (yfinance for historical + TWSE OpenAPI for sector indices) ===
     try:
         df = yf.Ticker("^TWII").history(period="6mo")
         if len(df) > 0:
             data["加權指數"] = _calc_indicators(df, "加權指數")
     except Exception as e:
         logger.warning("TWII failed: %s", e)
+
+    # === Taiwan Fundamentals (TWSE OpenAPI) ===
+    try:
+        from market_monitor.fetchers.twse_openapi import TWSEOpenAPIClient
+        twse = TWSEOpenAPIClient()
+
+        # Sector indices (semiconductor, electronics, finance)
+        for idx in twse.get_sector_indices():
+            name = idx["name"]
+            if any(k in name for k in ["半導體", "電子", "金融保險"]):
+                if idx["close"] is not None:
+                    data[f"TW:{name}"] = {
+                        "name": name,
+                        "price": idx["close"],
+                        "change_pct": idx["change_pct"] or 0,
+                    }
+
+        # Watchlist fundamentals
+        watchlist_codes = ["2330", "2317", "2454", "2382"]
+        fundamentals = twse.get_watchlist_fundamentals(watchlist_codes)
+        if fundamentals:
+            data["_tw_fundamentals"] = fundamentals
+    except Exception as e:
+        logger.warning("TWSE OpenAPI failed: %s", e)
 
     # === Crypto ===
     for ticker, name in [("BTC-USD", "BTC"), ("ETH-USD", "ETH"), ("SOL-USD", "SOL")]:
@@ -168,6 +192,27 @@ def generate_report(data: dict) -> str:
             f"  加權: {d['price']:,.0f} ({d['change_pct']:+.2f}%) "
             f"| RSI: {d['rsi']:.0f} | {trend}"
         )
+
+    # TW Sector Indices (from TWSE OpenAPI)
+    tw_sectors = {k: v for k, v in data.items() if k.startswith("TW:")}
+    if tw_sectors:
+        lines.append("")
+        lines.append("【台股產業指數】")
+        for key, d in tw_sectors.items():
+            lines.append(
+                f"  {d['name']}: {d['price']:,.2f} ({d['change_pct']:+.2f}%)"
+            )
+
+    # TW Watchlist Fundamentals (from TWSE OpenAPI)
+    tw_fund = data.get("_tw_fundamentals", [])
+    if tw_fund:
+        lines.append("")
+        lines.append("【台股基本面】")
+        for f in tw_fund:
+            pe = f"PE:{f['pe_ratio']:.1f}" if f.get("pe_ratio") else "PE:—"
+            pb = f"PB:{f['pb_ratio']:.2f}" if f.get("pb_ratio") else "PB:—"
+            dy = f"殖利率:{f['dividend_yield']:.2f}%" if f.get("dividend_yield") else "殖利率:—"
+            lines.append(f"  {f['name']}({f['code']}): {pe} | {pb} | {dy}")
 
     # US Stocks
     lines.append("")
