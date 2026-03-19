@@ -373,7 +373,7 @@ def _get_crypto_environment() -> dict:
         cg_key = os.environ.get("COINGLASS_API_KEY")
         engine = CryptoEnvironmentEngine(coinglass_api_key=cg_key)
         results = {}
-        for sym in ["BTC", "ETH", "SOL"]:
+        for sym in ["BTC", "ETH", "SOL", "BNB", "XRP", "DOGE"]:
             r = engine.calculate(sym)
             results[sym] = {
                 "score": r["score"],

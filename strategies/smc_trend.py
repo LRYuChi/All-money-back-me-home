@@ -205,7 +205,9 @@ class SMCTrend(IStrategy):
             from market_monitor.crypto_environment import CryptoEnvironmentEngine
             cg_key = os.environ.get("COINGLASS_API_KEY")
             crypto_engine = CryptoEnvironmentEngine(coinglass_api_key=cg_key)
-            for sym in ["BTC", "ETH", "SOL"]:
+            # Monitor all whitelisted symbols
+            monitored_syms = ["BTC", "ETH", "SOL", "BNB", "XRP", "DOGE"]
+            for sym in monitored_syms:
                 cr = crypto_engine.calculate(sym)
                 self._crypto_env[sym] = cr["score"]
                 logger.info(
@@ -578,7 +580,7 @@ class SMCTrend(IStrategy):
         reverse_conf = dataframe["confidence"] < 0.20
         reverse_short_conf = 1.0 - dataframe["confidence"]  # Invert for sizing
 
-        zone_rev_short_a = dataframe["ob_fvg_confluence_bear"] == True
+        zone_rev_short_a = dataframe["ob_fvg_confluence_bear"].fillna(False)
         zone_rev_short_b = (
             (dataframe["in_bearish_ob"] | dataframe["in_bearish_fvg"])
             & (reverse_short_conf >= 0.5)
@@ -588,14 +590,14 @@ class SMCTrend(IStrategy):
             (
                 reverse_conf                                         # Low confidence (HIBERNATE)
                 & (dataframe["htf_trend"] < 0)                      # 4H bearish confirmed
-                & (dataframe["in_ote_short"] == True)                # Premium zone
+                & (dataframe["in_ote_short"])                         # Premium zone
                 & (
                     zone_rev_short_a                                  # Grade A
                     | (zone_rev_short_b & htf_zone)                  # Grade B + 4H zone
                 )
                 & adam_short_filter                                   # Adam projection down
-                & (dataframe["fr_ok_short"] == True)                 # Funding rate OK
-                & (dataframe["vol_regime_ok"] == True)               # Volatility normal
+                & (dataframe["fr_ok_short"])                          # Funding rate OK
+                & (dataframe["vol_regime_ok"])                        # Volatility normal
                 & killzone_filter
                 & (dataframe["volume"] > 0)
             ),
