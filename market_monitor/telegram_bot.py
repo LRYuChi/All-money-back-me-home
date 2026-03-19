@@ -178,8 +178,10 @@ def query_ft(endpoint: str):
             )
             with urllib.request.urlopen(req, timeout=5) as resp:
                 return json.loads(resp.read())
-        except Exception:
+        except Exception as e:
+            logger.debug("Freqtrade API %s/%s failed: %s", host, endpoint, e)
             continue
+    logger.warning("Freqtrade API unreachable for /%s (tried all hosts)", endpoint)
     return None
 
 
@@ -241,7 +243,7 @@ def cmd_status() -> str:
     fg = macro.get("fear_greed", "?")
     regime = snap.get("regime", {}).get("regime", "?")
     guards = read_guard_state()
-    streak = guards.get("consec_streak", 0)
+    streak = guards.get("consecutive_losses", guards.get("consec_streak", 0))
     guard_status = "🟢 正常" if streak < 3 else f"🟠 連虧{streak}"
 
     lines = [
@@ -649,7 +651,7 @@ def cmd_guards() -> str:
     lines = ["🛡 風控狀態", "━━━━━━━━━━━━━━━━"]
 
     daily = state.get("daily_loss", 0)
-    streak = state.get("consec_streak", 0)
+    streak = state.get("consecutive_losses", state.get("consec_streak", 0))
     paused = state.get("consec_paused_until", 0)
 
     lines.append(f"日損: ${daily:.2f} / 限額5%")
@@ -740,7 +742,7 @@ def cmd_overview() -> str:
     btc_env = crypto.get("BTC", {}).get("score", 0) if crypto else 0
     pos = ft.get("positions", [])
     profit = ft.get("profit", {})
-    streak = guards.get("consec_streak", 0)
+    streak = guards.get("consecutive_losses", guards.get("consec_streak", 0))
 
     lines = [
         f"📊 全覽 | {snapshot_age()}",
