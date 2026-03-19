@@ -36,9 +36,10 @@ AI_COOLDOWN = 30
 
 PERSISTENT_MENU = {
     "keyboard": [
-        ["📊 狀態", "🎯 信心", "🔗 加密環境"],
-        ["📈 機制", "🌍 宏觀", "💰 交易"],
-        ["🛡 風控", "🧠 決策", "📋 分析"],
+        ["📊 全覽", "📋 分析"],
+        ["🎯 信心", "🔗 加密環境", "📈 機制"],
+        ["🌍 宏觀", "💰 交易", "📊 狀態"],
+        ["🛡 風控", "🧠 決策"],
     ],
     "resize_keyboard": True,
     "is_persistent": True,
@@ -46,6 +47,7 @@ PERSISTENT_MENU = {
 
 # 按鈕文字 → handler 映射
 BUTTON_MAP: dict[str, str] = {
+    "📊 全覽": "overview",
     "📊 狀態": "status",
     "🎯 信心": "confidence",
     "🔗 加密環境": "crypto",
@@ -166,6 +168,25 @@ def snapshot_age() -> str:
 # 指令回應 (豐富版)
 # =============================================
 
+def _next_analysis_countdown() -> str:
+    """計算下次分析的倒計時。"""
+    now = datetime.now(timezone.utc)
+    hours = [0, 8, 16]
+    for h in hours:
+        target = now.replace(hour=h, minute=0, second=0, microsecond=0)
+        if target > now:
+            delta = target - now
+            hrs = int(delta.total_seconds() // 3600)
+            mins = int((delta.total_seconds() % 3600) // 60)
+            return f"{hrs}h{mins}m"
+    # Next day 00:00
+    tomorrow = now.replace(hour=0, minute=0, second=0, microsecond=0)
+    tomorrow = tomorrow.replace(day=tomorrow.day + 1)
+    delta = tomorrow - now
+    hrs = int(delta.total_seconds() // 3600)
+    return f"{hrs}h"
+
+
 def cmd_status() -> str:
     config = query_ft("show_config")
     positions = query_ft("status")
@@ -181,14 +202,28 @@ def cmd_status() -> str:
     conf_regime = conf.get("regime", "?")
     crypto = snap.get("crypto_env", {})
     btc_env = crypto.get("BTC", {}).get("score", 0) if crypto else 0
+    macro = snap.get("macro", {})
+    fg = macro.get("fear_greed", "?")
+    regime = snap.get("regime", {}).get("regime", "?")
+    guards = read_guard_state()
+    streak = guards.get("consec_streak", 0)
+    guard_status = "🟢 正常" if streak < 3 else f"🟠 連虧{streak}"
 
     lines = [
         "🤖 系統狀態",
         "━━━━━━━━━━━━━━━━",
         f"● {state} | SMCTrend | {mode}",
-        f"⏰ 數據更新: {snapshot_age()}",
-        "",
+        f"⏰ 數據: {snapshot_age()} | 下次分析: {_next_analysis_countdown()}",
     ]
+
+    # BTC price from macro
+    btc_data = next((c for c in snap.get("freqtrade", {}).get("positions", []) if "BTC" in c.get("pair", "")), None)
+    if not btc_data:
+        # Try regime factors
+        btc_chg = snap.get("regime", {}).get("factors", {}).get("btc", {}).get("change_pct", 0)
+        lines.append(f"\n💲 BTC ({btc_chg:+.1f}%)")
+
+    lines.append("━━━━━━━━━━━━━━━━")
 
     # Positions
     if pos_list:
@@ -216,19 +251,20 @@ def cmd_status() -> str:
         trades = profit.get("trade_count", 0)
         pnl = profit.get("profit_all_coin", 0)
         wins = profit.get("winning_trades", 0)
-        losses = profit.get("losing_trades", 0)
         wr = (wins / trades * 100) if trades > 0 else 0
-        lines.append("💰 績效總覽")
-        lines.append(f"├ 總交易: {trades} 筆 | 勝率: {wr:.0f}%")
-        lines.append(f"├ 勝 {wins} / 敗 {losses}")
-        lines.append(f"└ 總損益: ${pnl:.2f}")
-    else:
-        lines.append("💰 績效: 無數據")
+        lines.append("💰 績效")
+        lines.append(f"├ 交易: {trades} 筆 | 勝率: {wr:.0f}%")
+        lines.append(f"└ 損益: ${pnl:.2f}")
 
-    # Quick indicators
+    # Quick dashboard
     lines.append("")
-    lines.append(f"🎯 信心: {conf_score:.2f} ({conf_regime}) {bar(conf_score)}")
-    lines.append(f"🔗 BTC: {btc_env:.2f} {bar(btc_env)}")
+    lines.append("📊 快速總覽")
+    lines.append(f"├ 🎯 信心  {conf_score:.2f} {bar(conf_score)} {regime_emoji(conf_regime)} {conf_regime}")
+    lines.append(f"├ 🔗 BTC   {btc_env:.2f} {bar(btc_env)}")
+    lines.append(f"├ 📈 機制  {regime} {regime_emoji(regime)}")
+    if isinstance(fg, (int, float)):
+        lines.append(f"├ 😨 F&G   {fg} {bar(fg, 100)} {fg_label(fg)}")
+    lines.append(f"└ 🛡 Guard {guard_status}")
 
     return "\n".join(lines)
 
@@ -244,6 +280,9 @@ def cmd_confidence() -> str:
     event = conf.get("event_multiplier", 1.0)
     sb = conf.get("sandboxes", {})
 
+    def sb_status(val):
+        return "✅" if val >= 0.4 else "⚠"
+
     lines = [
         "🎯 信心引擎",
         "━━━━━━━━━━━━━━━━",
@@ -251,28 +290,52 @@ def cmd_confidence() -> str:
         f"{bar(score)} {score*100:.0f}%",
         "",
         "📊 沙盒分數",
-        f"├ 宏觀  {sb.get('macro', 0):.2f} {bar(sb.get('macro', 0))}",
-        f"├ 情緒  {sb.get('sentiment', 0):.2f} {bar(sb.get('sentiment', 0))}",
-        f"├ 資本  {sb.get('capital', 0):.2f} {bar(sb.get('capital', 0))}",
-        f"└ 避險  {sb.get('haven', 0):.2f} {bar(sb.get('haven', 0))}",
+        f"├ 宏觀  {sb.get('macro', 0):.2f} {bar(sb.get('macro', 0))} {sb_status(sb.get('macro', 0))}",
+        f"├ 情緒  {sb.get('sentiment', 0):.2f} {bar(sb.get('sentiment', 0))} {sb_status(sb.get('sentiment', 0))}",
+        f"├ 資本  {sb.get('capital', 0):.2f} {bar(sb.get('capital', 0))} {sb_status(sb.get('capital', 0))}",
+        f"└ 避險  {sb.get('haven', 0):.2f} {bar(sb.get('haven', 0))} {sb_status(sb.get('haven', 0))}",
     ]
 
     if event < 1.0:
         lines.append(f"\n⚠ 事件乘數: x{event} (FOMC/CPI)")
 
+    # Regime thresholds
+    thresholds = [
+        ("🟢", "AGGRESSIVE", 0.80),
+        ("🔵", "NORMAL", 0.60),
+        ("🟡", "CAUTIOUS", 0.40),
+        ("🟠", "DEFENSIVE", 0.20),
+        ("🔴", "HIBERNATE", 0.00),
+    ]
+    lines.append("")
+    lines.append("📈 制度閾值")
+    for emoji, name, thresh in thresholds:
+        pointer = " ← 目前" if name == regime else ""
+        op = ">" if thresh > 0 else "<"
+        lines.append(f"├ {emoji} {name:11s} {op} {thresh:.2f}{pointer}")
+
     # Guidance
     guidance = {
-        "AGGRESSIVE": ("100%", "3.0x"),
-        "NORMAL": ("75%", "2.0x"),
-        "CAUTIOUS": ("50%", "1.5x"),
-        "DEFENSIVE": ("25%", "1.0x"),
-        "HIBERNATE": ("0%", "0x"),
-    }.get(regime, ("?", "?"))
+        "AGGRESSIVE": ("100%", "3.0x", "全力出擊"),
+        "NORMAL": ("75%", "2.0x", "正常操作"),
+        "CAUTIOUS": ("50%", "1.5x", "謹慎交易"),
+        "DEFENSIVE": ("25%", "1.0x", "減少曝險"),
+        "HIBERNATE": ("0%", "0x", "全面暫停"),
+    }.get(regime, ("?", "?", ""))
 
     lines.append("")
     lines.append("💡 建議")
-    lines.append(f"├ 倉位: {guidance[0]}")
-    lines.append(f"└ 槓桿: {guidance[1]}")
+    lines.append(f"├ 倉位: {guidance[0]} | 槓桿: {guidance[1]}")
+    lines.append(f"└ {guidance[2]}")
+
+    # What needs to improve
+    weak = []
+    if sb.get("macro", 1) < 0.4:
+        weak.append("宏觀")
+    if sb.get("sentiment", 1) < 0.4:
+        weak.append("情緒")
+    if weak:
+        lines.append(f"\n需要 {'、'.join(weak)} 改善才能升級制度")
 
     return "\n".join(lines)
 
@@ -383,11 +446,142 @@ def cmd_macro() -> str:
 
 
 def cmd_analysis() -> str:
-    summary = read_summary()
-    age = snapshot_age()
-    if len(summary) > 3500:
-        summary = summary[:3500] + "\n...(截斷)"
-    return f"📋 最新分析 (數據: {age})\n━━━━━━━━━━━━━━━━\n{summary}"
+    """結構化分析儀表板 — 整合所有關鍵資訊。"""
+    snap = read_snapshot()
+    if not snap:
+        return "📋 分析數據尚未生成。請等待 Pipeline 執行。"
+
+    conf = snap.get("confidence", {})
+    score = conf.get("score", 0)
+    regime = conf.get("regime", "?")
+    event = conf.get("event_multiplier", 1.0)
+    sb = conf.get("sandboxes", {})
+    reg = snap.get("regime", {})
+    macro = snap.get("macro", {})
+    crypto = snap.get("crypto_env", {})
+    ft = snap.get("freqtrade", {})
+    ts = snap.get("timestamp", "?")[:19]
+
+    lines = [
+        "📋 市場分析儀表板",
+        "━━━━━━━━━━━━━━━━",
+        f"⏰ {ts} UTC",
+        "",
+    ]
+
+    # === Confidence ===
+    lines.append(f"🎯 信心引擎: {score:.2f} {regime_emoji(regime)} {regime}")
+    lines.append(f"{bar(score)} {score*100:.0f}%")
+    lines.append(f"├ 宏觀 {sb.get('macro', 0):.2f} {bar(sb.get('macro', 0))}")
+    lines.append(f"├ 情緒 {sb.get('sentiment', 0):.2f} {bar(sb.get('sentiment', 0))}")
+    lines.append(f"├ 資本 {sb.get('capital', 0):.2f} {bar(sb.get('capital', 0))}")
+    lines.append(f"└ 避險 {sb.get('haven', 0):.2f} {bar(sb.get('haven', 0))}")
+    if event < 1.0:
+        lines.append(f"⚠ 事件乘數 x{event} (FOMC/CPI)")
+
+    # === Regime ===
+    reg_name = reg.get("regime", "?")
+    reg_guidance = reg.get("guidance", {})
+    lines.append("")
+    lines.append(f"📈 機制: {reg_name} {regime_emoji(reg_name)} ({reg.get('confidence', 0):.0%})")
+    lines.append(f"建議: {reg_guidance.get('description', '?')}")
+
+    # === Macro ===
+    lines.append("")
+    lines.append("🌍 宏觀環境")
+    for key, label in [("VIX", "VIX"), ("10Y", "10Y"), ("Gold", "Gold"), ("Oil", "Oil"), ("DXY", "DXY")]:
+        m = macro.get(key, {})
+        if m:
+            chg = m.get("change_pct", 0)
+            a = ""
+            if key == "VIX" and m.get("price", 0) > 25:
+                a = " ⚠" if m["price"] < 30 else " 🚨"
+            elif abs(chg) > 3:
+                a = " 🚨"
+            elif abs(chg) > 2:
+                a = " ⚠"
+            lines.append(f"├ {label:4s} {m.get('price', 0):>8.1f} ({chg:+.1f}%) {arrow(chg)}{a}")
+
+    fg = macro.get("fear_greed")
+    if fg is not None:
+        lines.append(f"├ F&G  {fg}/100 {fg_label(fg)}")
+    btc_d = macro.get("btc_dominance")
+    if btc_d:
+        lines.append(f"└ BTC.D {btc_d}%")
+
+    # === Crypto Env ===
+    lines.append("")
+    lines.append("🔗 加密環境")
+    main_coins = ["BTC", "ETH", "SOL"]
+    alt_coins = ["BNB", "XRP", "DOGE"]
+    for sym in main_coins:
+        env = crypto.get(sym, {})
+        if env and not env.get("error"):
+            s = env.get("score", 0)
+            r = env.get("regime", "?")
+            sbs = env.get("sandboxes", {})
+            signals = env.get("signals", [])
+            lines.append(f"├ {sym:4s} {s:.2f} {bar(s)} {r}")
+            if sbs:
+                lines.append(f"│  D:{sbs.get('derivatives',0):.2f} C:{sbs.get('onchain',0):.2f} S:{sbs.get('sentiment',0):.2f}")
+            for sig in signals[:1]:
+                if sig not in ("neutral", "stable"):
+                    lines.append(f"│  ⚠ {sig}")
+
+    # Alt coins compact
+    alt_scores = []
+    for sym in alt_coins:
+        env = crypto.get(sym, {})
+        if env and not env.get("error"):
+            alt_scores.append(f"{sym} {env.get('score', 0):.2f}")
+    if alt_scores:
+        lines.append(f"└ {' | '.join(alt_scores)}")
+
+    # === Anomalies ===
+    anomalies = []
+    gold = macro.get("Gold", {})
+    if gold and abs(gold.get("change_pct", 0)) > 3:
+        anomalies.append(f"🚨 黃金 {gold['change_pct']:+.1f}%")
+    vix = macro.get("VIX", {})
+    if vix and vix.get("price", 0) > 28:
+        anomalies.append(f"🚨 VIX {vix['price']:.1f} 恐慌")
+    elif vix and vix.get("price", 0) > 25:
+        anomalies.append(f"⚠ VIX {vix['price']:.1f} 偏高")
+    if isinstance(fg, (int, float)) and fg <= 20:
+        anomalies.append(f"⚠ F&G {fg} 極度恐懼")
+    if event < 1.0:
+        anomalies.append("⚠ FOMC/CPI 事件期")
+    for sym in ["BTC", "ETH", "SOL"]:
+        env = crypto.get(sym, {})
+        if env.get("score", 1) < 0.3:
+            anomalies.append(f"🚨 {sym} Env HOSTILE")
+
+    if anomalies:
+        lines.append("")
+        lines.append("⚠ 異常警示")
+        for a in anomalies:
+            lines.append(f"├ {a}")
+
+    # === Action ===
+    guidance_map = {
+        "AGGRESSIVE": ("100%", "3.0x", "全力出擊，跟隨趨勢"),
+        "NORMAL": ("75%", "2.0x", "正常操作"),
+        "CAUTIOUS": ("50%", "1.5x", "謹慎，減小倉位"),
+        "DEFENSIVE": ("25%", "1.0x", "防禦，只做高品質信號"),
+        "HIBERNATE": ("0%", "0x", "全面暫停，等待環境改善"),
+    }
+    g = guidance_map.get(regime, ("?", "?", "觀望"))
+    lines.append("")
+    lines.append("💡 操作建議")
+    lines.append(f"├ 倉位: {g[0]} | 槓桿: {g[1]}")
+    lines.append(f"└ {g[2]}")
+
+    # Positions
+    pos = ft.get("positions", [])
+    if pos:
+        lines.append(f"\n📈 當前持倉: {len(pos)} 個")
+
+    return "\n".join(lines)
 
 
 def cmd_trades() -> str:
@@ -494,12 +688,71 @@ def cmd_help() -> str:
     )
 
 
+def cmd_overview() -> str:
+    """一鍵全覽 — 最常用的單一訊息摘要。"""
+    snap = read_snapshot()
+    conf = snap.get("confidence", {})
+    reg = snap.get("regime", {})
+    macro = snap.get("macro", {})
+    crypto = snap.get("crypto_env", {})
+    ft = snap.get("freqtrade", {})
+    guards = read_guard_state()
+
+    score = conf.get("score", 0)
+    regime = conf.get("regime", "?")
+    reg_name = reg.get("regime", "?")
+    fg = macro.get("fear_greed", "?")
+    btc_env = crypto.get("BTC", {}).get("score", 0) if crypto else 0
+    pos = ft.get("positions", [])
+    profit = ft.get("profit", {})
+    streak = guards.get("consec_streak", 0)
+
+    lines = [
+        f"📊 全覽 | {snapshot_age()}",
+        "━━━━━━━━━━━━━━━━",
+        f"🎯 {score:.2f} {regime_emoji(regime)} {regime} | 📈 {reg_name} {regime_emoji(reg_name)}",
+        f"🔗 BTC {btc_env:.2f} {bar(btc_env)}",
+    ]
+
+    if isinstance(fg, (int, float)):
+        lines.append(f"😨 F&G {fg} {bar(fg, 100)} {fg_label(fg)}")
+
+    # Macro highlights
+    vix = macro.get("VIX", {})
+    gold = macro.get("Gold", {})
+    highlights = []
+    if vix:
+        a = " ⚠" if vix.get("price", 0) > 25 else ""
+        highlights.append(f"VIX {vix.get('price', 0):.0f}{a}")
+    if gold:
+        a = " 🚨" if abs(gold.get("change_pct", 0)) > 3 else ""
+        highlights.append(f"Gold {gold.get('change_pct', 0):+.1f}%{a}")
+    if highlights:
+        lines.append(f"🌍 {' | '.join(highlights)}")
+
+    # Positions
+    lines.append(f"📈 持倉: {len(pos)} | 🛡 Guard: {'🟢' if streak < 3 else '🟠'}")
+
+    if profit:
+        pnl = profit.get("profit_all_coin", 0)
+        trades = profit.get("trade_count", 0)
+        if trades > 0:
+            lines.append(f"💰 {trades}筆 ${pnl:.2f}")
+
+    # Event warning
+    if conf.get("event_multiplier", 1) < 1:
+        lines.append(f"⚠ 事件期 x{conf['event_multiplier']}")
+
+    return "\n".join(lines)
+
+
 COMMANDS = {
     "status": cmd_status, "start": cmd_help, "help": cmd_help,
     "confidence": cmd_confidence, "crypto": cmd_crypto,
     "regime": cmd_regime, "analysis": cmd_analysis,
     "trades": cmd_trades, "guards": cmd_guards,
-    "decisions": cmd_decisions, "macro": cmd_macro, "menu": cmd_help,
+    "decisions": cmd_decisions, "macro": cmd_macro,
+    "menu": cmd_help, "overview": cmd_overview,
 }
 
 
@@ -561,16 +814,16 @@ def send_reply(chat_id: int, text: str, with_menu: bool = True) -> None:
 def setup_bot_commands() -> None:
     """設置 Telegram 底部命令選單 (輸入 / 時顯示)。"""
     commands = [
+        {"command": "overview", "description": "一鍵全覽"},
+        {"command": "analysis", "description": "完整分析儀表板"},
         {"command": "status", "description": "持倉 + 損益 + 狀態"},
         {"command": "confidence", "description": "信心引擎分數"},
         {"command": "crypto", "description": "加密環境 (6幣種)"},
         {"command": "regime", "description": "市場機制 + 建議"},
         {"command": "macro", "description": "宏觀指標"},
-        {"command": "analysis", "description": "最新 AI 分析"},
         {"command": "trades", "description": "最近交易"},
         {"command": "guards", "description": "風控狀態"},
         {"command": "decisions", "description": "Agent 決策"},
-        {"command": "help", "description": "指令清單"},
     ]
     try:
         url = f"https://api.telegram.org/bot{BOT_TOKEN}/setMyCommands"
