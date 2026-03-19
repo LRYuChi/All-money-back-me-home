@@ -1,4 +1,8 @@
-"""Concrete guard implementations for risk control."""
+"""Concrete guard implementations for risk control.
+
+All guards are synchronous (no async) to avoid fragile event loop issues
+inside Freqtrade's runtime.
+"""
 
 from __future__ import annotations
 
@@ -14,7 +18,7 @@ class MaxPositionGuard(Guard):
     def __init__(self, max_pct: float = 30.0):
         self.max_pct = max_pct
 
-    async def check(self, ctx: GuardContext) -> Optional[str]:
+    def check(self, ctx: GuardContext) -> Optional[str]:
         position_value = ctx.amount * ctx.leverage
         max_allowed = ctx.account_balance * (self.max_pct / 100)
         if position_value > max_allowed:
@@ -31,7 +35,7 @@ class MaxLeverageGuard(Guard):
     def __init__(self, max_leverage: float = 5.0):
         self.max_leverage = max_leverage
 
-    async def check(self, ctx: GuardContext) -> Optional[str]:
+    def check(self, ctx: GuardContext) -> Optional[str]:
         if ctx.leverage > self.max_leverage:
             return f"Leverage {ctx.leverage}x exceeds max {self.max_leverage}x"
         return None
@@ -47,7 +51,7 @@ class CooldownGuard(Guard):
     def record_trade(self, symbol: str) -> None:
         self._last_trade[symbol] = time.time()
 
-    async def check(self, ctx: GuardContext) -> Optional[str]:
+    def check(self, ctx: GuardContext) -> Optional[str]:
         last = self._last_trade.get(ctx.symbol)
         if last is not None:
             elapsed = time.time() - last
@@ -72,7 +76,7 @@ class DailyLossGuard(Guard):
             self._reset_day = today
         self._daily_loss += abs(amount)
 
-    async def check(self, ctx: GuardContext) -> Optional[str]:
+    def check(self, ctx: GuardContext) -> Optional[str]:
         today = time.strftime("%Y-%m-%d")
         if today != self._reset_day:
             self._daily_loss = 0.0
@@ -104,11 +108,38 @@ class ConsecutiveLossGuard(Guard):
             if self._streak >= self.max_streak:
                 self._paused_until = time.time() + self.pause_seconds
 
-    async def check(self, ctx: GuardContext) -> Optional[str]:
+    def check(self, ctx: GuardContext) -> Optional[str]:
         if time.time() < self._paused_until:
             remaining_h = (self._paused_until - time.time()) / 3600
             return (
                 f"Trading paused for {remaining_h:.1f}h "
                 f"after {self.max_streak} consecutive losses"
+            )
+        return None
+
+
+class TotalExposureGuard(Guard):
+    """Reject if total portfolio exposure across all positions exceeds limit.
+
+    Prevents correlated exposure across multiple pairs.
+    """
+
+    def __init__(self, max_pct: float = 80.0):
+        self.max_pct = max_pct
+
+    def check(self, ctx: GuardContext) -> Optional[str]:
+        # Sum existing position values + proposed new position
+        existing_exposure = sum(
+            float(pos.get("value", 0))
+            for pos in ctx.open_positions.values()
+        )
+        new_exposure = ctx.amount * ctx.leverage
+        total = existing_exposure + new_exposure
+        max_allowed = ctx.account_balance * (self.max_pct / 100)
+
+        if total > max_allowed:
+            return (
+                f"Total exposure {total:.2f} would exceed "
+                f"{self.max_pct}% of account ({max_allowed:.2f})"
             )
         return None

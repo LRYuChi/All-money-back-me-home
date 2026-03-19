@@ -1,4 +1,8 @@
-"""Guard base class for pre-execution risk checks (inspired by OpenAlice)."""
+"""Guard base class for pre-execution risk checks (inspired by OpenAlice).
+
+Guards are synchronous to avoid fragile asyncio.run_until_complete() calls
+inside Freqtrade's event loop. Each guard's check() method runs in sequence.
+"""
 
 from __future__ import annotations
 
@@ -27,7 +31,7 @@ class Guard(ABC):
     """Base class for all risk control guards."""
 
     @abstractmethod
-    async def check(self, ctx: GuardContext) -> Optional[str]:
+    def check(self, ctx: GuardContext) -> Optional[str]:
         """Check if the order should be allowed.
 
         Returns:
@@ -47,10 +51,10 @@ class GuardPipeline:
     def add(self, guard: Guard) -> None:
         self.guards.append(guard)
 
-    async def run(self, ctx: GuardContext) -> Optional[str]:
+    def run(self, ctx: GuardContext) -> Optional[str]:
         """Run all guards. Returns None if all pass, or the first rejection reason."""
         for guard in self.guards:
-            reason = await guard.check(ctx)
+            reason = guard.check(ctx)
             if reason is not None:
                 logger.warning("Guard %s rejected: %s", guard.__class__.__name__, reason)
                 return f"[{guard.__class__.__name__}] {reason}"

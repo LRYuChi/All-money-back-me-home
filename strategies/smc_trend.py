@@ -140,7 +140,7 @@ class SMCTrend(IStrategy):
 
         try:
             import os
-            os.environ.setdefault("FRED_API_KEY", "08b56172e3e44a8a78b96231d168a55a")
+            os.environ.setdefault("FRED_API_KEY", os.environ.get("FRED_API_KEY", ""))
             from market_monitor.confidence_engine import GlobalConfidenceEngine
             engine = GlobalConfidenceEngine()
             result = engine.calculate()  # Use engine's own timestamp
@@ -166,6 +166,15 @@ class SMCTrend(IStrategy):
             )
         except Exception as e:
             logger.warning("Confidence Engine fetch failed: %s", e)
+            # SAFETY: If confidence data is stale (>3 hours), degrade to DEFENSIVE
+            if self._live_confidence_time is not None:
+                try:
+                    stale_hours = (datetime.now() - self._live_confidence_time).total_seconds() / 3600
+                    if stale_hours > 3:
+                        logger.warning("Confidence data stale %.1fh — degrading to DEFENSIVE (0.25)", stale_hours)
+                        self._live_confidence = 0.25  # DEFENSIVE level
+                except Exception:
+                    pass
 
         # === Crypto Environment Engine (observation mode) ===
         try:
@@ -536,21 +545,36 @@ class SMCTrend(IStrategy):
                 return False
 
         # === Guard Pipeline check (live/dry_run only) ===
+        # CRITICAL: On guard error, REJECT the trade (fail-safe).
+        # Never allow a trade to proceed without risk checks.
         if self.config.get("runmode", {}).value in ("live", "dry_run"):
             try:
-                import asyncio
                 from guards.base import GuardContext
                 from guards.pipeline import create_default_pipeline
+
+                # Use actual computed leverage, not the default
+                confidence = 0.5
+                dataframe_tmp, _ = self.dp.get_analyzed_dataframe(pair, self.timeframe)
+                if len(dataframe_tmp) > 0:
+                    confidence = dataframe_tmp.iloc[-1].get("confidence", 0.5)
+                actual_leverage = 1.0 + (self.max_leverage.value - 1.0) * (confidence ** 2)
+
+                # Build open positions map for TotalExposureGuard
+                open_pos = {}
+                if hasattr(self, 'dp') and self.dp:
+                    for t in Trade.get_trades_proxy(is_open=True):
+                        open_pos[t.pair] = {"value": t.stake_amount * t.leverage}
 
                 ctx = GuardContext(
                     symbol=pair,
                     side="short" if side == "short" else "long",
                     amount=amount * rate,
-                    leverage=self.leverage_default,
+                    leverage=actual_leverage,
                     account_balance=self.wallets.get_total("USDT") if self.wallets else 1000,
+                    open_positions=open_pos,
                 )
                 pipeline = create_default_pipeline()
-                rejection = asyncio.get_event_loop().run_until_complete(pipeline.run(ctx))
+                rejection = pipeline.run(ctx)  # Synchronous — no async fragility
                 if rejection:
                     logger.warning("Guard rejected %s %s: %s", pair, side, rejection)
                     if _TG_AVAILABLE:
@@ -558,7 +582,9 @@ class SMCTrend(IStrategy):
                         send_message(f"🛡️ *Guard 攔截*\n{pair} {side}\n原因: {rejection}")
                     return False
             except Exception as e:
-                logger.warning("Guard Pipeline error: %s", e)
+                # FAIL-SAFE: Guard error = REJECT trade (never trade unguarded)
+                logger.error("Guard Pipeline CRITICAL error — BLOCKING trade: %s", e)
+                return False
 
         if _TG_AVAILABLE:
             dataframe, _ = self.dp.get_analyzed_dataframe(pair, self.timeframe)
@@ -648,6 +674,30 @@ class SMCTrend(IStrategy):
                     profit_usdt=profit_usdt, exit_reason=reason_zh,
                     duration=duration, confidence=confidence
                 )
+
+        # === Update Guard Pipeline State ===
+        # CRITICAL: Guards must track losses to enforce DailyLoss and ConsecutiveLoss limits
+        try:
+            from guards.pipeline import get_guard
+            from guards.guards import CooldownGuard, DailyLossGuard, ConsecutiveLossGuard
+
+            # Record cooldown
+            cooldown = get_guard(CooldownGuard)
+            if cooldown:
+                cooldown.record_trade(pair)
+
+            # Record win/loss for consecutive loss tracking
+            consec = get_guard(ConsecutiveLossGuard)
+            if consec:
+                consec.record_result(is_win=(profit_usdt > 0))
+
+            # Record daily loss
+            if profit_usdt < 0:
+                daily = get_guard(DailyLossGuard)
+                if daily:
+                    daily.record_loss(abs(profit_usdt))
+        except Exception as e:
+            logger.warning("Guard state update failed: %s", e)
 
         # Audit log entry
         logger.info(

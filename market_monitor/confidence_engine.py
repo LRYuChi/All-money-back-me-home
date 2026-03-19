@@ -483,6 +483,22 @@ class GlobalConfidenceEngine:
         capital_avg = np.mean(list(capital_scores.values())) if capital_scores else 0.5
         haven_avg = np.mean(list(haven_scores.values())) if haven_scores else 0.5
 
+        # SAFETY: If most factors returned default 0.5 (data source failure),
+        # degrade to DEFENSIVE. Count how many factors are exactly 0.5.
+        all_factors = {**macro_scores, **sentiment_scores, **capital_scores, **haven_scores}
+        default_count = sum(1 for v in all_factors.values() if v == 0.5)
+        total_factors = len(all_factors)
+        if total_factors > 0 and default_count >= total_factors * 0.7:
+            # 70%+ factors returned defaults = data blackout → force DEFENSIVE
+            logger.warning(
+                "DATA BLACKOUT: %d/%d factors at default — forcing DEFENSIVE",
+                default_count, total_factors
+            )
+            macro_avg = min(macro_avg, 0.3)
+            sentiment_avg = min(sentiment_avg, 0.3)
+            capital_avg = min(capital_avg, 0.3)
+            haven_avg = min(haven_avg, 0.3)
+
         # Weighted combination
         raw_score = (
             self.WEIGHTS["macro"] * macro_avg
