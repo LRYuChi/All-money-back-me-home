@@ -362,6 +362,12 @@ class SMCTrend(IStrategy):
             htf_df["htf_fvg_top"] = htf_df["htf_fvg_top"].ffill()
             htf_df["htf_fvg_bottom"] = htf_df["htf_fvg_bottom"].ffill()
 
+            # Forward-fill BOS/CHoCH so merge_asof picks up the latest signal
+            # Without this, most 4H candles have NaN for BOS/CHoCH and
+            # merge_asof drops them, resulting in htf_trend=0 permanently
+            htf_df["htf_bos"] = htf_df["htf_bos"].ffill()
+            htf_df["htf_choch"] = htf_df["htf_choch"].ffill()
+
             merge_cols = [
                 "date", "htf_bos", "htf_choch",
                 "htf_ob_top", "htf_ob_bottom", "htf_ob",
