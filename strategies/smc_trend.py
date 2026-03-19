@@ -682,6 +682,10 @@ class SMCTrend(IStrategy):
         # Never allow a trade to proceed without risk checks.
         if self.config.get("runmode", {}).value in ("live", "dry_run"):
             try:
+                # Ensure guards/ is importable (Docker path may differ)
+                _sdir = str(Path(__file__).resolve().parent)
+                if _sdir not in sys.path:
+                    sys.path.insert(0, _sdir)
                 from guards.base import GuardContext
                 from guards.pipeline import create_default_pipeline
 
