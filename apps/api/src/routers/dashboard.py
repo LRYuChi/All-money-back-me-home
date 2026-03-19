@@ -356,10 +356,13 @@ def _get_freqtrade_status() -> dict:
 
 
 def _get_crypto_environment() -> dict:
-    """Get crypto-specific environment scores."""
+    """Get crypto-specific environment scores using free APIs."""
     try:
         import sys
-        sys.path.insert(0, str(__import__("pathlib").Path(__file__).resolve().parents[4]))
+        # Add paths where market_monitor might be
+        for p in ["/app", "/opt/ambmh"]:
+            if p not in sys.path:
+                sys.path.insert(0, p)
         from market_monitor.crypto_environment import CryptoEnvironmentEngine
         engine = CryptoEnvironmentEngine()
         results = {}
