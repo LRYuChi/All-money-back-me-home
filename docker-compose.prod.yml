@@ -75,7 +75,9 @@ services:
       - ./guards:/freqtrade/user_data/strategies/guards
       - ./freqtrade/config:/freqtrade/config
       - ft-data:/freqtrade/user_data/data
+      - trade-data:/freqtrade/user_data/shared_data
     environment:
+      - DATA_DIR=/freqtrade/user_data/shared_data
       - FRED_API_KEY=${FRED_API_KEY}
       - COINGLASS_API_KEY=${COINGLASS_API_KEY}
       - TELEGRAM_TOKEN=${TELEGRAM_TOKEN}

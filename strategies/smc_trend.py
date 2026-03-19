@@ -47,6 +47,12 @@ try:
 except ImportError:
     _TG_AVAILABLE = False
 
+try:
+    from market_monitor.state_store import BotStateStore
+    _STATE_AVAILABLE = True
+except ImportError:
+    _STATE_AVAILABLE = False
+
 logger = logging.getLogger(__name__)
 
 
@@ -85,6 +91,12 @@ class SMCTrend(IStrategy):
     _live_confidence: float | None = None
     _live_confidence_time: datetime | None = None
     trailing_stop = False
+
+    # --- Signal audit tracking ---
+    _signal_audit: dict = {}
+    _stale_counter: int = 0
+    _confidence_fetch_failures: int = 0
+    _crypto_env_cache: dict = {}
 
     # Pyramid: allow adding to winning positions
     position_adjustment_enable = True
@@ -164,8 +176,19 @@ class SMCTrend(IStrategy):
                 result["score"], result["regime"],
                 result["sandboxes"]["macro"], result["sandboxes"]["sentiment"]
             )
+            if _STATE_AVAILABLE:
+                BotStateStore.update(
+                    last_confidence_fetch=datetime.now().isoformat(),
+                    last_confidence_score=result["score"],
+                    last_confidence_regime=result["regime"],
+                )
+                self._confidence_fetch_failures = 0
         except Exception as e:
             logger.warning("Confidence Engine fetch failed: %s", e)
+            self._confidence_fetch_failures += 1
+            if self._confidence_fetch_failures >= 3 and _TG_AVAILABLE:
+                from market_monitor.telegram_zh import send_message
+                send_message(f"🚨 *信心引擎連續失敗*\n已連續 {self._confidence_fetch_failures} 次無法取得信心分數")
             # SAFETY: If confidence data is stale (>3 hours), degrade to DEFENSIVE
             if self._live_confidence_time is not None:
                 try:
@@ -195,8 +218,57 @@ class SMCTrend(IStrategy):
                         if f.get("signal") and f["signal"] not in ("neutral", "stable", "no data")
                     ),
                 )
+                self._crypto_env_cache[sym] = {"score": cr["score"], "regime": cr["regime"]}
+                if _STATE_AVAILABLE:
+                    BotStateStore.update_crypto_env(sym, cr["score"], cr["regime"])
         except Exception as e:
             logger.warning("Crypto Environment fetch failed: %s", e)
+
+    def _audit_signals(self, dataframe: DataFrame, metadata: dict) -> None:
+        """信號審計 — 追蹤指標變化，偵測數據停滯。"""
+        if len(dataframe) == 0:
+            return
+        pair = metadata["pair"]
+        last = dataframe.iloc[-1]
+
+        # 需要追蹤的關鍵指標
+        audit_keys = {
+            "htf_trend": last.get("htf_trend", 0),
+            "confidence": round(float(last.get("confidence", 0)), 4),
+            "conf_regime": str(last.get("conf_regime", "?")),
+            "in_killzone": bool(last.get("in_killzone", False)),
+            "atr_pct": round(float(last.get("atr_pct", 0)), 4),
+            "in_bullish_ob": bool(last.get("in_bullish_ob", False)),
+            "in_bearish_ob": bool(last.get("in_bearish_ob", False)),
+            "in_bullish_fvg": bool(last.get("in_bullish_fvg", False)),
+            "in_bearish_fvg": bool(last.get("in_bearish_fvg", False)),
+        }
+
+        old = self._signal_audit.get(pair, {})
+        changes = {}
+        for k, v in audit_keys.items():
+            if k in old and old[k] != v:
+                changes[k] = (old[k], v)
+
+        if changes:
+            self._stale_counter = 0
+            for k, (old_v, new_v) in changes.items():
+                logger.info("SIGNAL_CHANGE: %s %s %s -> %s", pair, k, old_v, new_v)
+            if _STATE_AVAILABLE:
+                from datetime import timezone
+                BotStateStore.update(last_signal_change_time=datetime.now(timezone.utc).isoformat())
+        else:
+            if old:  # Only count stale if we have previous data
+                self._stale_counter += 1
+                if self._stale_counter >= 10:
+                    logger.warning("STALE_DATA: %s 指標已 %d 個週期未變化", pair, self._stale_counter)
+                    if self._stale_counter == 10 and _TG_AVAILABLE:
+                        from market_monitor.telegram_zh import send_message
+                        send_message(f"⚠️ *數據停滯警告*\n{pair} 指標已 {self._stale_counter} 小時未變化")
+                    if _STATE_AVAILABLE:
+                        BotStateStore.increment("stale_data_alerts")
+
+        self._signal_audit[pair] = audit_keys
 
     def informative_pairs(self):
         """Pull 4H data for HTF trend bias."""
@@ -420,6 +492,9 @@ class SMCTrend(IStrategy):
         # In live mode, the full GlobalConfidenceEngine supplements this.
         dataframe = _calculate_confidence(dataframe)
 
+        # === Signal Audit ===
+        self._audit_signals(dataframe, metadata)
+
         return dataframe
 
     def populate_entry_trend(self, dataframe: DataFrame, metadata: dict) -> DataFrame:
@@ -495,6 +570,36 @@ class SMCTrend(IStrategy):
             "enter_short",
         ] = 1
 
+        # ===== REVERSE CONFIDENCE SHORT (低信心反轉做空) =====
+        # When confidence < 0.2 (HIBERNATE), treat as shorting opportunity
+        # Requires: bearish HTF + bearish SMC structure
+        reverse_conf = dataframe["confidence"] < 0.20
+        reverse_short_conf = 1.0 - dataframe["confidence"]  # Invert for sizing
+
+        zone_rev_short_a = dataframe["ob_fvg_confluence_bear"] == True
+        zone_rev_short_b = (
+            (dataframe["in_bearish_ob"] | dataframe["in_bearish_fvg"])
+            & (reverse_short_conf >= 0.5)
+        )
+
+        dataframe.loc[
+            (
+                reverse_conf                                         # Low confidence (HIBERNATE)
+                & (dataframe["htf_trend"] < 0)                      # 4H bearish confirmed
+                & (dataframe["in_ote_short"] == True)                # Premium zone
+                & (
+                    zone_rev_short_a                                  # Grade A
+                    | (zone_rev_short_b & htf_zone)                  # Grade B + 4H zone
+                )
+                & adam_short_filter                                   # Adam projection down
+                & (dataframe["fr_ok_short"] == True)                 # Funding rate OK
+                & (dataframe["vol_regime_ok"] == True)               # Volatility normal
+                & killzone_filter
+                & (dataframe["volume"] > 0)
+            ),
+            ["enter_short", "enter_tag"],
+        ] = [1, "reverse_confidence_short"]
+
         return dataframe
 
     def populate_exit_trend(self, dataframe: DataFrame, metadata: dict) -> DataFrame:
@@ -529,6 +634,8 @@ class SMCTrend(IStrategy):
                 if _TG_AVAILABLE:
                     from market_monitor.telegram_zh import send_message
                     send_message(f"🚨 *熔斷機制啟動*\nBTC 24h 變動 {btc_24h*100:.1f}%\n所有進場已暫停")
+                if _STATE_AVAILABLE:
+                    BotStateStore.increment("circuit_breaker_activations")
                 return False
 
             # 2. ATR spike > 3x average → extreme volatility
@@ -536,12 +643,16 @@ class SMCTrend(IStrategy):
             atr_ma = dataframe["atr"].rolling(50).mean().iloc[-1] if len(dataframe) > 50 else atr
             if atr > 0 and atr_ma > 0 and atr / atr_ma > 3.0:
                 logger.warning("CIRCUIT BREAKER: ATR spike %.1fx — blocking entry", atr / atr_ma)
+                if _STATE_AVAILABLE:
+                    BotStateStore.increment("circuit_breaker_activations")
                 return False
 
-            # 3. Confidence HIBERNATE → block (already checked but double-safe)
+            # 3. Confidence HIBERNATE → block LONGS only (shorts use reverse confidence)
             confidence = last.get("confidence", 0.5)
-            if confidence < 0.15:
-                logger.warning("CIRCUIT BREAKER: Confidence %.2f (HIBERNATE) — blocking entry", confidence)
+            if confidence < 0.15 and side != "short":
+                logger.warning("CIRCUIT BREAKER: Confidence %.2f (HIBERNATE) — blocking long entry", confidence)
+                if _STATE_AVAILABLE:
+                    BotStateStore.increment("circuit_breaker_activations")
                 return False
 
         # === Guard Pipeline check (live/dry_run only) ===
@@ -580,6 +691,8 @@ class SMCTrend(IStrategy):
                     if _TG_AVAILABLE:
                         from market_monitor.telegram_zh import send_message
                         send_message(f"🛡️ *Guard 攔截*\n{pair} {side}\n原因: {rejection}")
+                    if _STATE_AVAILABLE:
+                        BotStateStore.increment("guard_rejections_today")
                     return False
             except Exception as e:
                 # FAIL-SAFE: Guard error = REJECT trade (never trade unguarded)
@@ -619,12 +732,63 @@ class SMCTrend(IStrategy):
                     "missing_sources": _get_missing_sources(),
                 }
 
-            lev = 1.0 + (self.max_leverage.value - 1.0) * (confidence ** 2)
+            # Determine if reverse confidence short
+            is_reversal = (side == "short" and confidence < 0.20)
+
+            # Calculate enriched data
+            _funding_rate = None
+            _vol_regime = None
+            _crypto_env_score = None
+            _crypto_env_regime = None
+            _expected_rr = None
+
+            if len(dataframe) > 0:
+                last = dataframe.iloc[-1]
+                # Volatility regime
+                atr_val = last.get("atr", 0)
+                atr_ma_val = dataframe["atr"].rolling(50).mean().iloc[-1] if len(dataframe) > 50 else atr_val
+                if atr_ma_val > 0:
+                    atr_ratio = atr_val / atr_ma_val
+                    if atr_ratio > 1.5:
+                        _vol_regime = "擴張"
+                    elif atr_ratio < 0.5:
+                        _vol_regime = "低迷"
+                    else:
+                        _vol_regime = "正常"
+
+                # Crypto environment from cache
+                base_sym = pair.split("/")[0] if "/" in pair else pair[:3]
+                env_data = self._crypto_env_cache.get(base_sym, {})
+                if env_data:
+                    _crypto_env_score = env_data.get("score")
+                    _crypto_env_regime = env_data.get("regime")
+
+                # Expected risk-reward ratio
+                atr_sl = last.get("atr_sl_dist", 0)
+                atr_tp = last.get("atr_tp_dist", 0)
+                if atr_sl > 0:
+                    _expected_rr = atr_tp / atr_sl
+
+            # Use reverse confidence for leverage calculation if applicable
+            if is_reversal:
+                effective_conf = 1.0 - confidence
+                lev = 1.0 + (self.max_leverage.value - 1.0) * (effective_conf ** 2)
+                # Cap reverse short leverage at 80% of max
+                lev = min(lev, self.max_leverage.value * 0.8)
+            else:
+                lev = 1.0 + (self.max_leverage.value - 1.0) * (confidence ** 2)
+
             notify_entry(
                 pair=pair, side=side, rate=rate,
                 stake=amount * rate, leverage=round(lev, 1),
                 confidence=confidence,
                 details=details,
+                funding_rate=_funding_rate,
+                volatility_regime=_vol_regime,
+                crypto_env_score=_crypto_env_score,
+                crypto_env_regime=_crypto_env_regime,
+                expected_rr=_expected_rr,
+                is_reversal=is_reversal,
             )
         return True
 
@@ -656,6 +820,41 @@ class SMCTrend(IStrategy):
         if len(dataframe) > 0:
             confidence = dataframe.iloc[-1].get("confidence", 0.5)
 
+        # Calculate enriched exit data
+        _win_rate = None
+        _drawdown = None
+        _equity = None
+        _consecutive = None
+
+        try:
+            trades = Trade.get_trades_proxy(is_open=False)
+            if trades:
+                wins = sum(1 for t in trades if t.profit_ratio and t.profit_ratio > 0)
+                total = len(trades)
+                _win_rate = (wins / total * 100) if total > 0 else None
+        except Exception:
+            pass
+
+        try:
+            if self.wallets:
+                _equity = self.wallets.get_total("USDT")
+        except Exception:
+            pass
+
+        # Update consecutive tracking via state store
+        if _STATE_AVAILABLE:
+            state = BotStateStore.read()
+            if profit_pct >= 0:
+                consec_w = state.get("consecutive_wins", 0) + 1
+                BotStateStore.update(consecutive_wins=consec_w, consecutive_losses=0)
+                if consec_w >= 2:
+                    _consecutive = f"{consec_w}連勝 🔥"
+            else:
+                consec_l = state.get("consecutive_losses", 0) + 1
+                BotStateStore.update(consecutive_losses=consec_l, consecutive_wins=0)
+                if consec_l >= 2:
+                    _consecutive = f"{consec_l}連敗"
+
         reason_zh = {
             "exit_signal": "📊 結構反轉 (CHoCH)",
             "stop_loss": "🛑 觸發止損",
@@ -670,7 +869,11 @@ class SMCTrend(IStrategy):
                 notify_exit(
                     pair=pair, side=side, profit_pct=profit_pct,
                     profit_usdt=profit_usdt, exit_reason=reason_zh,
-                    duration=duration, confidence=confidence
+                    duration=duration, confidence=confidence,
+                    win_rate=_win_rate,
+                    running_drawdown=_drawdown,
+                    equity_after=_equity,
+                    consecutive_result=_consecutive,
                 )
 
         # === Update Guard Pipeline State ===
@@ -730,7 +933,14 @@ class SMCTrend(IStrategy):
 
         max_lev = self.max_leverage.value
 
-        # Quadratic scaling: aggressive only at high confidence
+        # Reverse confidence mode: low confidence + short = high short confidence
+        if side == "short" and confidence < 0.20:
+            short_conf = 1.0 - confidence
+            lev = 1.0 + (max_lev - 1.0) * (short_conf ** 2)
+            # Cap at 80% of max leverage for reverse shorts (more conservative)
+            return min(max(lev, 1.0), max_lev * 0.8, max_leverage)
+
+        # Normal mode: quadratic scaling
         lev = 1.0 + (max_lev - 1.0) * (confidence ** 2)
         return min(max(lev, 1.0), max_leverage)
 
@@ -806,6 +1016,10 @@ class SMCTrend(IStrategy):
         last = dataframe.iloc[-1]
         confidence = last.get("confidence", 0.5)
         activity = last.get("activity_mult", 0.5)
+
+        # Reverse confidence for shorts in HIBERNATE
+        if side == "short" and confidence < 0.20:
+            confidence = 1.0 - confidence
 
         # Base scaling by confidence
         scale = 0.3 + 0.9 * confidence

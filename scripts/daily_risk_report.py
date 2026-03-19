@@ -23,6 +23,12 @@ import base64
 from datetime import datetime
 from pathlib import Path
 
+try:
+    from market_monitor.state_store import BotStateStore
+    _STATE_AVAILABLE = True
+except ImportError:
+    _STATE_AVAILABLE = False
+
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(PROJECT_ROOT))
 
@@ -60,6 +66,13 @@ def main():
         report_lines.append(f"  總損益: ${profit.get('profit_all_coin', 0):.2f} USDT")
         report_lines.append(f"  已關閉: {profit.get('closed_trade_count', 0)} 筆")
         report_lines.append(f"  勝/敗: {profit.get('winning_trades', 0)}/{profit.get('losing_trades', 0)}")
+    if profit:
+        winning = profit.get('winning_trades', 0)
+        losing = profit.get('losing_trades', 0)
+        total_trades = winning + losing
+        if total_trades > 0:
+            win_rate = winning / total_trades * 100
+            report_lines.append(f"  勝率: {win_rate:.1f}% ({winning}/{total_trades})")
     if balance:
         for c in balance.get("currencies", []):
             if c.get("currency") == "USDT":
@@ -109,6 +122,27 @@ def main():
         report_lines.append(f"  交易對: {len(pairs)} ({', '.join(p.split('/')[0] for p in pairs)})")
     report_lines.append(f"  報告時間: {now.strftime('%Y-%m-%d %H:%M')}")
 
+    # 6. Bot State (from shared state store)
+    if _STATE_AVAILABLE:
+        state = BotStateStore.read()
+        report_lines.append("")
+        report_lines.append("【機器人狀態】")
+        report_lines.append(f"  信心分數: {state.get('last_confidence_score', 0):.2f} ({state.get('last_confidence_regime', '?')})")
+        report_lines.append(f"  Guard 攔截: {state.get('guard_rejections_today', 0)} 次")
+        report_lines.append(f"  熔斷觸發: {state.get('circuit_breaker_activations', 0)} 次")
+        report_lines.append(f"  信號生成: {state.get('signals_generated_today', 0)} | 過濾: {state.get('signals_filtered_today', 0)}")
+        report_lines.append(f"  連勝: {state.get('consecutive_wins', 0)} | 連敗: {state.get('consecutive_losses', 0)}")
+
+        # API health
+        api_health = state.get("api_health", {})
+        if api_health:
+            ok = sum(1 for v in api_health.values() if v)
+            total_apis = len(api_health)
+            report_lines.append(f"  數據源: {ok}/{total_apis} 正常")
+            failing = [k for k, v in api_health.items() if not v]
+            if failing:
+                report_lines.append(f"  ❌ {', '.join(failing)}")
+
     # 5. Risk Rating
     report_lines.append("")
     risk_score = "A-"  # Base
@@ -117,6 +151,13 @@ def main():
         issues.append("FRED API 缺失")
     if not profit or profit.get("trade_count", 0) == 0:
         issues.append("尚無交易數據驗證")
+    if _STATE_AVAILABLE:
+        state = BotStateStore.read()
+        if state.get("circuit_breaker_activations", 0) > 2:
+            issues.append("熔斷多次觸發")
+        failing_apis = [k for k, v in state.get("api_health", {}).items() if not v]
+        if len(failing_apis) >= 3:
+            issues.append(f"{len(failing_apis)} 個數據源異常")
     if len(issues) > 2:
         risk_score = "B"
     report_lines.append(f"【綜合風控評級: {risk_score}】")

@@ -42,6 +42,12 @@ try:
 except ImportError:
     _TG_AVAILABLE = False
 
+try:
+    from market_monitor.state_store import BotStateStore
+    _STATE_AVAILABLE = True
+except ImportError:
+    _STATE_AVAILABLE = False
+
 logger = logging.getLogger(__name__)
 
 
@@ -80,6 +86,12 @@ class SMCScalp(IStrategy):
     # --- Live macro data cache ---
     _live_confidence: float | None = None
     _live_confidence_time: datetime | None = None
+
+    # --- Signal audit tracking ---
+    _signal_audit: dict = {}
+    _stale_counter: int = 0
+    _confidence_fetch_failures: int = 0
+    _crypto_env_cache: dict = {}
 
     # Pyramid: allow 1 add-on (2 total entries)
     position_adjustment_enable = True
@@ -156,6 +168,56 @@ class SMCScalp(IStrategy):
             }
 
     # =============================================
+    # Signal Audit
+    # =============================================
+
+    def _audit_signals(self, dataframe: DataFrame, metadata: dict) -> None:
+        """信號審計 — 追蹤指標變化，偵測數據停滯。"""
+        if len(dataframe) == 0:
+            return
+        pair = metadata["pair"]
+        last = dataframe.iloc[-1]
+
+        audit_keys = {
+            "htf_trend": last.get("htf_trend", 0),
+            "confidence": round(float(last.get("confidence", 0)), 4),
+            "conf_regime": str(last.get("conf_regime", "?")),
+            "in_killzone": bool(last.get("in_killzone", False)),
+            "atr_pct": round(float(last.get("atr_pct", 0)), 4),
+            "in_bullish_ob": bool(last.get("in_bullish_ob", False)),
+            "in_bearish_ob": bool(last.get("in_bearish_ob", False)),
+            "in_bullish_fvg": bool(last.get("in_bullish_fvg", False)),
+            "in_bearish_fvg": bool(last.get("in_bearish_fvg", False)),
+        }
+
+        old = self._signal_audit.get(pair, {})
+        changes = {}
+        for k, v in audit_keys.items():
+            if k in old and old[k] != v:
+                changes[k] = (old[k], v)
+
+        if changes:
+            self._stale_counter = 0
+            for k, (old_v, new_v) in changes.items():
+                logger.info("SIGNAL_CHANGE: %s %s %s -> %s", pair, k, old_v, new_v)
+            if _STATE_AVAILABLE:
+                from datetime import timezone
+                BotStateStore.update(last_signal_change_time=datetime.now(timezone.utc).isoformat())
+        else:
+            if old:
+                self._stale_counter += 1
+                # 15m timeframe: 40 cycles = 10 hours
+                if self._stale_counter >= 40:
+                    logger.warning("STALE_DATA: %s 指標已 %d 個週期未變化", pair, self._stale_counter)
+                    if self._stale_counter == 40 and _TG_AVAILABLE:
+                        from market_monitor.telegram_zh import send_message
+                        send_message(f"⚠️ *數據停滯警告*\n{pair} [15m] 指標已 {self._stale_counter * 15}分鐘 未變化")
+                    if _STATE_AVAILABLE:
+                        BotStateStore.increment("stale_data_alerts")
+
+        self._signal_audit[pair] = audit_keys
+
+    # =============================================
     # Bot lifecycle
     # =============================================
 
@@ -180,6 +242,14 @@ class SMCScalp(IStrategy):
             result = engine.calculate()
             self._live_confidence = result["score"]
             self._live_confidence_time = datetime.now()
+            self._confidence_fetch_failures = 0
+
+            if _STATE_AVAILABLE:
+                BotStateStore.update(
+                    last_confidence_fetch=datetime.now().isoformat(),
+                    confidence_score=result["score"],
+                    confidence_regime=result["regime"],
+                )
 
             if _TG_AVAILABLE:
                 old_regime = getattr(self, "_last_regime", None)
@@ -198,7 +268,30 @@ class SMCScalp(IStrategy):
                 result["sandboxes"]["macro"], result["sandboxes"]["sentiment"]
             )
         except Exception as e:
-            logger.warning("[Scalp] Confidence Engine fetch failed: %s", e)
+            self._confidence_fetch_failures += 1
+            logger.warning("[Scalp] Confidence Engine fetch failed (%d): %s",
+                           self._confidence_fetch_failures, e)
+            if _STATE_AVAILABLE:
+                BotStateStore.increment("confidence_fetch_failures")
+
+        # === Crypto Environment Engine (observation mode) ===
+        try:
+            import os
+            from market_monitor.crypto_environment import CryptoEnvironmentEngine
+            cg_key = os.environ.get("COINGLASS_API_KEY")
+            crypto_engine = CryptoEnvironmentEngine(coinglass_api_key=cg_key)
+            for sym in ["BTC", "ETH", "SOL"]:
+                cr = crypto_engine.calculate(sym)
+                self._crypto_env_cache[sym] = cr
+                logger.info(
+                    "[Scalp] Crypto Env %s: %.2f (%s) | Deriv=%.2f Chain=%.2f Sent=%.2f",
+                    sym, cr["score"], cr["regime"],
+                    cr["sandboxes"]["derivatives"],
+                    cr["sandboxes"]["onchain"],
+                    cr["sandboxes"]["sentiment"],
+                )
+        except Exception as e:
+            logger.warning("[Scalp] Crypto Environment fetch failed: %s", e)
 
     def informative_pairs(self):
         """Pull 1H data for HTF trend bias."""
@@ -404,6 +497,8 @@ class SMCScalp(IStrategy):
         # =============================================
         dataframe = _calculate_confidence_scalp(dataframe)
 
+        self._audit_signals(dataframe, metadata)
+
         return dataframe
 
     # =============================================
@@ -474,6 +569,22 @@ class SMCScalp(IStrategy):
             "enter_short",
         ] = 1
 
+        # ===== REVERSE CONFIDENCE SHORT =====
+        # 當信心極低 (HIBERNATE < 0.20) 時，反向做空：
+        # 市場結構崩壞，順勢做空獲利
+        reverse_conf_short = (
+            (dataframe["confidence"] < 0.20)
+            & (dataframe["htf_trend"] < 0)
+            & (dataframe["fr_ok_short"])
+            & (dataframe["vol_regime_ok"])
+            & killzone_filter
+            & (dataframe["volume"] > 0)
+        )
+        dataframe.loc[
+            reverse_conf_short & (dataframe["enter_short"] != 1),
+            "enter_short",
+        ] = 1
+
         return dataframe
 
     def populate_exit_trend(self, dataframe: DataFrame, metadata: dict) -> DataFrame:
@@ -535,7 +646,46 @@ class SMCScalp(IStrategy):
     def confirm_trade_entry(self, pair: str, order_type: str, amount: float,
                             rate: float, time_in_force: str, current_time: datetime,
                             entry_tag: str | None, side: str, **kwargs) -> bool:
-        """Guard Pipeline + Telegram notification."""
+        """進場確認 — 極端行情熔斷 + Guard Pipeline + Telegram."""
+        # === Extreme Market Circuit Breaker ===
+        dataframe, _ = self.dp.get_analyzed_dataframe(pair, self.timeframe)
+        is_reverse_short = False
+        if len(dataframe) > 0:
+            last = dataframe.iloc[-1]
+            confidence = last.get("confidence", 0.5)
+            is_reverse_short = (side == "short" and confidence < 0.20)
+
+        if len(dataframe) > 96:  # 96 * 15m = 24h
+            last = dataframe.iloc[-1]
+            # 1. 24h crash > -10% → full stop (except reverse shorts)
+            price_24h = dataframe["close"].pct_change(96).iloc[-1]
+            if abs(price_24h) > 0.10 and not is_reverse_short:
+                logger.warning("[Scalp] CIRCUIT BREAKER: 24h move %.1f%% — blocking entry", price_24h * 100)
+                if _TG_AVAILABLE:
+                    from market_monitor.telegram_zh import send_message
+                    send_message(f"🚨 *熔斷機制啟動*\n24h 變動 {price_24h*100:.1f}%\n所有進場已暫停")
+                if _STATE_AVAILABLE:
+                    BotStateStore.increment("circuit_breaker_blocks")
+                return False
+
+            # 2. ATR spike > 3x average → extreme volatility
+            atr = last.get("atr", 0)
+            atr_ma = dataframe["atr"].rolling(50).mean().iloc[-1] if len(dataframe) > 50 else atr
+            if atr > 0 and atr_ma > 0 and atr / atr_ma > 3.0 and not is_reverse_short:
+                logger.warning("[Scalp] CIRCUIT BREAKER: ATR spike %.1fx — blocking entry", atr / atr_ma)
+                if _STATE_AVAILABLE:
+                    BotStateStore.increment("circuit_breaker_blocks")
+                return False
+
+            # 3. Confidence HIBERNATE → block longs only (allow reverse shorts)
+            confidence = last.get("confidence", 0.5)
+            if confidence < 0.15 and side == "long":
+                logger.warning("[Scalp] CIRCUIT BREAKER: Confidence %.2f (HIBERNATE) — blocking long", confidence)
+                if _STATE_AVAILABLE:
+                    BotStateStore.increment("circuit_breaker_blocks")
+                return False
+
+        # === Guard Pipeline check (live/dry_run only) ===
         if self.config.get("runmode", {}).value in ("live", "dry_run"):
             try:
                 import asyncio
@@ -556,6 +706,8 @@ class SMCScalp(IStrategy):
                     if _TG_AVAILABLE:
                         from market_monitor.telegram_zh import send_message
                         send_message(f"🛡️ *Guard 攔截*\n{pair} {side}\n原因: {rejection}")
+                    if _STATE_AVAILABLE:
+                        BotStateStore.increment("guard_rejections")
                     return False
             except Exception as e:
                 logger.warning("[Scalp] Guard Pipeline error: %s", e)
@@ -568,6 +720,43 @@ class SMCScalp(IStrategy):
                 last = dataframe.iloc[-1]
                 confidence = last.get("confidence", 0.5)
                 style = self._get_trade_style(confidence)
+
+                # Determine if this is a reverse confidence short
+                is_reversal = (side == "short" and confidence < 0.20)
+
+                # Crypto environment data
+                crypto_env = {}
+                base_symbol = pair.split("/")[0] if "/" in pair else pair[:3]
+                if base_symbol in self._crypto_env_cache:
+                    ce = self._crypto_env_cache[base_symbol]
+                    crypto_env = {
+                        "score": ce.get("score", 0),
+                        "regime": ce.get("regime", "?"),
+                    }
+
+                # Funding rate
+                funding_rate = float(last.get("funding_rate", 0)) if "funding_rate" in dataframe.columns else None
+
+                # Volatility regime
+                atr = last.get("atr", 0)
+                atr_ma = dataframe["atr"].rolling(50).mean().iloc[-1] if len(dataframe) > 50 else atr
+                vol_regime = "正常"
+                if atr_ma > 0:
+                    atr_ratio = atr / atr_ma
+                    if atr_ratio > 2.0:
+                        vol_regime = "極端"
+                    elif atr_ratio > 1.5:
+                        vol_regime = "擴張"
+                    elif atr_ratio < 0.5:
+                        vol_regime = "低迷"
+
+                # Expected R:R
+                atr_val = float(last.get("atr", 0))
+                sl_dist = atr_val * self.atr_sl_mult.value
+                tp_mult = style["atr_tp_mult"]
+                tp_dist = atr_val * tp_mult
+                expected_rr = round(tp_dist / sl_dist, 1) if sl_dist > 0 else 0
+
                 details.update({
                     "htf_trend": last.get("htf_trend", 0),
                     "in_ob": bool(last.get("in_bullish_ob") or last.get("in_bearish_ob")),
@@ -580,6 +769,11 @@ class SMCScalp(IStrategy):
                     "utc_hour": last.get("utc_hour", 0),
                     "htf_zone_aligned": bool(last.get("htf_zone_aligned")),
                     "trade_mode": style["mode"],
+                    "is_reversal": is_reversal,
+                    "funding_rate": funding_rate,
+                    "volatility_regime": vol_regime,
+                    "crypto_env": crypto_env,
+                    "expected_rr": expected_rr,
                     "confidence_factors": {
                         "momentum": float(last.get("adam_slope", 0) > 0) * 0.7 + 0.3,
                         "trend": 0.7 if last.get("htf_trend", 0) != 0 else 0.3,
@@ -591,6 +785,9 @@ class SMCScalp(IStrategy):
                 })
 
             lev = 1.0 + (self.max_leverage.value - 1.0) * (confidence ** 2)
+            # Reverse confidence shorts: cap leverage at 80% of max
+            if is_reverse_short:
+                lev = min(lev, self.max_leverage.value * 0.8)
             notify_entry(
                 pair=pair, side=side, rate=rate,
                 stake=amount * rate, leverage=round(lev, 1),
@@ -602,30 +799,65 @@ class SMCScalp(IStrategy):
                            amount: float, rate: float, time_in_force: str,
                            exit_reason: str, current_time: datetime,
                            **kwargs) -> bool:
-        """Exit confirmation with Chinese Telegram notification."""
+        """出場確認 — 績效追蹤 + 繁體中文 Telegram 通知."""
+        profit_pct = trade.calc_profit_ratio(rate) * 100
+        profit_usdt = trade.calc_profit(rate)
+        duration = str(current_time - trade.open_date_utc).split(".")[0]
+        side = "short" if trade.is_short else "long"
+
+        dataframe, _ = self.dp.get_analyzed_dataframe(pair, self.timeframe)
+        confidence = 0.5
+        if len(dataframe) > 0:
+            confidence = dataframe.iloc[-1].get("confidence", 0.5)
+
+        # === Performance Tracking ===
+        win_rate = None
+        drawdown = None
+        equity = None
+        consecutive = 0
+        try:
+            closed_trades = Trade.get_trades_proxy(is_open=False)
+            if closed_trades:
+                wins = sum(1 for t in closed_trades if t.calc_profit_ratio(t.close_rate or t.open_rate) > 0)
+                win_rate = round(wins / len(closed_trades) * 100, 1)
+                equity = sum(t.calc_profit(t.close_rate or t.open_rate) for t in closed_trades)
+                # Max drawdown approximation
+                running = 0
+                peak = 0
+                max_dd = 0
+                for t in closed_trades:
+                    running += t.calc_profit(t.close_rate or t.open_rate)
+                    if running > peak:
+                        peak = running
+                    dd = peak - running
+                    if dd > max_dd:
+                        max_dd = dd
+                drawdown = round(max_dd, 2)
+                # Consecutive wins/losses
+                for t in reversed(closed_trades):
+                    p = t.calc_profit_ratio(t.close_rate or t.open_rate)
+                    if profit_pct > 0 and p > 0:
+                        consecutive += 1
+                    elif profit_pct <= 0 and p <= 0:
+                        consecutive += 1
+                    else:
+                        break
+        except Exception:
+            pass
+
+        reason_zh = {
+            "exit_signal": "📊 結構反轉 (CHoCH)",
+            "stop_loss": "🛑 觸發止損",
+            "trailing_stop_loss": "📈 追蹤止損",
+            "force_exit": "⚡ 強制出場",
+            "動態止盈_波段": "🎯 動態止盈（波段模式）",
+            "動態止盈_短線": "🎯 動態止盈（短線模式）",
+            "時間衰退_止盈": "⏰ 時間衰退止盈",
+            "時間衰退_強制": "⏰ 時間衰退強制出場",
+            "信心驟降_保利": "⚠️ 信心驟降保利",
+        }.get(exit_reason, exit_reason)
+
         if _TG_AVAILABLE:
-            profit_pct = trade.calc_profit_ratio(rate) * 100
-            profit_usdt = trade.calc_profit(rate)
-            duration = str(current_time - trade.open_date_utc).split(".")[0]
-            side = "short" if trade.is_short else "long"
-
-            dataframe, _ = self.dp.get_analyzed_dataframe(pair, self.timeframe)
-            confidence = 0.5
-            if len(dataframe) > 0:
-                confidence = dataframe.iloc[-1].get("confidence", 0.5)
-
-            reason_zh = {
-                "exit_signal": "📊 結構反轉 (CHoCH)",
-                "stop_loss": "🛑 觸發止損",
-                "trailing_stop_loss": "📈 追蹤止損",
-                "force_exit": "⚡ 強制出場",
-                "動態止盈_波段": "🎯 動態止盈（波段模式）",
-                "動態止盈_短線": "🎯 動態止盈（短線模式）",
-                "時間衰退_止盈": "⏰ 時間衰退止盈",
-                "時間衰退_強制": "⏰ 時間衰退強制出場",
-                "信心驟降_保利": "⚠️ 信心驟降保利",
-            }.get(exit_reason, exit_reason)
-
             if "stop_loss" in exit_reason:
                 notify_stoploss(pair, side, profit_pct, profit_usdt)
             else:
@@ -633,7 +865,19 @@ class SMCScalp(IStrategy):
                     pair=pair, side=side, profit_pct=profit_pct,
                     profit_usdt=profit_usdt, exit_reason=reason_zh,
                     duration=duration, confidence=confidence,
+                    win_rate=win_rate, drawdown=drawdown,
+                    equity=equity, consecutive=consecutive,
                 )
+
+        # Audit log
+        logger.info(
+            "TRADE_AUDIT: %s %s %s | Entry:%.2f Exit:%.2f | P&L:%.2f%% ($%.2f) | "
+            "Duration:%s | Reason:%s | Confidence:%.2f | WR:%s DD:%s",
+            pair, side, exit_reason, trade.open_rate, rate,
+            profit_pct, profit_usdt, duration, exit_reason, confidence,
+            f"{win_rate}%" if win_rate is not None else "N/A",
+            f"${drawdown}" if drawdown is not None else "N/A",
+        )
         return True
 
     # =============================================
@@ -643,7 +887,7 @@ class SMCScalp(IStrategy):
     def leverage(self, pair: str, current_time, current_rate: float,
                  proposed_leverage: float, max_leverage: float,
                  entry_tag: str | None, side: str, **kwargs) -> float:
-        """Confidence-squared leverage scaling (same as SMCTrend)."""
+        """Confidence-squared leverage scaling + reverse confidence for shorts."""
         if self._live_confidence is not None:
             confidence = self._live_confidence
         else:
@@ -653,6 +897,12 @@ class SMCScalp(IStrategy):
             confidence = dataframe.iloc[-1].get("confidence", 0.5)
 
         max_lev = self.max_leverage.value
+
+        # Reverse confidence short: low confidence = moderate leverage (capped at 80%)
+        if side == "short" and confidence < 0.20:
+            lev = 1.0 + (max_lev * 0.8 - 1.0) * 0.5  # Fixed moderate leverage
+            return min(max(lev, 1.0), max_leverage)
+
         lev = 1.0 + (max_lev - 1.0) * (confidence ** 2)
         return min(max(lev, 1.0), max_leverage)
 
@@ -661,7 +911,8 @@ class SMCScalp(IStrategy):
                             max_stake: float, leverage: float,
                             entry_tag: str | None, side: str,
                             **kwargs) -> float:
-        """Position sizing by confidence × activity. Low-confidence mode gets 20% reduction."""
+        """Position sizing by confidence × activity. Low-confidence mode gets 20% reduction.
+        Reverse confidence shorts in HIBERNATE get conservative sizing."""
         pair = kwargs.get("pair", "")
         dataframe, _ = self.dp.get_analyzed_dataframe(pair, self.timeframe)
         if len(dataframe) == 0:
@@ -671,6 +922,13 @@ class SMCScalp(IStrategy):
         confidence = last.get("confidence", 0.5)
         activity = last.get("activity_mult", 0.5)
         style = self._get_trade_style(confidence)
+
+        # Reverse confidence short: conservative sizing (50% of proposed)
+        if side == "short" and confidence < 0.20:
+            adjusted = proposed_stake * 0.5
+            if min_stake is not None:
+                adjusted = max(adjusted, min_stake)
+            return min(adjusted, max_stake)
 
         scale = 0.3 + 0.9 * confidence
 
@@ -699,6 +957,10 @@ class SMCScalp(IStrategy):
                               current_entry_profit: float, current_exit_profit: float,
                               **kwargs) -> float | None:
         """Pyramid add-on — only in swing mode, lower profit threshold than SMCTrend."""
+        # Block pyramid for reverse confidence shorts
+        if trade.is_short and self._live_confidence is not None and self._live_confidence < 0.20:
+            return None
+
         # Need at least 2% profit (vs SMCTrend's 5%)
         if current_profit < 0.02:
             return None
