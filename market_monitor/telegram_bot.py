@@ -720,7 +720,8 @@ def cmd_help() -> str:
         "💰 交易 — 最近交易記錄\n"
         "🛡 風控 — Guard狀態\n"
         "🧠 決策 — Agent決策歷史\n"
-        "📋 分析 — 最新AI分析\n\n"
+        "📋 分析 — 最新AI分析\n"
+        "📰 摘要 — 機構報告精華\n\n"
         "💬 也可直接打字問問題\n"
         "例如: 現在適合做多嗎？"
     )
@@ -784,6 +785,23 @@ def cmd_overview() -> str:
     return "\n".join(lines)
 
 
+def cmd_digest() -> str:
+    """機構報告精華摘要."""
+    try:
+        from market_monitor.report_collector import get_latest_digest, run_collection_and_digest, SUMMARY_FILE
+        # If digest is older than 8 hours, refresh
+        if SUMMARY_FILE.exists():
+            age_hours = (time.time() - SUMMARY_FILE.stat().st_mtime) / 3600
+            if age_hours < 8:
+                return get_latest_digest()
+        # Collect fresh
+        _, digest = run_collection_and_digest()
+        return digest
+    except Exception as e:
+        logger.error("Digest generation failed: %s", e)
+        return f"機構報告摘要生成失敗: {e}"
+
+
 COMMANDS = {
     "status": cmd_status, "start": cmd_help, "help": cmd_help,
     "confidence": cmd_confidence, "crypto": cmd_crypto,
@@ -791,6 +809,7 @@ COMMANDS = {
     "trades": cmd_trades, "guards": cmd_guards,
     "decisions": cmd_decisions, "macro": cmd_macro,
     "menu": cmd_help, "overview": cmd_overview,
+    "digest": cmd_digest,
 }
 
 

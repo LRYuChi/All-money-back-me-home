@@ -6,3 +6,6 @@
 
 # Daily market report — every day at 08:00 UTC (16:00 Taiwan)
 0 8 * * * cd /opt/ambmh && docker compose -f docker-compose.prod.yml exec -T api python -m src.jobs.daily_report >> /var/log/ambmh/daily.log 2>&1
+
+# Institutional report collection + AI digest — every 8 hours
+0 */8 * * * cd /opt/ambmh && docker compose -f docker-compose.prod.yml exec -T telegram-bot python -m market_monitor.report_collector >> /var/log/ambmh/digest.log 2>&1
