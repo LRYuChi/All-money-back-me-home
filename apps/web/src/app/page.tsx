@@ -36,6 +36,12 @@ interface DashboardData {
   correlations: Record<string, { value: number; label: string }>;
   freqtrade: { state: string; strategy: string; dry_run?: boolean; trade_count?: number; profit?: number };
   next_killzone: { name: string; active?: boolean; starts_in_hours?: number; utc_start: string };
+  crypto_env?: Record<string, {
+    score: number;
+    regime: string;
+    sandboxes: { derivatives: number; onchain: number; sentiment: number };
+    factors: Record<string, { score: number; signal: string }>;
+  }>;
 }
 
 export default function DashboardPage() {
@@ -152,8 +158,7 @@ export default function DashboardPage() {
 
         {/* Row 3: Crypto Environment + Correlations */}
         <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
-          {/* eslint-disable-next-line @typescript-eslint/no-explicit-any */}
-          <CryptoEnvPanel data={(data as Record<string, unknown>)['crypto_env'] as Record<string, { score: number; regime: string; sandboxes: { derivatives: number; onchain: number; sentiment: number }; factors: Record<string, { score: number; signal: string }> }> || {}} />
+          <CryptoEnvPanel data={data.crypto_env || {}} />
           <div className="rounded-lg border border-gray-800 bg-gray-900/50 p-3">
             <h3 className="text-sm font-medium text-gray-400 mb-2">跨市場相關性 (30日)</h3>
             <HeatMap data={heatmapData} />
