@@ -142,7 +142,8 @@ class AgentBrain:
         response = call_claude(system, prompt, tools=self.tools)
 
         if "error" in response:
-            logger.error("Analysis failed: %s", response["error"])
+            logger.error("AI analysis failed: %s — falling back to rule-based", response["error"])
+            run_rule_based_analysis()
             return
 
         # 4. Process response — execute any tool calls
