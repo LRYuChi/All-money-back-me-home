@@ -102,16 +102,17 @@ class SMCTrend(IStrategy):
     _confidence_fetch_failures: int = 0
     _crypto_env_cache: dict = {}
 
-    # Pyramid: disabled until base trading frequency stabilizes on 15m
-    position_adjustment_enable = False
+    # Pyramid: add to winning positions when confidence supports it
+    position_adjustment_enable = True
     max_entry_position_adjustment = 2  # Up to 2 add-ons (3 total entries)
 
     startup_candle_count = 400  # 400 × 15m = ~4 days warmup
 
     # --- Hyperparameters ---
-    swing_length = IntParameter(5, 20, default=10, space="buy",
+    # Defaults from WFO Segment 4 (best OOS: +49.63%, 20 trades)
+    swing_length = IntParameter(5, 20, default=12, space="buy",
                                 optimize=True)
-    htf_swing_length = IntParameter(10, 30, default=15, space="buy",
+    htf_swing_length = IntParameter(10, 30, default=14, space="buy",
                                     optimize=True)
     use_killzone = IntParameter(0, 1, default=1, space="buy",
                                 optimize=True)
@@ -120,7 +121,8 @@ class SMCTrend(IStrategy):
 
     # ATR-based risk management
     atr_period = IntParameter(10, 20, default=14, space="buy", optimize=True)
-    atr_sl_mult = DecimalParameter(1.0, 3.0, default=1.5, space="buy",
+    # Seg 4 optimal: wider stop (less whipsaw), tighter TP (more achievable)
+    atr_sl_mult = DecimalParameter(1.0, 3.0, default=1.87, space="buy",
                                    optimize=True)
     atr_tp_mult = DecimalParameter(2.0, 5.0, default=3.0, space="sell",
                                    optimize=True)
@@ -1127,8 +1129,22 @@ class SMCTrend(IStrategy):
         if side == "short" and confidence < 0.20:
             confidence = 1.0 - confidence
 
-        # Base scaling by confidence
-        scale = 0.3 + 0.9 * confidence
+        # Base scaling by confidence (widened range for stronger conviction trades)
+        scale = 0.2 + 1.3 * confidence  # range 0.2x-1.5x
+
+        # Anti-Martingale: increase after wins, decrease after losses
+        # Read streak from BotStateStore (persisted across restarts)
+        wins = 0
+        losses = 0
+        if _STATE_AVAILABLE:
+            state = BotStateStore.read()
+            wins = state.get("consecutive_wins", 0)
+            losses = state.get("consecutive_losses", 0)
+        if losses > 0:
+            anti_mart = max(1.0 - losses * 0.20, 0.40)  # -20% per loss, floor 40%
+        else:
+            anti_mart = 1.0 + min(wins * 0.15, 0.45)  # +15% per win, cap +45%
+        scale *= anti_mart
 
         # Activity boost: peak hours (>1.0) get up to +10%
         # Dead hours (<0.3) get -20% (thinner liquidity = smaller size)
@@ -1176,8 +1192,8 @@ class SMCTrend(IStrategy):
         confidence = last.get("confidence", 0.5)
         htf_trend = last.get("htf_trend", 0)
 
-        # Must have high confidence
-        if confidence < 0.7:
+        # Confidence gate: CAUTIOUS or above (lowered from 0.7 to enable more pyramids)
+        if confidence < 0.5:
             return None
 
         # Trend must still agree with position direction
@@ -1186,13 +1202,11 @@ class SMCTrend(IStrategy):
         if not trade.is_short and htf_trend < 0:
             return None  # Long but trend turned bearish
 
-        # Progressive add-on sizing based on confidence
-        # 1st add-on: 50% of original
-        # 2nd add-on: 30% of original
+        # Progressive add-on sizing (increased from 0.5/0.3 for stronger compounding)
         if filled_entries == 1:
-            addon_ratio = 0.5
+            addon_ratio = 0.6
         elif filled_entries == 2:
-            addon_ratio = 0.3
+            addon_ratio = 0.4
         else:
             return None
 

@@ -30,14 +30,24 @@ class MaxPositionGuard(Guard):
 
 
 class MaxLeverageGuard(Guard):
-    """Reject if leverage exceeds maximum."""
+    """Reject if leverage exceeds dynamic maximum based on account size.
+
+    Smaller accounts get lower leverage limits to prevent rapid ruin:
+    $300 → max 2.5x, $500 → 3.3x, $1000+ → full max_leverage.
+    """
 
     def __init__(self, max_leverage: float = 5.0):
         self.max_leverage = max_leverage
 
     def check(self, ctx: GuardContext) -> Optional[str]:
-        if ctx.leverage > self.max_leverage:
-            return f"Leverage {ctx.leverage}x exceeds max {self.max_leverage}x"
+        # Dynamic leverage: scale with account size (smaller = more conservative)
+        size_factor = min(ctx.account_balance / 1000, 1.0)
+        dynamic_max = 1.5 + (self.max_leverage - 1.5) * size_factor
+        if ctx.leverage > dynamic_max:
+            return (
+                f"Leverage {ctx.leverage:.1f}x exceeds {dynamic_max:.1f}x "
+                f"for ${ctx.account_balance:.0f} account"
+            )
         return None
 
 

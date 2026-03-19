@@ -43,16 +43,29 @@ def test_max_position_reject():
 
 def test_max_leverage_pass():
     guard = MaxLeverageGuard(max_leverage=5)
-    ctx = make_ctx(leverage=3)
+    ctx = make_ctx(leverage=3)  # $1000 account → dynamic_max=5.0, 3 < 5
     assert guard.check(ctx) is None
 
 
 def test_max_leverage_reject():
     guard = MaxLeverageGuard(max_leverage=5)
-    ctx = make_ctx(leverage=10)
+    ctx = make_ctx(leverage=10)  # $1000 account → dynamic_max=5.0, 10 > 5
     result = guard.check(ctx)
     assert result is not None
     assert "10" in result
+
+
+def test_max_leverage_dynamic_small_account():
+    guard = MaxLeverageGuard(max_leverage=5)
+    # $300 account → size_factor=0.3, dynamic_max=1.5+3.5*0.3=2.55
+    ctx = make_ctx(leverage=3.0, account_balance=300)
+    result = guard.check(ctx)
+    assert result is not None  # 3.0 > 2.55
+    assert "300" in result
+
+    # 2.0x should pass for $300
+    ctx2 = make_ctx(leverage=2.0, account_balance=300)
+    assert guard.check(ctx2) is None
 
 
 def test_cooldown_pass():
