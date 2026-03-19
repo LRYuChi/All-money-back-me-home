@@ -162,7 +162,11 @@ def main() -> None:
 
 def _save_results(data: dict, args) -> None:
     """Save backtest results to JSON."""
-    data_dir = Path(os.environ["DATA_DIR"]) if "DATA_DIR" in os.environ else Path(__file__).resolve().parents[4] / "data"
+    try:
+        _fallback = Path(__file__).resolve().parents[4] / "data"
+    except IndexError:
+        _fallback = Path(__file__).resolve().parent.parent.parent / "data"
+    data_dir = Path(os.environ["DATA_DIR"]) if "DATA_DIR" in os.environ else _fallback
     out_dir = data_dir / "backtest"
     out_dir.mkdir(parents=True, exist_ok=True)
 

@@ -44,7 +44,10 @@ def _get_confidence() -> dict:
     try:
         os.environ.setdefault("FRED_API_KEY", os.environ.get("FRED_API_KEY", ""))
         import sys
-        sys.path.insert(0, str(__import__("pathlib").Path(__file__).resolve().parents[4]))
+        try:
+            sys.path.insert(0, str(__import__("pathlib").Path(__file__).resolve().parents[4]))
+        except IndexError:
+            sys.path.insert(0, str(__import__("pathlib").Path(__file__).resolve().parent.parent.parent))
         from market_monitor.confidence_engine import GlobalConfidenceEngine
         engine = GlobalConfidenceEngine()
         result = engine.calculate()
@@ -224,7 +227,10 @@ def _get_tw_market() -> dict:
     """Get Taiwan market data from TWSE OpenAPI (official source)."""
     try:
         import sys
-        sys.path.insert(0, str(__import__("pathlib").Path(__file__).resolve().parents[4]))
+        try:
+            sys.path.insert(0, str(__import__("pathlib").Path(__file__).resolve().parents[4]))
+        except IndexError:
+            sys.path.insert(0, str(__import__("pathlib").Path(__file__).resolve().parent.parent.parent))
         from market_monitor.fetchers.twse_openapi import TWSEOpenAPIClient
         twse = TWSEOpenAPIClient()
 

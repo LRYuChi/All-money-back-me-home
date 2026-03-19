@@ -15,7 +15,11 @@ from typing import Any
 from .supabase_client import get_supabase
 
 
-_DATA_DIR = Path(os.environ["DATA_DIR"]) if "DATA_DIR" in os.environ else Path(__file__).resolve().parents[4] / "data"
+try:
+    _fallback_data = Path(__file__).resolve().parents[4] / "data"
+except IndexError:
+    _fallback_data = Path(__file__).resolve().parent.parent.parent / "data"
+_DATA_DIR = Path(os.environ["DATA_DIR"]) if "DATA_DIR" in os.environ else _fallback_data
 _DATA_DIR.mkdir(parents=True, exist_ok=True)
 _STATE_FILE = _DATA_DIR / "paper_trades.json"
 

@@ -24,7 +24,10 @@ if _SRC_DIR not in sys.path:
 
 try:
     # Add project root to path for market_monitor import
-    _project_root = str(Path(__file__).resolve().parents[4])
+    try:
+        _project_root = str(Path(__file__).resolve().parents[4])
+    except IndexError:
+        _project_root = str(Path(__file__).resolve().parent.parent.parent)
     if _project_root not in sys.path:
         sys.path.insert(0, _project_root)
     from market_monitor.telegram_zh import notify_entry, notify_exit, notify_stoploss
@@ -71,7 +74,11 @@ SYMBOLS = ["BTC/USDT", "ETH/USDT"]
 TIMEFRAME = "1h"
 INITIAL_CAPITAL = 300.0
 LEVERAGE = 1  # No leverage
-DATA_DIR = Path(os.environ["DATA_DIR"]) if "DATA_DIR" in os.environ else Path(__file__).resolve().parents[4] / "data"
+try:
+    _fallback_data = Path(__file__).resolve().parents[4] / "data"
+except IndexError:
+    _fallback_data = Path(__file__).resolve().parent.parent.parent / "data"
+DATA_DIR = Path(os.environ["DATA_DIR"]) if "DATA_DIR" in os.environ else _fallback_data
 STATE_FILE = DATA_DIR / "paper_trades.json"
 MAX_RISK_PER_TRADE = 0.02  # 2% risk per trade
 MAX_POSITIONS = 2  # One per symbol max

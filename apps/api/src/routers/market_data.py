@@ -14,7 +14,10 @@ from src.fetchers.us_stock import USStockFetcher
 from src.models.schemas import OHLCVData
 
 # Add project root for market_monitor imports
-_PROJECT_ROOT = Path(__file__).resolve().parents[4]
+try:
+    _PROJECT_ROOT = Path(__file__).resolve().parents[4]
+except IndexError:
+    _PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
 if str(_PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(_PROJECT_ROOT))
 
