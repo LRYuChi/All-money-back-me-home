@@ -389,27 +389,130 @@ def run_rule_based_analysis() -> dict:
 
 
 # =============================================
+# Pipeline Mode: Data → Summary → AI (最省 token)
+# =============================================
+
+def run_pipeline_analysis() -> dict | None:
+    """三步驟 Pipeline 分析 — 最省 token。
+
+    Step 1: data_collector.py 已由 shell script 預先執行
+    Step 2: summarizer.py 已由 shell script 預先執行
+    Step 3: 讀取摘要 → Claude 單次分析 (無 tool_use)
+
+    Token 用量: ~2500 (vs 舊架構 ~10000)
+    """
+    summary_path = Path(os.environ.get("DATA_DIR", "/app/data")) / "analysis_input.txt"
+
+    # 如果摘要不存在，先執行 Step 1+2
+    if not summary_path.exists():
+        logger.info("No summary found, running data collection + summarization...")
+        try:
+            from agent.data_collector import collect_all
+            from agent.summarizer import run as run_summarizer
+            collect_all()
+            run_summarizer()
+        except Exception as e:
+            logger.error("Pipeline data collection failed: %s", e)
+            return None
+
+    if not summary_path.exists():
+        logger.error("Summary file still missing after collection")
+        return None
+
+    summary = summary_path.read_text()
+    logger.info("Summary loaded: %d chars", len(summary))
+
+    # 單次 Claude 調用 — 無 tools，最省 token
+    system = load_prompt("analyst")
+    prompt = f"""根據以下市場快照進行分析。用繁體中文回答。
+
+{summary}
+
+請輸出（簡潔扼要）:
+1. 環境評估 (1-2 句)
+2. 風險建議: conservative / normal / aggressive
+3. 建議行動 (具體)
+4. 三情境 (樂觀/基準/悲觀，各 1 句)"""
+
+    response = call_claude(
+        system_prompt=system,
+        user_message=prompt,
+        tools=None,  # 不傳 tools → 省 ~1500 tokens
+        model="claude-sonnet-4-6",
+    )
+
+    if "error" in response:
+        logger.error("Pipeline AI analysis failed: %s — falling back to rule-based", response["error"])
+        run_rule_based_analysis()
+        return None
+
+    # 提取回應文字
+    analysis_text = ""
+    for block in response.get("content", []):
+        if hasattr(block, "type") and block.type == "text":
+            analysis_text += block.text
+
+    if not analysis_text:
+        logger.warning("Empty AI response, falling back to rule-based")
+        run_rule_based_analysis()
+        return None
+
+    logger.info("AI Analysis: %s", analysis_text[:300])
+
+    # 記錄決策
+    memory = AgentMemory()
+    decision_id = memory.log_decision(
+        action="pipeline_analysis",
+        reason=analysis_text[:500],
+        confidence=0.85,
+        context={"mode": "pipeline", "summary_chars": len(summary)},
+    )
+
+    # 發送 Telegram
+    try:
+        from market_monitor.telegram_zh import send_message
+        tokens_used = response.get("usage", {})
+        token_info = f"tokens: {tokens_used.get('input_tokens', '?')}in/{tokens_used.get('output_tokens', '?')}out"
+
+        msg = (
+            f"🤖 Agent 分析報告 (Pipeline)\n"
+            f"━━━━━━━━━━━━━━━━\n"
+            f"{analysis_text[:800]}\n\n"
+            f"ID: {decision_id} | {token_info}"
+        )
+        send_message(msg, parse_mode="")
+    except Exception as e:
+        logger.warning("Telegram send failed: %s", e)
+
+    logger.info("Pipeline analysis complete. ID: %s, tokens: %s",
+                decision_id, response.get("usage", {}))
+    return {"analysis": analysis_text, "decision_id": decision_id}
+
+
+# =============================================
 # Entry Point
 # =============================================
 
 def main():
     mode = os.environ.get("AGENT_MODE", "loop")
 
-    if mode == "rule":
-        # Rule-based analysis (no Claude API needed)
+    if mode == "pipeline":
+        # New pipeline mode (data → summary → AI, minimal tokens)
+        run_pipeline_analysis()
+    elif mode == "rule":
         run_rule_based_analysis()
     elif mode == "once":
+        # Legacy: full tool_use mode
         brain = AgentBrain()
         brain.run_full_analysis()
     else:
-        # Check if Claude API is available
+        # Default: pipeline if API key available, else rule-based
         api_key = os.environ.get("ANTHROPIC_API_KEY", "")
-        if not api_key:
-            logger.warning("No ANTHROPIC_API_KEY — falling back to rule-based mode")
-            run_rule_based_analysis()
+        if api_key:
+            run_pipeline_analysis()
         else:
-            brain = AgentBrain()
-            brain.run_forever()
+            logger.warning("No ANTHROPIC_API_KEY — rule-based mode")
+            run_rule_based_analysis()
 
 
 if __name__ == "__main__":
