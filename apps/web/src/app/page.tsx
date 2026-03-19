@@ -9,6 +9,7 @@ import { MarketTable } from '@/components/dashboard/MarketTable';
 import { MacroPanel } from '@/components/dashboard/MacroPanel';
 import { BotStatus } from '@/components/dashboard/BotStatus';
 import { HeatMap } from '@/components/charts/HeatMap';
+import { CryptoEnvPanel } from '@/components/dashboard/CryptoEnvPanel';
 
 interface DashboardData {
   timestamp: string;
@@ -149,13 +150,14 @@ export default function DashboardPage() {
           <MacroPanel data={data.macro} />
         </div>
 
-        {/* Row 3: Correlations + Quick Links */}
+        {/* Row 3: Crypto Environment + Correlations */}
         <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+          <CryptoEnvPanel data={(data as any).crypto_env || {}} />
           <div className="rounded-lg border border-gray-800 bg-gray-900/50 p-3">
             <h3 className="text-sm font-medium text-gray-400 mb-2">跨市場相關性 (30日)</h3>
             <HeatMap data={heatmapData} />
           </div>
-          <div className="md:col-span-2 grid grid-cols-2 md:grid-cols-5 gap-2">
+          <div className="grid grid-cols-1 gap-1.5">
             {[
               { href: '/market/crypto', label: '₿ 加密貨幣', color: 'from-orange-600/80 to-orange-900/80' },
               { href: '/market/us', label: '🇺🇸 美股', color: 'from-emerald-600/80 to-emerald-900/80' },
@@ -164,7 +166,7 @@ export default function DashboardPage() {
               { href: '/backtest', label: '📊 回測', color: 'from-pink-600/80 to-pink-900/80' },
             ].map((link) => (
               <Link key={link.href} href={link.href}>
-                <div className={`rounded-lg p-2.5 bg-gradient-to-br ${link.color} text-center text-white text-xs font-medium hover:shadow-lg hover:scale-105 transition-all border border-white/5`}>
+                <div className={`rounded-lg p-2 bg-gradient-to-br ${link.color} text-center text-white text-xs font-medium hover:shadow-lg hover:scale-105 transition-all border border-white/5`}>
                   {link.label}
                 </div>
               </Link>

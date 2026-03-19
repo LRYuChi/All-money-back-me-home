@@ -220,6 +220,58 @@ def _get_trading_status() -> dict:
         return {"error": str(e)}
 
 
+def _get_tw_market() -> dict:
+    """Get Taiwan market data from TWSE OpenAPI (official source)."""
+    try:
+        import sys
+        sys.path.insert(0, str(__import__("pathlib").Path(__file__).resolve().parents[4]))
+        from market_monitor.fetchers.twse_openapi import TWSEOpenAPIClient
+        twse = TWSEOpenAPIClient()
+
+        result: dict = {}
+
+        # TAIEX from official source
+        taiex = twse.get_taiex()
+        if taiex:
+            result["taiex"] = {
+                "close": taiex["close"],
+                "change": taiex["change"],
+                "change_pct": taiex["change_pct"],
+            }
+
+        # Key sector indices
+        sector_keywords = ["半導體", "電子", "金融保險", "航運"]
+        sectors = []
+        for idx in twse.get_sector_indices():
+            if any(k in idx["name"] for k in sector_keywords) and idx["close"] is not None:
+                sectors.append({
+                    "name": idx["name"],
+                    "close": idx["close"],
+                    "change_pct": idx["change_pct"],
+                })
+        if sectors:
+            result["sectors"] = sectors
+
+        # Watchlist fundamentals
+        fundamentals = twse.get_watchlist_fundamentals(["2330", "2317", "2454", "2382"])
+        if fundamentals:
+            result["fundamentals"] = [
+                {
+                    "code": f["code"],
+                    "name": f["name"],
+                    "pe_ratio": f["pe_ratio"],
+                    "pb_ratio": f["pb_ratio"],
+                    "dividend_yield": f["dividend_yield"],
+                }
+                for f in fundamentals
+            ]
+
+        return result
+    except Exception as e:
+        logger.warning("TWSE market data error: %s", e)
+        return {}
+
+
 def _get_correlations() -> dict:
     """Get cross-market correlations using yfinance directly."""
     try:
@@ -261,40 +313,74 @@ def _get_correlations() -> dict:
         return {}
 
 
+def _query_ft_bot(host: str) -> dict | None:
+    """Query a single Freqtrade bot via REST API."""
+    try:
+        import base64
+        auth = base64.b64encode(b"freqtrade:freqtrade").decode()
+        headers = {"Authorization": f"Basic {auth}"}
+
+        req = urllib.request.Request(
+            f"http://{host}/api/v1/show_config", headers=headers,
+        )
+        with urllib.request.urlopen(req, timeout=5) as resp:
+            config = json.loads(resp.read())
+
+        req2 = urllib.request.Request(
+            f"http://{host}/api/v1/profit", headers=headers,
+        )
+        with urllib.request.urlopen(req2, timeout=5) as resp2:
+            profit = json.loads(resp2.read())
+
+        return {
+            "state": config.get("state", "unknown"),
+            "strategy": config.get("strategy", "unknown"),
+            "dry_run": config.get("dry_run", True),
+            "trading_mode": config.get("trading_mode", ""),
+            "trade_count": profit.get("trade_count", 0),
+            "profit": round(profit.get("profit_all_coin", 0), 2),
+        }
+    except Exception:
+        return None
+
+
 def _get_freqtrade_status() -> dict:
-    """Get Freqtrade bot status via Docker network."""
-    # In Docker: use service name 'freqtrade'. On host: use localhost.
-    ft_hosts = ["freqtrade:8080", "localhost:8080"]
-    for host in ft_hosts:
-        try:
-            import base64
-            auth = base64.b64encode(b"freqtrade:freqtrade").decode()
-            headers = {"Authorization": f"Basic {auth}"}
+    """Get Freqtrade bot status — supports multiple bots."""
+    # Bot definitions: (name, Docker host, localhost fallback)
+    bots = [
+        ("trend", "freqtrade-trend:8080", "localhost:8080"),
+        ("scalp", "freqtrade-scalp:8081", "localhost:8081"),
+    ]
 
-            req = urllib.request.Request(
-                f"http://{host}/api/v1/show_config", headers=headers,
-            )
-            with urllib.request.urlopen(req, timeout=5) as resp:
-                config = json.loads(resp.read())
+    result = {}
+    for name, docker_host, local_host in bots:
+        status = _query_ft_bot(docker_host) or _query_ft_bot(local_host)
+        result[name] = status or {"state": "offline", "strategy": "unknown"}
 
-            req2 = urllib.request.Request(
-                f"http://{host}/api/v1/profit", headers=headers,
-            )
-            with urllib.request.urlopen(req2, timeout=5) as resp2:
-                profit = json.loads(resp2.read())
+    return result
 
-            return {
-                "state": config.get("state", "unknown"),
-                "strategy": config.get("strategy", "unknown"),
-                "dry_run": config.get("dry_run", True),
-                "trading_mode": config.get("trading_mode", ""),
-                "trade_count": profit.get("trade_count", 0),
-                "profit": round(profit.get("profit_all_coin", 0), 2),
+
+def _get_crypto_environment() -> dict:
+    """Get crypto-specific environment scores."""
+    try:
+        import sys
+        sys.path.insert(0, str(__import__("pathlib").Path(__file__).resolve().parents[4]))
+        from market_monitor.crypto_environment import CryptoEnvironmentEngine
+        engine = CryptoEnvironmentEngine()
+        results = {}
+        for sym in ["BTC", "ETH", "SOL"]:
+            r = engine.calculate(sym)
+            results[sym] = {
+                "score": r["score"],
+                "regime": r["regime"],
+                "sandboxes": r["sandboxes"],
+                "factors": {k: {"score": v.get("score", 0), "signal": v.get("signal", "")}
+                           for k, v in r.get("factors", {}).items()},
             }
-        except Exception:
-            continue
-
-    return {"state": "offline", "strategy": "unknown"}
+        return results
+    except Exception as e:
+        logger.warning("Crypto environment error: %s", e)
+        return {}
 
 
 def _get_next_killzone() -> dict:
@@ -328,9 +414,11 @@ async def get_dashboard() -> dict[str, Any]:
     data = {
         "timestamp": datetime.utcnow().isoformat(),
         "confidence": _get_confidence(),
+        "crypto_env": _get_crypto_environment(),
         "crypto": _get_crypto_overview(),
         "trading": _get_trading_status(),
         "macro": _get_macro(),
+        "tw_market": _get_tw_market(),
         "correlations": _get_correlations(),
         "freqtrade": _get_freqtrade_status(),
         "next_killzone": _get_next_killzone(),
