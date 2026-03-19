@@ -84,15 +84,18 @@ class TradeStore:
     def get_open_positions(self, source: str = "scanner") -> list[dict]:
         """Get all open paper trade positions."""
         if self._sb:
-            result = (
-                self._sb.table("paper_trades")
-                .select("*")
-                .eq("status", "open")
-                .eq("source", source)
-                .order("entry_time", desc=True)
-                .execute()
-            )
-            return result.data or []
+            try:
+                result = (
+                    self._sb.table("paper_trades")
+                    .select("*")
+                    .eq("status", "open")
+                    .eq("source", source)
+                    .order("entry_time", desc=True)
+                    .execute()
+                )
+                return result.data or []
+            except Exception:
+                pass  # Fall through to JSON
 
         return self._load_json_state().get("open_positions", [])
 
@@ -101,39 +104,62 @@ class TradeStore:
     ) -> list[dict]:
         """Get closed paper trades."""
         if self._sb:
-            result = (
-                self._sb.table("paper_trades")
-                .select("*")
-                .eq("status", "closed")
-                .eq("source", source)
-                .order("exit_time", desc=True)
-                .limit(limit)
-                .execute()
-            )
-            return result.data or []
+            try:
+                result = (
+                    self._sb.table("paper_trades")
+                    .select("*")
+                    .eq("status", "closed")
+                    .eq("source", source)
+                    .order("exit_time", desc=True)
+                    .limit(limit)
+                    .execute()
+                )
+                return result.data or []
+            except Exception:
+                pass  # Fall through to JSON
 
         return self._load_json_state().get("closed_trades", [])
 
     def get_all_trades(self, source: str = "scanner") -> dict:
-        """Get full paper trade state (for API compatibility)."""
+        """Get full paper trade state (for API compatibility).
+
+        Resilient to Supabase outages — falls back to JSON or returns safe defaults.
+        """
+        initial_capital = float(os.environ.get("INITIAL_CAPITAL", "300.0"))
+
         if self._sb:
-            open_pos = self.get_open_positions(source)
-            closed = self.get_closed_trades(source)
-            snapshot = self.get_latest_capital_snapshot(source)
+            try:
+                open_pos = self.get_open_positions(source)
+                closed = self.get_closed_trades(source)
+                snapshot = self.get_latest_capital_snapshot(source)
 
-            initial_capital = float(os.environ.get("INITIAL_CAPITAL", "300.0"))
-            # If no snapshot exists yet, capital = initial_capital (not 0)
-            capital = snapshot.get("capital", initial_capital) if snapshot else initial_capital
+                # If no snapshot exists yet, capital = initial_capital (not 0)
+                capital = snapshot.get("capital", initial_capital) if snapshot else initial_capital
 
-            return {
-                "capital": capital,
-                "initial_capital": initial_capital,
-                "open_positions": open_pos,
-                "closed_trades": closed,
-                "last_updated": snapshot.get("ts") if snapshot else None,
-            }
+                return {
+                    "capital": capital,
+                    "initial_capital": initial_capital,
+                    "open_positions": open_pos,
+                    "closed_trades": closed,
+                    "last_updated": snapshot.get("ts") if snapshot else None,
+                }
+            except Exception as e:
+                import logging
+                logging.getLogger(__name__).warning("Supabase query failed, using fallback: %s", e)
+                # Fall through to JSON fallback
 
-        return self._load_json_state()
+        state = self._load_json_state()
+        if state:
+            return state
+
+        # Ultimate fallback — safe defaults
+        return {
+            "capital": initial_capital,
+            "initial_capital": initial_capital,
+            "open_positions": [],
+            "closed_trades": [],
+            "last_updated": None,
+        }
 
     # ------------------------------------------------------------------
     # Capital Snapshots
