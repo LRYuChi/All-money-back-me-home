@@ -917,6 +917,10 @@ class SMCTrend(IStrategy):
                 daily = get_guard(DailyLossGuard)
                 if daily:
                     daily.record_loss(abs(profit_usdt))
+
+            # Persist to disk (survives restart)
+            from guards.pipeline import save_state
+            save_state()
         except Exception as e:
             logger.warning("Guard state update failed: %s", e)
 
