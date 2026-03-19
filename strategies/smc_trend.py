@@ -685,12 +685,15 @@ class SMCTrend(IStrategy):
             )
             # Per-filter breakdown on latest candle (for debugging zero-signal issues)
             logger.info(
-                "Filters %s: ote_l=%s ote_s=%s ob=%s fvg=%s adam_b=%s(%.3f) vwap=%s retrace=%s fr=%s/%s vol=%s kz=%s",
+                "Filters %s: ote_l=%s ote_s=%s bull_ob=%s bear_ob=%s bull_fvg=%s bear_fvg=%s "
+                "adam=%s(%.3f) vwap=%s retrace=%s fr=%s/%s vol=%s kz=%s",
                 pair,
                 bool(last.get("in_ote_long", False)),
                 bool(last.get("in_ote_short", False)),
-                bool(last.get("in_bullish_ob", False) or last.get("in_bearish_ob", False)),
-                bool(last.get("in_bullish_fvg", False) or last.get("in_bearish_fvg", False)),
+                bool(last.get("in_bullish_ob", False)),
+                bool(last.get("in_bearish_ob", False)),
+                bool(last.get("in_bullish_fvg", False)),
+                bool(last.get("in_bearish_fvg", False)),
                 bool(last.get("adam_bullish", False)), float(last.get("adam_slope", 0)),
                 bool(last.get("above_vwap", False)),
                 bool(last.get("valid_retrace", False)),
