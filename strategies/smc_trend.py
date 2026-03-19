@@ -521,16 +521,18 @@ class SMCTrend(IStrategy):
             & (dataframe["adam_slope"] < -0.03)
         ) | (self.use_adam_filter.value == 0)
 
-        # Confidence gate: block all trades in HIBERNATE mode
-        confidence_ok = dataframe["confidence"] > 0.2
+        # Confidence gates: Grade A (strong confluence) has lower threshold
+        # Grade A: confidence > 0.1 — strong SMC structure, trade even in DEFENSIVE
+        # Grade B: confidence > 0.35 — weaker structure needs more macro confirmation
+        confidence_ok_a = dataframe["confidence"] > 0.1
+        confidence_ok_b = dataframe["confidence"] > 0.35
 
         # ===== LONG ENTRY =====
-        # Grade A: OB+FVG confluence (strongest, always allowed)
-        # Grade B: OB or FVG alone (requires higher confidence ≥ 0.5)
+        # Grade A: OB+FVG confluence (strongest structure signal)
+        # Grade B: OB or FVG alone (requires higher confidence)
         zone_long_a = dataframe["ob_fvg_confluence_bull"].fillna(False)
         zone_long_b = (
             (dataframe["in_bullish_ob"] | dataframe["in_bullish_fvg"])
-            & (dataframe["confidence"] >= 0.5)
         )
 
         # 4H zone alignment: Grade A always, Grade B requires 4H zone
@@ -541,13 +543,12 @@ class SMCTrend(IStrategy):
                 (dataframe["htf_trend"] > 0)                    # 4H bullish
                 & (dataframe["in_ote_long"])             # OTE zone (discount)
                 & (
-                    zone_long_a                                   # Grade A: always OK
-                    | (zone_long_b & htf_zone)                   # Grade B: needs 4H zone
+                    (zone_long_a & confidence_ok_a)               # Grade A: conf > 0.1
+                    | (zone_long_b & htf_zone & confidence_ok_b)  # Grade B: conf > 0.35 + 4H zone
                 )
                 & adam_long_filter                                # Adam projection up
                 & (dataframe["fr_ok_long"])              # Funding rate OK
                 & (dataframe["vol_regime_ok"])           # Volatility normal
-                & confidence_ok                                   # Confidence > HIBERNATE
                 & killzone_filter
                 & (dataframe["volume"] > 0)
             ),
@@ -558,7 +559,6 @@ class SMCTrend(IStrategy):
         zone_short_a = dataframe["ob_fvg_confluence_bear"].fillna(False)
         zone_short_b = (
             (dataframe["in_bearish_ob"] | dataframe["in_bearish_fvg"])
-            & (dataframe["confidence"] >= 0.5)
         )
 
         dataframe.loc[
@@ -566,13 +566,12 @@ class SMCTrend(IStrategy):
                 (dataframe["htf_trend"] < 0)                    # 4H bearish
                 & (dataframe["in_ote_short"])            # Premium zone OTE
                 & (
-                    zone_short_a                                  # Grade A: always OK
-                    | (zone_short_b & htf_zone)                  # Grade B: needs 4H zone
+                    (zone_short_a & confidence_ok_a)              # Grade A: conf > 0.1
+                    | (zone_short_b & htf_zone & confidence_ok_b) # Grade B: conf > 0.35 + 4H zone
                 )
                 & adam_short_filter                               # Adam projection down
                 & (dataframe["fr_ok_short"])             # Funding rate OK
                 & (dataframe["vol_regime_ok"])           # Volatility normal
-                & confidence_ok                                   # Confidence > HIBERNATE
                 & killzone_filter
                 & (dataframe["volume"] > 0)
             ),
@@ -608,6 +607,16 @@ class SMCTrend(IStrategy):
             ),
             ["enter_short", "enter_tag"],
         ] = [1, "reverse_confidence_short"]
+
+        # === Signal diagnostics ===
+        n_long = int(dataframe.get("enter_long", 0).sum())
+        n_short = int(dataframe.get("enter_short", 0).sum())
+        conf_last = dataframe["confidence"].iloc[-1] if len(dataframe) > 0 else 0
+        htf_last = dataframe["htf_trend"].iloc[-1] if len(dataframe) > 0 else 0
+        logger.info(
+            "Signals %s: %d long, %d short | conf=%.2f htf=%d | candles=%d",
+            metadata.get("pair", "?"), n_long, n_short, conf_last, htf_last, len(dataframe)
+        )
 
         return dataframe
 
