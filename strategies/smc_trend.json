@@ -3,7 +3,7 @@
   "params": {
     "roi": {},
     "stoploss": {
-      "stoploss": -0.03
+      "stoploss": -0.05
     },
     "trailing": {
       "trailing_stop": false,

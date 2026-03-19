@@ -90,6 +90,7 @@ class SMCTrend(IStrategy):
     # --- Live macro data cache ---
     _live_confidence: float | None = None
     _live_confidence_time: datetime | None = None
+    _crypto_env: dict[str, float] = {}  # symbol -> score (0.0-1.0)
     trailing_stop = False
 
     # --- Signal audit tracking ---
@@ -206,6 +207,7 @@ class SMCTrend(IStrategy):
             crypto_engine = CryptoEnvironmentEngine(coinglass_api_key=cg_key)
             for sym in ["BTC", "ETH", "SOL"]:
                 cr = crypto_engine.calculate(sym)
+                self._crypto_env[sym] = cr["score"]
                 logger.info(
                     "Crypto Env %s: %.2f (%s) | Deriv=%.2f Chain=%.2f Sent=%.2f | %s",
                     sym, cr["score"], cr["regime"],
@@ -653,6 +655,22 @@ class SMCTrend(IStrategy):
                 logger.warning("CIRCUIT BREAKER: Confidence %.2f (HIBERNATE) — blocking long entry", confidence)
                 if _STATE_AVAILABLE:
                     BotStateStore.increment("circuit_breaker_activations")
+                return False
+
+        # === Crypto Environment Filter ===
+        # Block entries when crypto environment is HOSTILE for this token
+        if self._crypto_env and self.config.get("runmode", {}).value in ("live", "dry_run"):
+            # Extract base symbol from pair (e.g., "BTC/USDT:USDT" → "BTC")
+            base_sym = pair.split("/")[0] if "/" in pair else pair[:3]
+            env_score = self._crypto_env.get(base_sym, 0.5)
+            if env_score < 0.25:
+                logger.warning(
+                    "CRYPTO ENV BLOCK: %s env=%.2f (HOSTILE) — blocking %s entry",
+                    base_sym, env_score, side,
+                )
+                if _TG_AVAILABLE:
+                    from market_monitor.telegram_zh import send_message
+                    send_message(f"🔗 *Crypto Env 攔截*\n{pair} {side}\n{base_sym} 環境: {env_score:.2f} (不利)")
                 return False
 
         # === Guard Pipeline check (live/dry_run only) ===
