@@ -376,6 +376,15 @@ class SMCTrend(IStrategy):
             # Compute running trend from latest BOS
             dataframe["htf_trend"] = _compute_trend(dataframe, "htf_bos", "htf_choch")
 
+            # Diagnostic: how many HTF signals exist?
+            n_htf_bos = dataframe["htf_bos"].notna().sum()
+            n_htf_choch = dataframe["htf_choch"].notna().sum()
+            htf_trend_last = dataframe["htf_trend"].iloc[-1] if len(dataframe) > 0 else 0
+            logger.info(
+                "HTF %s: %d BOS, %d CHoCH signals | trend_now=%d | 4h_candles=%d",
+                pair, n_htf_bos, n_htf_choch, htf_trend_last, len(htf_df)
+            )
+
             # 4H zone alignment: is 1H price within a 4H OB or FVG zone?
             dataframe["in_htf_ob_zone"] = (
                 (dataframe["close"] >= dataframe["htf_ob_bottom"])
