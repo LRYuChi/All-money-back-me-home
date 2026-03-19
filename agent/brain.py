@@ -55,7 +55,7 @@ def call_claude(
     system_prompt: str,
     user_message: str,
     tools: list[dict] | None = None,
-    model: str = "claude-haiku-4-5-20251001",
+    model: str = "claude-sonnet-4-6",
 ) -> dict:
     """Call Claude API with tool use support.
 
@@ -180,7 +180,7 @@ class AgentBrain:
 如果一切正常，只需簡短確認即可。"""
 
         system = load_prompt("risk_manager")
-        response = call_claude(system, prompt, tools=self.tools, model="claude-haiku-4-5-20251001")
+        response = call_claude(system, prompt, tools=self.tools, model="claude-sonnet-4-6")
 
         if "error" not in response:
             self._process_response(response, context={
