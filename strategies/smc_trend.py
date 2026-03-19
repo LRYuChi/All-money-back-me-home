@@ -340,10 +340,12 @@ class SMCTrend(IStrategy):
             (dataframe["retrace_pct"] >= 0.382) & (dataframe["retrace_pct"] <= 0.786)
         )
 
-        # VWAP — volume-weighted average price (institutional fair value)
+        # VWAP — rolling 50-candle volume-weighted average price (~12.5h on 15m)
         typical_price = (dataframe["high"] + dataframe["low"] + dataframe["close"]) / 3
-        cum_vol = dataframe["volume"].cumsum().replace(0, np.nan)
-        dataframe["vwap"] = (typical_price * dataframe["volume"]).cumsum() / cum_vol
+        _vwap_window = 50
+        _tp_vol = (typical_price * dataframe["volume"]).rolling(_vwap_window).sum()
+        _vol_sum = dataframe["volume"].rolling(_vwap_window).sum().replace(0, np.nan)
+        dataframe["vwap"] = _tp_vol / _vol_sum
         dataframe["above_vwap"] = dataframe["close"] > dataframe["vwap"]
 
         # =============================================
@@ -669,15 +671,77 @@ class SMCTrend(IStrategy):
             ["enter_short", "enter_tag"],
         ] = [1, "reverse_confidence_short"]
 
-        # === Signal diagnostics ===
+        # === Signal diagnostics with per-filter breakdown ===
         n_long = int(dataframe.get("enter_long", 0).sum())
         n_short = int(dataframe.get("enter_short", 0).sum())
-        conf_last = dataframe["confidence"].iloc[-1] if len(dataframe) > 0 else 0
-        htf_last = dataframe["htf_trend"].iloc[-1] if len(dataframe) > 0 else 0
-        logger.info(
-            "Signals %s: %d long, %d short | conf=%.2f htf=%d | candles=%d",
-            metadata.get("pair", "?"), n_long, n_short, conf_last, htf_last, len(dataframe)
-        )
+
+        if len(dataframe) > 0:
+            last = dataframe.iloc[-1]
+            pair = metadata.get("pair", "?")
+            logger.info(
+                "Signals %s: %d long, %d short | conf=%.2f htf=%d | candles=%d",
+                pair, n_long, n_short,
+                last.get("confidence", 0), last.get("htf_trend", 0), len(dataframe)
+            )
+            # Per-filter breakdown on latest candle (for debugging zero-signal issues)
+            logger.info(
+                "Filters %s: ote_l=%s ote_s=%s ob=%s fvg=%s adam_b=%s(%.3f) vwap=%s retrace=%s fr=%s/%s vol=%s kz=%s",
+                pair,
+                bool(last.get("in_ote_long", False)),
+                bool(last.get("in_ote_short", False)),
+                bool(last.get("in_bullish_ob", False) or last.get("in_bearish_ob", False)),
+                bool(last.get("in_bullish_fvg", False) or last.get("in_bearish_fvg", False)),
+                bool(last.get("adam_bullish", False)), float(last.get("adam_slope", 0)),
+                bool(last.get("above_vwap", False)),
+                bool(last.get("valid_retrace", False)),
+                bool(last.get("fr_ok_long", True)), bool(last.get("fr_ok_short", True)),
+                bool(last.get("vol_regime_ok", True)),
+                bool(last.get("in_killzone", False)),
+            )
+
+        # === Anti-fragile degradation ===
+        # If no signals for 24 consecutive cycles (~6 hours on 15m),
+        # relax non-core filters and re-evaluate
+        self._no_signal_count = getattr(self, "_no_signal_count", 0)
+        if n_long + n_short == 0:
+            self._no_signal_count += 1
+        else:
+            self._no_signal_count = 0
+
+        if self._no_signal_count >= 24 and len(dataframe) > 0:
+            logger.warning(
+                "Anti-fragile: %d empty cycles — relaxing VWAP/retrace/killzone filters",
+                self._no_signal_count
+            )
+            # Re-evaluate with relaxed filters (core: HTF + OTE + OB/FVG + confidence only)
+            dataframe.loc[
+                (
+                    (dataframe["htf_trend"] > 0)
+                    & (dataframe["in_ote_long"])
+                    & (zone_long_a | zone_long_b)
+                    & confidence_ok_a
+                    & (dataframe["fr_ok_long"])
+                    & (dataframe["vol_regime_ok"])
+                    & (dataframe["volume"] > 0)
+                ),
+                "enter_long",
+            ] = 1
+            dataframe.loc[
+                (
+                    (dataframe["htf_trend"] < 0)
+                    & (dataframe["in_ote_short"])
+                    & (zone_short_a | zone_short_b)
+                    & confidence_ok_a
+                    & (dataframe["fr_ok_short"])
+                    & (dataframe["vol_regime_ok"])
+                    & (dataframe["volume"] > 0)
+                ),
+                "enter_short",
+            ] = 1
+            n_long = int(dataframe.get("enter_long", 0).sum())
+            n_short = int(dataframe.get("enter_short", 0).sum())
+            if n_long + n_short > 0:
+                logger.info("Anti-fragile recovered: %d long, %d short signals", n_long, n_short)
 
         return dataframe
 
@@ -1189,6 +1253,20 @@ class SMCTrend(IStrategy):
             scale *= 0.8
 
         adjusted = proposed_stake * scale
+
+        # Anti-fragile risk cap: max 2% of account at risk per trade
+        # This is the absolute ceiling regardless of confidence/anti-martingale
+        try:
+            if self.wallets:
+                account_balance = self.wallets.get_total("USDT")
+                atr = last.get("atr", 0)
+                if atr > 0 and current_rate > 0:
+                    atr_sl_pct = (atr * self.atr_sl_mult.value) / current_rate
+                    if atr_sl_pct > 0:
+                        max_risk_stake = (account_balance * 0.02) / atr_sl_pct
+                        adjusted = min(adjusted, max_risk_stake)
+        except Exception:
+            pass
 
         if min_stake is not None:
             adjusted = max(adjusted, min_stake)
