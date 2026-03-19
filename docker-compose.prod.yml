@@ -86,7 +86,7 @@ services:
       - TELEGRAM_TOKEN=${TELEGRAM_TOKEN}
       - TELEGRAM_CHAT_ID=${TELEGRAM_CHAT_ID}
     ports:
-      - "8080:8080"
+      - "127.0.0.1:8080:8080"  # Localhost only — not exposed to internet
     restart: unless-stopped
     logging:
       driver: json-file
