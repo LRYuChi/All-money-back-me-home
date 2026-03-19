@@ -1,6 +1,5 @@
 """Tests for the Crypto Environment Engine."""
 
-import pytest
 
 from market_monitor.crypto_environment import CryptoEnvironmentEngine
 

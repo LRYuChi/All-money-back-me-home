@@ -14,6 +14,8 @@ from guards.guards import (
     ConsecutiveLossGuard,
     CooldownGuard,
     DailyLossGuard,
+    DrawdownGuard,
+    LiquidationGuard,
     MaxLeverageGuard,
     MaxPositionGuard,
     TotalExposureGuard,
@@ -39,7 +41,9 @@ def create_default_pipeline() -> GuardPipeline:
         _default_pipeline = GuardPipeline([
             MaxPositionGuard(max_pct=30),
             MaxLeverageGuard(max_leverage=5),
+            LiquidationGuard(min_distance_mult=2.0),
             TotalExposureGuard(max_pct=80),
+            DrawdownGuard(max_drawdown_pct=10),
             CooldownGuard(minutes=15),
             DailyLossGuard(max_pct=5),
             ConsecutiveLossGuard(max_streak=5, pause_hours=24),
@@ -72,6 +76,8 @@ def save_state() -> None:
             state["consec_paused_until"] = g._paused_until
         elif isinstance(g, CooldownGuard):
             state["cooldown_last_trade"] = g._last_trade
+        elif isinstance(g, DrawdownGuard):
+            state["drawdown_peak_equity"] = g._peak_equity
 
     try:
         _STATE_DIR.mkdir(parents=True, exist_ok=True)
@@ -104,6 +110,8 @@ def _load_state() -> None:
             g._paused_until = state.get("consec_paused_until", 0)
         elif isinstance(g, CooldownGuard):
             g._last_trade = state.get("cooldown_last_trade", {})
+        elif isinstance(g, DrawdownGuard):
+            g._peak_equity = state.get("drawdown_peak_equity", 0.0)
 
     logger.info("Guard state loaded: daily_loss=%.2f, streak=%d",
                 state.get("daily_loss", 0), state.get("consec_streak", 0))
@@ -123,4 +131,7 @@ def get_state_summary() -> dict:
             result["paused_until"] = g._paused_until
         elif isinstance(g, CooldownGuard):
             result["cooldown_symbols"] = len(g._last_trade)
+        elif isinstance(g, DrawdownGuard):
+            result["drawdown_peak_equity"] = g._peak_equity
+            result["drawdown_max_pct"] = g.max_drawdown_pct
     return result

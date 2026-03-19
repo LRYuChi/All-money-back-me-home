@@ -1,6 +1,6 @@
 """Tests for TechnicalAnalysisService indicator computation."""
 
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 
 import numpy as np
 import pandas as pd

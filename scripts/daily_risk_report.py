@@ -90,8 +90,8 @@ def main():
         report_lines.append(f"  策略: {config.get('strategy', '?')}")
         report_lines.append(f"  止損: {config.get('stoploss', '?')}")
         report_lines.append(f"  最大持倉: {config.get('max_open_trades', '?')}")
-    report_lines.append(f"  風控: MaxDrawdown 15% + StoplossGuard 4次/24h")
-    report_lines.append(f"  熔斷: BTC ±10% / ATR 3x spike / 信心 <0.15")
+    report_lines.append("  風控: MaxDrawdown 15% + StoplossGuard 4次/24h")
+    report_lines.append("  熔斷: BTC ±10% / ATR 3x spike / 信心 <0.15")
 
     # 3. Data Source Health
     report_lines.append("")

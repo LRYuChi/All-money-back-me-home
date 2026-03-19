@@ -714,6 +714,14 @@ class SMCTrend(IStrategy):
                     open_positions=open_pos,
                 )
                 pipeline = create_default_pipeline()
+
+                # Update DrawdownGuard equity tracking before running checks
+                from guards.guards import DrawdownGuard
+                for g in pipeline.guards:
+                    if isinstance(g, DrawdownGuard):
+                        g.update_equity(ctx.account_balance)
+                        break
+
                 rejection = pipeline.run(ctx)  # Synchronous — no async fragility
                 if rejection:
                     logger.warning("Guard rejected %s %s: %s", pair, side, rejection)

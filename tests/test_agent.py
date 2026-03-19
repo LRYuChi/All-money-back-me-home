@@ -3,9 +3,8 @@
 import os
 import tempfile
 
-import pytest
 
-from agent.tools import validate_tool_call, get_tool_definitions, ToolExecutor, _last_tool_call
+from agent.tools import validate_tool_call, get_tool_definitions, _last_tool_call
 from agent.memory import AgentMemory
 
 

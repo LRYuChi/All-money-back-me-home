@@ -15,7 +15,7 @@ Crypto futures auto-trading system + multi-market indicator monitoring.
 ```
 OKX Exchange ←→ Freqtrade (CCXT) ←→ Strategies ←→ Guard Pipeline
                                          ↑
-                              Custom Indicators (RSRS, AdaptiveRSI)
+                              Custom Indicators (Adam Projection, Squeeze)
                                          ↑
                               Market Monitor (TW/US stocks)
                                          ↑
@@ -50,10 +50,10 @@ pip install -e ".[dev]"
 freqtrade test-pairlist -c config/freqtrade/config_dry.json
 
 # Run backtest
-freqtrade backtesting --strategy AdaptiveRSI -c config/freqtrade/config_dry.json
+freqtrade backtesting --strategy SMCTrend -c config/freqtrade/config_dry.json
 
 # Start dry run (paper trading)
-freqtrade trade --strategy AdaptiveRSI -c config/freqtrade/config_dry.json
+freqtrade trade --strategy SMCTrend -c config/freqtrade/config_dry.json
 ```
 
 ## Project Structure

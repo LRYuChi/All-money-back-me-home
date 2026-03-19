@@ -1,14 +1,8 @@
 """Tests for the confidence engine — validates regime determination and safety mechanisms."""
 
-import pytest
-import numpy as np
 
 from market_monitor.confidence_engine import (
     GlobalConfidenceEngine,
-    MacroSandbox,
-    SentimentSandbox,
-    CapitalFlowSandbox,
-    HavenInflationSandbox,
     EventOverlay,
     z_score,
     z_to_score,

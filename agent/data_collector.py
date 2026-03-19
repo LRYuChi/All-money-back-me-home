@@ -154,8 +154,8 @@ def get_freqtrade_status() -> dict:
 def get_guard_state() -> dict:
     """取得 Guard Pipeline 狀態。"""
     try:
-        from guards.pipeline import create_default_pipeline, get_guard
-        from guards.guards import DailyLossGuard, ConsecutiveLossGuard, CooldownGuard
+        from guards.pipeline import get_guard
+        from guards.guards import DailyLossGuard, ConsecutiveLossGuard
 
         daily = get_guard(DailyLossGuard)
         consec = get_guard(ConsecutiveLossGuard)

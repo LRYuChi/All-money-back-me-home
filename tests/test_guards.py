@@ -1,13 +1,14 @@
 """Tests for the guard pipeline."""
 
 
-import pytest
 
 from guards.base import GuardContext, GuardPipeline
 from guards.guards import (
     ConsecutiveLossGuard,
     CooldownGuard,
     DailyLossGuard,
+    DrawdownGuard,
+    LiquidationGuard,
     MaxLeverageGuard,
     MaxPositionGuard,
     TotalExposureGuard,
@@ -147,3 +148,70 @@ def test_pipeline_first_rejection():
     result = pipeline.run(ctx)
     assert result is not None
     assert "MaxLeverageGuard" in result
+
+
+# --- DrawdownGuard ---
+
+def test_drawdown_pass_no_drawdown():
+    guard = DrawdownGuard(max_drawdown_pct=10)
+    guard.update_equity(1000)
+    ctx = make_ctx(account_balance=950)  # 5% drawdown < 10%
+    assert guard.check(ctx) is None
+
+
+def test_drawdown_reject_exceeded():
+    guard = DrawdownGuard(max_drawdown_pct=10)
+    guard.update_equity(1000)
+    ctx = make_ctx(account_balance=880)  # 12% drawdown > 10%
+    result = guard.check(ctx)
+    assert result is not None
+    assert "drawdown" in result.lower()
+
+
+def test_drawdown_peak_updates():
+    guard = DrawdownGuard(max_drawdown_pct=10)
+    guard.update_equity(1000)
+    guard.update_equity(1100)  # New peak
+    ctx = make_ctx(account_balance=1000)  # 9.1% from 1100 peak
+    assert guard.check(ctx) is None  # Under 10%
+
+    ctx2 = make_ctx(account_balance=980)  # 10.9% from 1100 peak
+    result = guard.check(ctx2)
+    assert result is not None
+
+
+def test_drawdown_initializes_from_balance():
+    guard = DrawdownGuard(max_drawdown_pct=10)
+    # No update_equity called — should initialize from ctx.account_balance
+    ctx = make_ctx(account_balance=1000)
+    assert guard.check(ctx) is None  # 0% drawdown
+
+
+# --- LiquidationGuard ---
+
+def test_liquidation_pass_low_leverage():
+    guard = LiquidationGuard(min_distance_mult=2.0)
+    ctx = make_ctx(leverage=1.0)  # No leverage = no check
+    assert guard.check(ctx) is None
+
+
+def test_liquidation_pass_safe_leverage():
+    guard = LiquidationGuard(min_distance_mult=2.0)
+    ctx = make_ctx(leverage=2.0)  # liq_dist ≈ 49.6% >> 2×5% = 10%
+    assert guard.check(ctx) is None
+
+
+def test_liquidation_reject_high_leverage():
+    guard = LiquidationGuard(min_distance_mult=2.0)
+    # At 10x: liq_dist = 1/10 - 0.004 = 9.6%, stoploss = 5%, 2×5% = 10% > 9.6%
+    ctx = make_ctx(leverage=10.0)
+    result = guard.check(ctx)
+    assert result is not None
+    assert "liquidation" in result.lower()
+
+
+def test_liquidation_reject_extreme_leverage():
+    guard = LiquidationGuard(min_distance_mult=2.0)
+    ctx = make_ctx(leverage=20.0)  # liq_dist = 5% - 0.4% = 4.6%, way under 10%
+    result = guard.check(ctx)
+    assert result is not None

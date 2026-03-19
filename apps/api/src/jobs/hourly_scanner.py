@@ -44,25 +44,18 @@ except ImportError:
 import ccxt
 import pandas as pd
 
-from strategy.enums import MarketState, SignalDirection, StrategyName
+from strategy.enums import SignalDirection
 from strategy.layer1_market_structure.swing_detector import (
     detect_swing_highs,
     detect_swing_lows,
 )
 from strategy.layer1_market_structure.structure_analyzer import (
     classify_market_state,
-    detect_choch,
 )
 from strategy.layer2_signal_engine.trend_indicators import (
-    compute_ema_stack,
-    compute_adx,
     evaluate_trend_signals,
 )
 from strategy.layer2_signal_engine.volatility_indicators import (
-    compute_atr,
-    compute_bollinger_bands,
-    compute_bb_squeeze,
-    detect_squeeze_release,
     evaluate_volatility_signals,
 )
 from strategy.layer3_strategies.strategy_b_squeeze import BBSqueezeStrategy

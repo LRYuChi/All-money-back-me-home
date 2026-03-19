@@ -5,6 +5,7 @@ Usage: cd apps/api && python -m src.jobs.run_backtest [--symbol BTC/USDT] [--tim
 
 import argparse
 import json
+import os
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
@@ -87,7 +88,7 @@ def print_result(result, title: str = "回測結果") -> None:
     if result.trades:
         wins = [t for t in result.trades if t["pnl_usd"] > 0]
         losses = [t for t in result.trades if t["pnl_usd"] <= 0]
-        print(f"\n  --- 交易明細 ---")
+        print("\n  --- 交易明細 ---")
         print(f"  獲利筆數: {len(wins)} | 虧損筆數: {len(losses)}")
         if wins:
             avg_win = sum(t["pnl_pct"] for t in wins) / len(wins)

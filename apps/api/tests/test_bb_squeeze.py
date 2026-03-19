@@ -10,7 +10,6 @@ from datetime import datetime, timedelta, timezone
 
 import numpy as np
 import pandas as pd
-import pytest
 
 from strategy.enums import SignalDirection, StrategyName
 from strategy.layer2_signal_engine.volatility_indicators import (

@@ -143,3 +143,73 @@ class TotalExposureGuard(Guard):
                 f"{self.max_pct}% of account ({max_allowed:.2f})"
             )
         return None
+
+
+class DrawdownGuard(Guard):
+    """Reject new entries when portfolio drawdown from peak exceeds threshold.
+
+    Tracks equity peak and blocks trading when current equity drops below
+    (1 - max_drawdown_pct/100) * peak. Resets peak on new highs.
+    """
+
+    def __init__(self, max_drawdown_pct: float = 10.0):
+        self.max_drawdown_pct = max_drawdown_pct
+        self._peak_equity: float = 0.0
+
+    def update_equity(self, equity: float) -> None:
+        """Call on every bot loop to track equity peak."""
+        if equity > self._peak_equity:
+            self._peak_equity = equity
+
+    def check(self, ctx: GuardContext) -> Optional[str]:
+        # Initialize peak from account balance if not set
+        if self._peak_equity <= 0:
+            self._peak_equity = ctx.account_balance
+
+        if self._peak_equity <= 0:
+            return None
+
+        drawdown_pct = (1.0 - ctx.account_balance / self._peak_equity) * 100
+        if drawdown_pct >= self.max_drawdown_pct:
+            return (
+                f"Portfolio drawdown {drawdown_pct:.1f}% exceeds "
+                f"{self.max_drawdown_pct}% limit "
+                f"(peak: {self._peak_equity:.2f}, current: {ctx.account_balance:.2f})"
+            )
+        return None
+
+
+class LiquidationGuard(Guard):
+    """Reject entries where liquidation price is too close to entry.
+
+    Ensures liquidation distance is at least `min_distance_mult` times
+    the stop-loss distance, providing a safety buffer against flash crashes.
+    """
+
+    def __init__(self, min_distance_mult: float = 2.0, maintenance_margin_rate: float = 0.004):
+        self.min_distance_mult = min_distance_mult
+        self.maintenance_margin_rate = maintenance_margin_rate
+
+    def check(self, ctx: GuardContext) -> Optional[str]:
+        if ctx.leverage <= 1.0:
+            return None
+
+        # Estimate liquidation distance as fraction of entry price
+        # liq_distance ≈ (1 / leverage) - maintenance_margin_rate
+        liq_distance_pct = (1.0 / ctx.leverage) - self.maintenance_margin_rate
+        if liq_distance_pct <= 0:
+            return (
+                f"Leverage {ctx.leverage}x too high: liquidation distance is negative "
+                f"(maintenance margin rate: {self.maintenance_margin_rate})"
+            )
+
+        # Typical stop-loss is 3-5% — use a conservative 5% as reference
+        stoploss_pct = getattr(ctx, "stoploss_pct", 0.05)
+
+        if liq_distance_pct < stoploss_pct * self.min_distance_mult:
+            return (
+                f"Liquidation distance {liq_distance_pct:.1%} is less than "
+                f"{self.min_distance_mult}x stop-loss ({stoploss_pct:.1%}). "
+                f"Reduce leverage from {ctx.leverage}x"
+            )
+        return None

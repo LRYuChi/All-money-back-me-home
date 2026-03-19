@@ -87,11 +87,16 @@ def _get_confidence() -> dict:
 
     avg = sum(sandboxes.values()) / len(sandboxes)
     score = round(avg, 2)
-    if score >= 0.7: regime = "AGGRESSIVE"
-    elif score >= 0.5: regime = "NORMAL"
-    elif score >= 0.35: regime = "CAUTIOUS"
-    elif score >= 0.2: regime = "DEFENSIVE"
-    else: regime = "HIBERNATE"
+    if score >= 0.7:
+        regime = "AGGRESSIVE"
+    elif score >= 0.5:
+        regime = "NORMAL"
+    elif score >= 0.35:
+        regime = "CAUTIOUS"
+    elif score >= 0.2:
+        regime = "DEFENSIVE"
+    else:
+        regime = "HIBERNATE"
 
     guidance = {
         "position_pct": 100 if score >= 0.7 else 75 if score >= 0.5 else 50 if score >= 0.35 else 25,
