@@ -314,19 +314,23 @@ def run_rule_based_analysis() -> dict:
         fg = factors.get("fear_greed", "?")
         btc_env = factors.get("btc_env", "?")
 
-        msg = f"""🤖 *Agent 分析報告* (規則模式)
-━━━━━━━━━━━━━━━━
-機制: {regime['regime']} ({regime['confidence']:.0%})
-建議: {guidance.get('description', '')}
-風險: {guidance.get('risk_level', '?')}
-槓桿上限: {guidance.get('leverage_cap', '?')}x
+        conf_score = conf.get('score', '?')
+        conf_regime = conf.get('regime', '?')
+        pos_count = len(positions.get('positions', []))
 
-信心: {conf.get('score', '?')} ({conf.get('regime', '?')})
-F&G: {fg}
-BTC Env: {btc_env}
-持倉: {len(positions.get('positions', []))} 個
-
-決策ID: {decision_id}"""
+        msg = (
+            f"🤖 Agent 分析報告 (規則模式)\n"
+            f"━━━━━━━━━━━━━━━━\n"
+            f"機制: {regime['regime']} ({regime['confidence']:.0%})\n"
+            f"建議: {guidance.get('description', '')}\n"
+            f"風險: {guidance.get('risk_level', '?')}\n"
+            f"槓桿上限: {guidance.get('leverage_cap', '?')}x\n\n"
+            f"信心: {conf_score} ({conf_regime})\n"
+            f"F&G: {fg}\n"
+            f"BTC Env: {btc_env}\n"
+            f"持倉: {pos_count} 個\n\n"
+            f"決策ID: {decision_id}"
+        )
 
         send_message(msg)
     except Exception as e:
