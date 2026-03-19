@@ -364,7 +364,8 @@ def _get_crypto_environment() -> dict:
             if p not in sys.path:
                 sys.path.insert(0, p)
         from market_monitor.crypto_environment import CryptoEnvironmentEngine
-        engine = CryptoEnvironmentEngine()
+        cg_key = os.environ.get("COINGLASS_API_KEY")
+        engine = CryptoEnvironmentEngine(coinglass_api_key=cg_key)
         results = {}
         for sym in ["BTC", "ETH", "SOL"]:
             r = engine.calculate(sym)

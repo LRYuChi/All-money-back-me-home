@@ -170,7 +170,8 @@ class SMCTrend(IStrategy):
         # === Crypto Environment Engine (observation mode) ===
         try:
             from market_monitor.crypto_environment import CryptoEnvironmentEngine
-            crypto_engine = CryptoEnvironmentEngine()
+            cg_key = os.environ.get("COINGLASS_API_KEY")
+            crypto_engine = CryptoEnvironmentEngine(coinglass_api_key=cg_key)
             for sym in ["BTC", "ETH", "SOL"]:
                 cr = crypto_engine.calculate(sym)
                 logger.info(

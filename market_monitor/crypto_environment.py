@@ -65,9 +65,23 @@ class CryptoEnvironmentEngine:
         "sentiment": 0.30,
     }
 
+    def __init__(self, coinglass_api_key: str | None = None):
+        self._cg_client = None
+        if coinglass_api_key:
+            try:
+                from market_monitor.coinglass import CoinGlassClient
+                self._cg_client = CoinGlassClient(coinglass_api_key)
+                logger.info("CoinGlass API enabled for enhanced derivatives data")
+            except Exception as e:
+                logger.warning("CoinGlass init failed: %s", e)
+
     def calculate(self, symbol: str = "BTC") -> dict:
         """Calculate crypto environment score for a symbol."""
-        deriv = self._derivatives_sandbox(symbol)
+        # Use CoinGlass for derivatives if available, else fallback to free APIs
+        if self._cg_client:
+            deriv = self._derivatives_sandbox_coinglass(symbol)
+        else:
+            deriv = self._derivatives_sandbox(symbol)
         onchain = self._onchain_sandbox()
         sentiment = self._sentiment_sandbox(symbol)
 
@@ -332,10 +346,36 @@ class CryptoEnvironmentEngine:
 
         return {"score": score, "value": val, "signal": signal}
 
+    # ==========================================================
+    # ENHANCED: CoinGlass Derivatives Sandbox
+    # ==========================================================
+
+    def _derivatives_sandbox_coinglass(self, symbol: str) -> dict:
+        """Enhanced derivatives sandbox using CoinGlass API.
+
+        Replaces basic Binance-only data with OI-weighted cross-exchange data.
+        Falls back to free API sandbox if CoinGlass call fails.
+        """
+        try:
+            result = self._cg_client.calculate_derivatives_score(symbol)
+            if result and result.get("score") is not None:
+                logger.info("CoinGlass derivatives for %s: %.2f", symbol, result["score"])
+                return {
+                    "score": result["score"],
+                    "factors": result["factors"],
+                }
+        except Exception as e:
+            logger.warning("CoinGlass derivatives failed for %s: %s, falling back", symbol, e)
+
+        # Fallback to free APIs
+        return self._derivatives_sandbox(symbol)
+
 
 # CLI
 def main():
-    engine = CryptoEnvironmentEngine()
+    import os
+    cg_key = os.environ.get("COINGLASS_API_KEY")
+    engine = CryptoEnvironmentEngine(coinglass_api_key=cg_key)
     for sym in ["BTC", "ETH", "SOL"]:
         result = engine.calculate(sym)
         print(f"\n{sym}: {result['score']:.2f} ({result['regime']})")
