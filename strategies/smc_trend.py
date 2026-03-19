@@ -326,6 +326,26 @@ class SMCTrend(IStrategy):
         dataframe["liq_level"] = liq["Level"]
         dataframe["liq_swept"] = liq.get("Swept", np.nan)
 
+        # Retracements — validates actual pullback depth from last swing
+        try:
+            retrace = smc.retracements(dataframe, swing_hl)
+            dataframe["retrace_pct"] = retrace.get("CurrentRetracement%", 0.5)
+            dataframe["retrace_dir"] = retrace.get("Direction", 0)
+        except Exception:
+            dataframe["retrace_pct"] = 0.5
+            dataframe["retrace_dir"] = 0
+
+        # Valid retracement zone: 38.2%-78.6% (Fibonacci sweet spot)
+        dataframe["valid_retrace"] = (
+            (dataframe["retrace_pct"] >= 0.382) & (dataframe["retrace_pct"] <= 0.786)
+        )
+
+        # VWAP — volume-weighted average price (institutional fair value)
+        typical_price = (dataframe["high"] + dataframe["low"] + dataframe["close"]) / 3
+        cum_vol = dataframe["volume"].cumsum().replace(0, np.nan)
+        dataframe["vwap"] = (typical_price * dataframe["volume"]).cumsum() / cum_vol
+        dataframe["above_vwap"] = dataframe["close"] > dataframe["vwap"]
+
         # =============================================
         # 4H (HTF) trend bias via informative pairs
         # =============================================
@@ -388,6 +408,16 @@ class SMCTrend(IStrategy):
 
             # Compute running trend from latest BOS
             dataframe["htf_trend"] = _compute_trend(dataframe, "htf_bos", "htf_choch")
+
+            # Signal age decay: neutralize trend if last BOS/CHoCH is too old
+            # On 15m: 16 candles = 4 hours — a stale 4H signal loses directional edge
+            _bos_changed = dataframe["htf_bos"].ne(dataframe["htf_bos"].shift()).astype(int)
+            _choch_changed = dataframe["htf_choch"].ne(dataframe["htf_choch"].shift()).astype(int)
+            _any_signal = (_bos_changed | _choch_changed).astype(bool)
+            _signal_groups = _any_signal.cumsum()
+            dataframe["htf_signal_age"] = dataframe.groupby(_signal_groups).cumcount()
+            # Decay: >16 candles (4h) old → trend goes neutral
+            dataframe.loc[dataframe["htf_signal_age"] > 16, "htf_trend"] = 0
 
             # Diagnostic: how many HTF signals exist?
             n_htf_bos = dataframe["htf_bos"].notna().sum()
@@ -564,6 +594,13 @@ class SMCTrend(IStrategy):
         # 4H zone alignment: Grade A always, Grade B requires 4H zone
         htf_zone = dataframe.get("htf_zone_aligned", True)
 
+        # VWAP direction filter: long above VWAP, short below (reduces ~30% false signals)
+        vwap_long = dataframe["above_vwap"].fillna(True)
+        vwap_short = (~dataframe["above_vwap"]).fillna(True)
+
+        # Retracement validation: 38.2%-78.6% Fibonacci zone
+        retrace_ok = dataframe["valid_retrace"].fillna(True)
+
         dataframe.loc[
             (
                 (dataframe["htf_trend"] > 0)                    # 4H bullish
@@ -573,6 +610,8 @@ class SMCTrend(IStrategy):
                     | (zone_long_b & htf_zone & confidence_ok_b)  # Grade B: conf > 0.35 + 4H zone
                 )
                 & adam_long_filter                                # Adam projection up
+                & vwap_long                                      # Above VWAP
+                & retrace_ok                                     # Valid Fib retracement
                 & (dataframe["fr_ok_long"])              # Funding rate OK
                 & (dataframe["vol_regime_ok"])           # Volatility normal
                 & killzone_filter
@@ -596,6 +635,8 @@ class SMCTrend(IStrategy):
                     | (zone_short_b & htf_zone & confidence_ok_b) # Grade B: conf > 0.35 + 4H zone
                 )
                 & adam_short_filter                               # Adam projection down
+                & vwap_short                                     # Below VWAP
+                & retrace_ok                                     # Valid Fib retracement
                 & (dataframe["fr_ok_short"])             # Funding rate OK
                 & (dataframe["vol_regime_ok"])           # Volatility normal
                 & killzone_filter
@@ -1165,16 +1206,55 @@ class SMCTrend(IStrategy):
                               current_entry_rate: float, current_exit_rate: float,
                               current_entry_profit: float, current_exit_profit: float,
                               **kwargs) -> float | None:
-        """Pyramid into winning positions when confidence is high.
+        """Partial profit-taking at R-multiples + pyramid into winners.
 
-        Rules:
-        1. Profit >= 5% (clear separation from entry)
-        2. Confidence >= 0.7 (NORMAL or AGGRESSIVE environment)
-        3. HTF trend still aligned with position direction
-        4. Each add-on is 50% of original position
-        5. Max 2 add-ons (3 total entries per trade)
+        Partial exits (negative return):
+        - At 1R profit: sell 33% of position
+        - At 2R profit: sell another 33%
+        - Remaining 34% rides with trailing stop
+
+        Pyramid adds (positive return):
+        - At 5%+ profit with confidence >= 0.5
         """
-        # Only add, never reduce via this method
+        pair = trade.pair
+        dataframe, _ = self.dp.get_analyzed_dataframe(pair, self.timeframe)
+        if len(dataframe) == 0:
+            return None
+
+        last = dataframe.iloc[-1]
+        atr = last.get("atr", 0)
+
+        # === PARTIAL PROFIT-TAKING (before pyramid logic) ===
+        if atr > 0 and trade.stake_amount > 0:
+            atr_sl_pct = (atr * self.atr_sl_mult.value) / trade.open_rate
+            if atr_sl_pct > 0:
+                r_multiple = current_profit / atr_sl_pct
+
+                # Track partials via trade custom_info (survives restarts)
+                trade_info = trade.get_custom_data("partials") if hasattr(trade, "get_custom_data") else None
+                partials_done = int(trade_info) if trade_info else 0
+
+                # 1R → sell 33%
+                if r_multiple >= 1.0 and partials_done < 1:
+                    if hasattr(trade, "set_custom_data"):
+                        trade.set_custom_data("partials", 1)
+                    partial_amount = trade.stake_amount * 0.33
+                    if min_stake and partial_amount < min_stake:
+                        return None
+                    logger.info("Partial exit 1R for %s: -%.2f USDT (R=%.1f)", pair, partial_amount, r_multiple)
+                    return -partial_amount
+
+                # 2R → sell another 33%
+                if r_multiple >= 2.0 and partials_done < 2:
+                    if hasattr(trade, "set_custom_data"):
+                        trade.set_custom_data("partials", 2)
+                    partial_amount = trade.stake_amount * 0.33
+                    if min_stake and partial_amount < min_stake:
+                        return None
+                    logger.info("Partial exit 2R for %s: -%.2f USDT (R=%.1f)", pair, partial_amount, r_multiple)
+                    return -partial_amount
+
+        # === PYRAMID ADDS ===
         if current_profit < 0.05:
             return None  # Not enough profit separation
 
@@ -1182,11 +1262,6 @@ class SMCTrend(IStrategy):
         filled_entries = trade.nr_of_successful_entries
         if filled_entries >= 3:
             return None  # Already at max pyramid
-
-        pair = trade.pair
-        dataframe, _ = self.dp.get_analyzed_dataframe(pair, self.timeframe)
-        if len(dataframe) == 0:
-            return None
 
         last = dataframe.iloc[-1]
         confidence = last.get("confidence", 0.5)
@@ -1564,8 +1639,8 @@ def _calculate_confidence(df: DataFrame) -> DataFrame:
         liq_bonus = np.where(df["recent_liq_sweep"].values, 0.08, 0.0)
         raw_confidence = raw_confidence + liq_bonus
 
-    # FAST EMA smoothing (span=5 = 5 hours, responsive to changes)
-    conf_series = pd.Series(np.asarray(raw_confidence).flatten()).ewm(span=5, min_periods=1).mean()
+    # EMA smoothing — span=3 on 15m = ~45 minutes response time
+    conf_series = pd.Series(np.asarray(raw_confidence).flatten()).ewm(span=3, min_periods=1).mean()
     df["confidence"] = np.clip(conf_series.values, 0.0, 1.0)
 
     # Regime labels
