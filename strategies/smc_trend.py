@@ -409,14 +409,9 @@ class SMCTrend(IStrategy):
             # Compute running trend from latest BOS
             dataframe["htf_trend"] = _compute_trend(dataframe, "htf_bos", "htf_choch")
 
-            # Signal age decay: neutralize trend if last BOS/CHoCH is too old
-            # Use _compute_trend's own state changes (trend flips) as fresh signal markers
-            _trend_changed = (dataframe["htf_trend"] != dataframe["htf_trend"].shift()).astype(bool)
-            _trend_groups = _trend_changed.cumsum()
-            dataframe["htf_signal_age"] = dataframe.groupby(_trend_groups).cumcount()
-            # On 15m: >48 candles (12h) old → trend goes neutral
-            # 12h is generous — allows 3 full 4H candles before expiry
-            dataframe.loc[dataframe["htf_signal_age"] > 48, "htf_trend"] = 0
+            # Note: Signal age decay removed — ffill'd BOS values make age
+            # tracking unreliable. The HTF trend from _compute_trend is
+            # already direction-accurate; freshness is less critical than correctness.
 
             # Diagnostic: how many HTF signals exist?
             n_htf_bos = dataframe["htf_bos"].notna().sum()
