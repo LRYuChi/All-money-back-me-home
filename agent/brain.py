@@ -332,7 +332,7 @@ def run_rule_based_analysis() -> dict:
             f"決策ID: {decision_id}"
         )
 
-        send_message(msg)
+        send_message(msg, parse_mode="")
     except Exception as e:
         logger.warning("Telegram send failed: %s", e)
 
