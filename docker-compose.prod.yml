@@ -50,6 +50,8 @@ services:
     volumes:
       - trade-data:/app/data
       - ./market_monitor:/app/market_monitor
+      - ./agent:/app/agent
+      - ./guards:/app/guards
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health', timeout=3)"]
       interval: 30s
@@ -73,6 +75,7 @@ services:
       - ./indicators:/freqtrade/user_data/strategies/indicators
       - ./market_monitor:/freqtrade/user_data/strategies/market_monitor
       - ./guards:/freqtrade/user_data/strategies/guards
+      - ./agent:/freqtrade/user_data/strategies/agent
       - ./freqtrade/config:/freqtrade/config
       - ft-data:/freqtrade/user_data/data
       - trade-data:/freqtrade/user_data/shared_data
