@@ -167,6 +167,27 @@ class SMCTrend(IStrategy):
         except Exception as e:
             logger.warning("Confidence Engine fetch failed: %s", e)
 
+        # === Crypto Environment Engine (observation mode) ===
+        try:
+            from market_monitor.crypto_environment import CryptoEnvironmentEngine
+            crypto_engine = CryptoEnvironmentEngine()
+            for sym in ["BTC", "ETH", "SOL"]:
+                cr = crypto_engine.calculate(sym)
+                logger.info(
+                    "Crypto Env %s: %.2f (%s) | Deriv=%.2f Chain=%.2f Sent=%.2f | %s",
+                    sym, cr["score"], cr["regime"],
+                    cr["sandboxes"]["derivatives"],
+                    cr["sandboxes"]["onchain"],
+                    cr["sandboxes"]["sentiment"],
+                    " | ".join(
+                        f.get("signal", "")
+                        for f in cr.get("factors", {}).values()
+                        if f.get("signal") and f["signal"] not in ("neutral", "stable", "no data")
+                    ),
+                )
+        except Exception as e:
+            logger.warning("Crypto Environment fetch failed: %s", e)
+
     def informative_pairs(self):
         """Pull 4H data for HTF trend bias."""
         pairs = self.dp.current_whitelist()
