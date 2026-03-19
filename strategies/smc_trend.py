@@ -511,13 +511,15 @@ class SMCTrend(IStrategy):
             (dataframe["in_killzone"]) | (self.use_killzone.value == 0)
         )
 
-        # Adam Theory directional confluence filter
+        # Adam Theory directional confluence filter (with slope threshold)
         adam_long_filter = (
-            (dataframe["adam_bullish"].fillna(False)) | (self.use_adam_filter.value == 0)
-        )
+            (dataframe["adam_bullish"].fillna(False))
+            & (dataframe["adam_slope"] > 0.03)
+        ) | (self.use_adam_filter.value == 0)
         adam_short_filter = (
-            (~dataframe["adam_bullish"].fillna(True)) | (self.use_adam_filter.value == 0)
-        )
+            (~dataframe["adam_bullish"].fillna(True))
+            & (dataframe["adam_slope"] < -0.03)
+        ) | (self.use_adam_filter.value == 0)
 
         # Confidence gate: block all trades in HIBERNATE mode
         confidence_ok = dataframe["confidence"] > 0.2
@@ -617,10 +619,12 @@ class SMCTrend(IStrategy):
 
     def custom_exit(self, pair: str, trade, current_time: datetime,
                     current_rate: float, current_profit: float, **kwargs):
-        """CHoCH exit with minimum hold time to prevent excessive trading.
+        """R-multiple take-profit + CHoCH exit with minimum hold time.
 
-        Requires at least 8 candles (2 hours on 15m) before allowing
-        structure-break exits. Stoploss and custom_stoploss still apply normally.
+        Exit priorities:
+        1. R-multiple take-profit: full exit at 3R (let custom_stoploss trail handle partials)
+        2. CHoCH exit: structure break after minimum 2-hour hold
+        Stoploss and custom_stoploss still apply normally for risk management.
         """
         # Minimum hold time: 8 candles × timeframe minutes
         _tf_minutes = {"1h": 60, "15m": 15, "5m": 5}.get(self.timeframe, 15)
@@ -630,12 +634,22 @@ class SMCTrend(IStrategy):
         if trade_duration < min_hold_minutes:
             return None  # Too early — let stoploss handle risk
 
-        # Check CHoCH signal on current candle
+        # Calculate R-multiple for take-profit
         dataframe, _ = self.dp.get_analyzed_dataframe(pair, self.timeframe)
         if len(dataframe) == 0:
             return None
 
         last = dataframe.iloc[-1]
+        atr = last.get("atr", 0)
+        if atr > 0:
+            atr_sl_pct = (atr * self.atr_sl_mult.value) / trade.open_rate
+            if atr_sl_pct > 0:
+                r_multiple = current_profit / atr_sl_pct
+                # Full take-profit at 3R — exceptional trade, lock in gains
+                if r_multiple >= 3.0:
+                    return "take_profit_3R"
+
+        # CHoCH exit: structure break after hold time
         if trade.is_short and last.get("choch") == 1:
             return "choch_bullish_reversal"
         elif not trade.is_short and last.get("choch") == -1:
@@ -1225,9 +1239,9 @@ def _add_premium_discount(df: DataFrame) -> DataFrame:
     df["in_premium"] = df["close"] > df["equilibrium"]
     df["in_discount"] = df["close"] < df["equilibrium"]
 
-    # OTE zone (61.8% - 79% retracement)
+    # OTE zone (50% - 79% retracement) — widened from 61.8% to capture more reversals
     range_size = df["range_high"] - df["range_low"]
-    df["ote_top"] = df["range_high"] - (range_size * 0.618)
+    df["ote_top"] = df["range_high"] - (range_size * 0.50)
     df["ote_bottom"] = df["range_high"] - (range_size * 0.79)
 
     return df
@@ -1359,9 +1373,9 @@ def _calculate_confidence(df: DataFrame) -> DataFrame:
     htf_trend = df.get("htf_trend", pd.Series(np.zeros(n), index=df.index)).values
 
     # ==========================================================
-    # 1. MOMENTUM SANDBOX (30%) — "Is the wind blowing?"
+    # 1. MOMENTUM SANDBOX (25%) — "Is the wind blowing?"
     # ==========================================================
-    # Multi-period ROC: 6h, 24h, 72h momentum
+    # Multi-period ROC: 6h, 24h, 72h momentum (weighted toward longer-term)
     roc_6 = close_s.pct_change(6)    # 6-hour momentum
     roc_24 = close_s.pct_change(24)  # 1-day momentum
     roc_72 = close_s.pct_change(72)  # 3-day momentum
@@ -1377,7 +1391,10 @@ def _calculate_confidence(df: DataFrame) -> DataFrame:
     all_negative = (roc_6 < 0) & (roc_24 < 0) & (roc_72 < 0)
     alignment_bonus = np.where(all_positive | all_negative, 0.15, 0.0)
 
-    momentum_score = (mom_6 * 0.4 + mom_24 * 0.35 + mom_72 * 0.25 + alignment_bonus)
+    # Weight longer-term ROC more heavily to reduce whipsaws on 15m candles
+    # ROC-6 (1.5h): noise-prone on 15m → reduced to 20%
+    # ROC-72 (3d): stable trend signal → increased to 45%
+    momentum_score = (mom_6 * 0.20 + mom_24 * 0.35 + mom_72 * 0.45 + alignment_bonus)
     momentum_score = np.clip(momentum_score, 0, 1)
 
     # ==========================================================
@@ -1494,6 +1511,11 @@ def _calculate_confidence(df: DataFrame) -> DataFrame:
         + 0.13 * health_score
         + 0.12 * activity_score
     )
+
+    # Liquidity sweep bonus: recent sweep = momentum confirmation
+    if "recent_liq_sweep" in df.columns:
+        liq_bonus = np.where(df["recent_liq_sweep"].values, 0.08, 0.0)
+        raw_confidence = raw_confidence + liq_bonus
 
     # FAST EMA smoothing (span=5 = 5 hours, responsive to changes)
     conf_series = pd.Series(np.asarray(raw_confidence).flatten()).ewm(span=5, min_periods=1).mean()
