@@ -28,11 +28,62 @@ import pandas as pd
 logger = logging.getLogger(__name__)
 
 # =============================================
-# Data Fetchers
+# Data Fetchers (batch + cache)
 # =============================================
 
+# All yfinance tickers used across all sandboxes
+_YF_TICKERS = ["^VIX", "^TNX", "DX-Y.NYB", "CL=F", "GC=F", "SPY", "IEF", "BTC-USD"]
+_yf_cache: dict[str, pd.Series] = {}
+_yf_cache_ts: float = 0
+_YF_CACHE_TTL = 600  # 10 minutes
+
+
+def _batch_fetch_yfinance(period: str = "6mo") -> None:
+    """Batch download all tickers in one yfinance call. Cached 10 min."""
+    global _yf_cache, _yf_cache_ts
+    import time as _time
+
+    now = _time.time()
+    if now - _yf_cache_ts < _YF_CACHE_TTL and _yf_cache:
+        return  # Still fresh
+
+    try:
+        import yfinance as yf
+        logger.info("Batch fetching %d yfinance tickers...", len(_YF_TICKERS))
+        df = yf.download(_YF_TICKERS, period=period, group_by="ticker", progress=False, threads=True)
+
+        new_cache = {}
+        for ticker in _YF_TICKERS:
+            try:
+                if df.columns.nlevels == 2:
+                    # MultiIndex: (ticker, 'Close')
+                    series = df[(ticker, "Close")].dropna()
+                else:
+                    # Single ticker fallback
+                    series = df["Close"].dropna()
+                if not series.empty:
+                    new_cache[ticker] = series
+            except Exception:
+                pass
+
+        if new_cache:
+            _yf_cache = new_cache
+            _yf_cache_ts = now
+            logger.info("Batch fetch complete: %d/%d tickers", len(new_cache), len(_YF_TICKERS))
+        else:
+            logger.warning("Batch fetch returned no data, keeping old cache")
+    except Exception as e:
+        logger.warning("Batch yfinance fetch failed: %s", e)
+
+
 def fetch_yfinance_data(ticker: str, period: str = "6mo") -> pd.Series:
-    """Fetch close prices from yfinance."""
+    """Fetch close prices — uses batch cache, falls back to individual fetch."""
+    # Try batch cache first
+    _batch_fetch_yfinance(period)
+    if ticker in _yf_cache:
+        return _yf_cache[ticker]
+
+    # Fallback: individual fetch (for tickers not in batch list)
     try:
         import yfinance as yf
         df = yf.Ticker(ticker).history(period=period)
