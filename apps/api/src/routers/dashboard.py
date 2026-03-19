@@ -345,19 +345,14 @@ def _query_ft_bot(host: str) -> dict | None:
 
 
 def _get_freqtrade_status() -> dict:
-    """Get Freqtrade bot status — supports multiple bots."""
-    # Bot definitions: (name, Docker host, localhost fallback)
-    bots = [
-        ("trend", "freqtrade-trend:8080", "localhost:8080"),
-        ("scalp", "freqtrade-scalp:8081", "localhost:8081"),
-    ]
-
-    result = {}
-    for name, docker_host, local_host in bots:
-        status = _query_ft_bot(docker_host) or _query_ft_bot(local_host)
-        result[name] = status or {"state": "offline", "strategy": "unknown"}
-
-    return result
+    """Get Freqtrade bot status via Docker network."""
+    # Try Docker service name first, then localhost
+    hosts = ["freqtrade:8080", "localhost:8080"]
+    for host in hosts:
+        status = _query_ft_bot(host)
+        if status:
+            return status
+    return {"state": "offline", "strategy": "unknown"}
 
 
 def _get_crypto_environment() -> dict:

@@ -171,11 +171,29 @@ class CryptoEnvironmentEngine:
         return {"score": round(score, 4), "value": round(latest, 4), "signal": signal}
 
     def _open_interest_trend(self, symbol: str) -> dict:
-        """Bybit open interest trend — trend conviction."""
+        """Open interest trend — Bybit first, Binance fallback."""
+        # Try Bybit first
         data = _fetch(
             f"https://api.bybit.com/v5/market/open-interest?category=linear&symbol={symbol}USDT&intervalTime=1h&limit=24",
             f"oi_{symbol}",
         )
+        # Fallback to Binance if Bybit fails (403 in some regions)
+        if not data or not data.get("result", {}).get("list"):
+            binance_data = _fetch(
+                f"https://fapi.binance.com/futures/data/openInterestHist?symbol={symbol}USDT&period=1h&limit=24",
+                f"oi_binance_{symbol}",
+            )
+            if binance_data and isinstance(binance_data, list) and len(binance_data) > 1:
+                values = [float(d.get("sumOpenInterest", 0)) for d in binance_data]
+                change_pct = (values[-1] - values[0]) / max(values[0], 1) * 100
+                score = float(np.clip(0.5 + change_pct * 5, 0, 1))
+                signal = "stable"
+                if change_pct > 3:
+                    signal = f"OI rising +{change_pct:.1f}% → conviction"
+                elif change_pct < -3:
+                    signal = f"OI falling {change_pct:.1f}% → unwinding"
+                return {"score": round(score, 4), "value": round(change_pct, 2), "signal": signal, "source": "binance"}
+            return {"score": 0.5, "value": None, "signal": "no data"}
         if not data or not data.get("result", {}).get("list"):
             return {"score": 0.5, "value": None, "signal": "no data"}
 
