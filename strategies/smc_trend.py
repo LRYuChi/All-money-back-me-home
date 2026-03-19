@@ -410,14 +410,13 @@ class SMCTrend(IStrategy):
             dataframe["htf_trend"] = _compute_trend(dataframe, "htf_bos", "htf_choch")
 
             # Signal age decay: neutralize trend if last BOS/CHoCH is too old
-            # On 15m: 16 candles = 4 hours — a stale 4H signal loses directional edge
-            _bos_changed = dataframe["htf_bos"].ne(dataframe["htf_bos"].shift()).astype(int)
-            _choch_changed = dataframe["htf_choch"].ne(dataframe["htf_choch"].shift()).astype(int)
-            _any_signal = (_bos_changed | _choch_changed).astype(bool)
-            _signal_groups = _any_signal.cumsum()
-            dataframe["htf_signal_age"] = dataframe.groupby(_signal_groups).cumcount()
-            # Decay: >16 candles (4h) old → trend goes neutral
-            dataframe.loc[dataframe["htf_signal_age"] > 16, "htf_trend"] = 0
+            # Use _compute_trend's own state changes (trend flips) as fresh signal markers
+            _trend_changed = (dataframe["htf_trend"] != dataframe["htf_trend"].shift()).astype(bool)
+            _trend_groups = _trend_changed.cumsum()
+            dataframe["htf_signal_age"] = dataframe.groupby(_trend_groups).cumcount()
+            # On 15m: >48 candles (12h) old → trend goes neutral
+            # 12h is generous — allows 3 full 4H candles before expiry
+            dataframe.loc[dataframe["htf_signal_age"] > 48, "htf_trend"] = 0
 
             # Diagnostic: how many HTF signals exist?
             n_htf_bos = dataframe["htf_bos"].notna().sum()
