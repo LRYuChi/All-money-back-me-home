@@ -384,22 +384,32 @@ class EventOverlay:
     Known high-impact events reduce confidence temporarily.
     """
 
-    # FOMC 2026 meeting dates (2-day meetings, using last day)
+    # FOMC meeting dates (2-day meetings, using last day)
     FOMC_DATES = [
+        # 2026
         "2026-01-28", "2026-03-18", "2026-05-06", "2026-06-17",
         "2026-07-29", "2026-09-16", "2026-11-04", "2026-12-16",
+        # 2027 (projected — same pattern: ~6 weeks apart)
+        "2027-01-27", "2027-03-17", "2027-05-05", "2027-06-16",
+        "2027-07-28", "2027-09-15", "2027-11-03", "2027-12-15",
     ]
 
-    # CPI release dates 2026 (approximate, typically 2nd or 3rd week)
+    # CPI release dates (approximate, typically 2nd or 3rd week)
     CPI_DATES = [
+        # 2026
         "2026-01-14", "2026-02-11", "2026-03-11", "2026-04-14",
         "2026-05-13", "2026-06-10", "2026-07-14", "2026-08-12",
         "2026-09-15", "2026-10-13", "2026-11-12", "2026-12-10",
+        # 2027 (projected)
+        "2027-01-13", "2027-02-10", "2027-03-10", "2027-04-13",
+        "2027-05-12", "2027-06-10", "2027-07-13", "2027-08-11",
+        "2027-09-14", "2027-10-13", "2027-11-10", "2027-12-10",
     ]
 
-    # Quarterly options expiry (last Friday of quarter)
+    # Quarterly options expiry (3rd Friday of quarter-end month)
     OPTIONS_EXPIRY = [
-        "2026-03-27", "2026-06-26", "2026-09-25", "2026-12-25",
+        "2026-03-20", "2026-06-19", "2026-09-18", "2026-12-18",
+        "2027-03-19", "2027-06-18", "2027-09-17", "2027-12-17",
     ]
 
     def get_multiplier(self, dt: datetime | None = None) -> float:

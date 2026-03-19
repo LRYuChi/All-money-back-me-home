@@ -58,8 +58,8 @@ class SMCTrend(IStrategy):
     # --- Strategy settings ---
     timeframe = "1h"
     can_short = True
-    stoploss = -0.03  # 3% initial stop
-    use_custom_stoploss = False
+    stoploss = -0.05  # 5% hard stop (absolute maximum, last resort)
+    use_custom_stoploss = True
 
     # --- Protections ---
     @property
@@ -396,11 +396,11 @@ class SMCTrend(IStrategy):
         dataframe["in_ote_long"] = (
             (dataframe["close"] >= dataframe["ote_bottom"])
             & (dataframe["close"] <= dataframe["ote_top"])
-            & (dataframe["in_discount"] == True)
+            & (dataframe["in_discount"])
         )
         dataframe["in_ote_short"] = (
             (dataframe["close"] >= dataframe["range_high"] - (dataframe["range_high"] - dataframe["range_low"]) * 0.382)
-            & (dataframe["in_premium"] == True)
+            & (dataframe["in_premium"])
         )
 
         # =============================================
@@ -431,10 +431,10 @@ class SMCTrend(IStrategy):
 
         # Adam Theory directional confluence filter
         adam_long_filter = (
-            (dataframe["adam_bullish"] == True) | (self.use_adam_filter.value == 0)
+            (dataframe["adam_bullish"].fillna(False)) | (self.use_adam_filter.value == 0)
         )
         adam_short_filter = (
-            (dataframe["adam_bullish"] == False) | (self.use_adam_filter.value == 0)
+            (~dataframe["adam_bullish"].fillna(True)) | (self.use_adam_filter.value == 0)
         )
 
         # Confidence gate: block all trades in HIBERNATE mode
@@ -443,7 +443,7 @@ class SMCTrend(IStrategy):
         # ===== LONG ENTRY =====
         # Grade A: OB+FVG confluence (strongest, always allowed)
         # Grade B: OB or FVG alone (requires higher confidence ≥ 0.5)
-        zone_long_a = dataframe["ob_fvg_confluence_bull"] == True
+        zone_long_a = dataframe["ob_fvg_confluence_bull"].fillna(False)
         zone_long_b = (
             (dataframe["in_bullish_ob"] | dataframe["in_bullish_fvg"])
             & (dataframe["confidence"] >= 0.5)
@@ -455,14 +455,14 @@ class SMCTrend(IStrategy):
         dataframe.loc[
             (
                 (dataframe["htf_trend"] > 0)                    # 4H bullish
-                & (dataframe["in_ote_long"] == True)             # OTE zone (discount)
+                & (dataframe["in_ote_long"])             # OTE zone (discount)
                 & (
                     zone_long_a                                   # Grade A: always OK
                     | (zone_long_b & htf_zone)                   # Grade B: needs 4H zone
                 )
                 & adam_long_filter                                # Adam projection up
-                & (dataframe["fr_ok_long"] == True)              # Funding rate OK
-                & (dataframe["vol_regime_ok"] == True)           # Volatility normal
+                & (dataframe["fr_ok_long"])              # Funding rate OK
+                & (dataframe["vol_regime_ok"])           # Volatility normal
                 & confidence_ok                                   # Confidence > HIBERNATE
                 & killzone_filter
                 & (dataframe["volume"] > 0)
@@ -471,7 +471,7 @@ class SMCTrend(IStrategy):
         ] = 1
 
         # ===== SHORT ENTRY =====
-        zone_short_a = dataframe["ob_fvg_confluence_bear"] == True
+        zone_short_a = dataframe["ob_fvg_confluence_bear"].fillna(False)
         zone_short_b = (
             (dataframe["in_bearish_ob"] | dataframe["in_bearish_fvg"])
             & (dataframe["confidence"] >= 0.5)
@@ -480,14 +480,14 @@ class SMCTrend(IStrategy):
         dataframe.loc[
             (
                 (dataframe["htf_trend"] < 0)                    # 4H bearish
-                & (dataframe["in_ote_short"] == True)            # Premium zone OTE
+                & (dataframe["in_ote_short"])            # Premium zone OTE
                 & (
                     zone_short_a                                  # Grade A: always OK
                     | (zone_short_b & htf_zone)                  # Grade B: needs 4H zone
                 )
                 & adam_short_filter                               # Adam projection down
-                & (dataframe["fr_ok_short"] == True)             # Funding rate OK
-                & (dataframe["vol_regime_ok"] == True)           # Volatility normal
+                & (dataframe["fr_ok_short"])             # Funding rate OK
+                & (dataframe["vol_regime_ok"])           # Volatility normal
                 & confidence_ok                                   # Confidence > HIBERNATE
                 & killzone_filter
                 & (dataframe["volume"] > 0)
@@ -639,8 +639,6 @@ class SMCTrend(IStrategy):
         side = "short" if trade.is_short else "long"
 
         # === Slippage Tracking (Execution Quality) ===
-        # Log expected vs actual for post-trade analysis
-        entry_slippage = 0.0
         if hasattr(trade, 'open_rate') and trade.open_rate:
             # For exit, track the exit rate vs current market
             dataframe, _ = self.dp.get_analyzed_dataframe(pair, self.timeframe)
@@ -735,6 +733,57 @@ class SMCTrend(IStrategy):
         # Quadratic scaling: aggressive only at high confidence
         lev = 1.0 + (max_lev - 1.0) * (confidence ** 2)
         return min(max(lev, 1.0), max_leverage)
+
+    def custom_stoploss(self, pair: str, trade: Trade, current_time: datetime,
+                        current_rate: float, current_profit: float,
+                        after_fill: bool, **kwargs) -> float | None:
+        """ATR-based dynamic stop loss with 1R breakeven.
+
+        Phase 1 (initial): ATR × sl_mult from entry price
+        Phase 2 (1R profit): Move stop to breakeven (entry price)
+        Phase 3 (2R profit): Trail at 1R below current high
+
+        Returns negative float (distance from current rate) or None to keep current.
+        """
+        dataframe, _ = self.dp.get_analyzed_dataframe(pair, self.timeframe)
+        if len(dataframe) == 0:
+            return None  # Keep default stoploss
+
+        last = dataframe.iloc[-1]
+        atr = last.get("atr", 0)
+        if atr <= 0:
+            return None
+
+        sl_mult = self.atr_sl_mult.value  # Default 1.5
+
+        # ATR-based risk distance
+        atr_sl_dist = atr * sl_mult
+        atr_sl_pct = atr_sl_dist / trade.open_rate  # As fraction of entry price
+
+        # Calculate profit in R-multiples (1R = initial risk)
+        if atr_sl_pct > 0:
+            r_multiple = current_profit / atr_sl_pct
+        else:
+            r_multiple = 0
+
+        if r_multiple >= 2.0:
+            # Phase 3: Trail at 1R below — lock in at least 1R profit
+            # Return stoploss relative to current_rate
+            trail_dist = atr_sl_pct  # Trail by 1R
+            new_sl = -(trail_dist)
+            return max(new_sl, -0.01)  # Never tighter than 1%
+
+        elif r_multiple >= 1.0:
+            # Phase 2: Breakeven — move stop to entry price
+            # Stoploss relative to current_rate: need to protect entry
+            # current_profit is already the distance from entry
+            # Return a value that puts stop at entry (slight buffer for fees)
+            breakeven_sl = -(current_profit - 0.002)  # 0.2% buffer for fees
+            return min(breakeven_sl, -0.002)  # At least 0.2% from current
+
+        else:
+            # Phase 1: ATR-based initial stop
+            return -atr_sl_pct
 
     def custom_stake_amount(self, current_time, current_rate: float,
                             proposed_stake: float, min_stake: float | None,
