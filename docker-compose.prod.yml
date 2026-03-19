@@ -109,6 +109,10 @@ services:
       - TELEGRAM_CHAT_ID=${TELEGRAM_CHAT_ID}
       - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}
       - ANTHROPIC_BASE_URL=${ANTHROPIC_BASE_URL}
+      - FINNHUB_API_KEY=${FINNHUB_API_KEY}
+      - CRYPTOPANIC_API_KEY=${CRYPTOPANIC_API_KEY}
+      - FT_USER=${FT_USER:-freqtrade}
+      - FT_PASS=${FT_PASS:-freqtrade}
       - DATA_DIR=/app/data
     restart: unless-stopped
     logging:
