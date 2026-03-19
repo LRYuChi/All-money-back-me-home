@@ -792,7 +792,7 @@ def cmd_digest() -> str:
         # If digest is older than 8 hours, refresh
         if SUMMARY_FILE.exists():
             age_hours = (time.time() - SUMMARY_FILE.stat().st_mtime) / 3600
-            if age_hours < 8:
+            if age_hours < 6:
                 return get_latest_digest()
         # Collect fresh
         _, digest = run_collection_and_digest()

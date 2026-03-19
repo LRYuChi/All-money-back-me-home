@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import json
 import logging
+import time
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any
@@ -521,6 +522,43 @@ class GlobalConfidenceEngine:
         self.ema_span = ema_span
         self._history: list[float] = []
 
+    def _get_news_sentiment(self) -> float | None:
+        """Read institutional report digest and compute news sentiment score.
+
+        Returns 0.0-1.0 (bearish-bullish) or None if no digest available.
+        """
+        try:
+            digest_path = Path(os.environ.get("DATA_DIR", "data")) / "reports" / "institutional_digest.json"
+            if not digest_path.exists():
+                return None
+
+            # Check freshness (skip if >8 hours old)
+            age_hours = (time.time() - digest_path.stat().st_mtime) / 3600
+            if age_hours > 8:
+                return None
+
+            with open(digest_path) as f:
+                data = json.load(f)
+
+            reports = data.get("reports", [])
+            if not reports:
+                return None
+
+            bullish = sum(1 for r in reports if r.get("sentiment") == "bullish")
+            bearish = sum(1 for r in reports if r.get("sentiment") == "bearish")
+            total = len(reports)
+
+            # Multi-空比 → 0-1 分數 (0.5 = neutral)
+            score = (bullish - bearish) / total * 0.5 + 0.5
+            score = max(0.0, min(1.0, score))
+
+            logger.info("News sentiment: %.2f (bull=%d bear=%d total=%d)", score, bullish, bearish, total)
+            return score
+
+        except Exception as e:
+            logger.debug("News sentiment unavailable: %s", e)
+            return None
+
     def calculate(self, dt: datetime | None = None) -> dict[str, Any]:
         """Calculate the global confidence score.
 
@@ -537,6 +575,11 @@ class GlobalConfidenceEngine:
         sentiment_scores = self.sentiment.calculate()
         capital_scores = self.capital.calculate()
         haven_scores = self.haven.calculate()
+
+        # Institutional news sentiment (from report_collector digest)
+        news_score = self._get_news_sentiment()
+        if news_score is not None:
+            sentiment_scores["news_digest"] = news_score
 
         # Average within each sandbox
         macro_avg = np.mean(list(macro_scores.values())) if macro_scores else 0.5

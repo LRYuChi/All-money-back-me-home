@@ -46,6 +46,31 @@ class Report:
     url: str = ""
 
 
+# Keyword-based sentiment detection for news headlines
+_BULLISH_KW = {
+    "rally", "surge", "bullish", "upgrade", "accumulate", "buy", "inflows",
+    "breakout", "recovery", "growth", "soars", "jumps", "gains", "record high",
+    "approval", "adoption", "partnership", "launch", "etf approved",
+}
+_BEARISH_KW = {
+    "crash", "bearish", "layoff", "hack", "ban", "probe", "downgrade", "sell",
+    "plunge", "drops", "falls", "liquidation", "fraud", "investigation",
+    "sanctions", "default", "recession", "collapse", "slump", "attack",
+}
+
+
+def _detect_sentiment(text: str) -> str:
+    """Detect sentiment from text using keyword matching."""
+    lower = text.lower()
+    bull = sum(1 for kw in _BULLISH_KW if kw in lower)
+    bear = sum(1 for kw in _BEARISH_KW if kw in lower)
+    if bull > bear:
+        return "bullish"
+    elif bear > bull:
+        return "bearish"
+    return "neutral"
+
+
 # =============================================
 # Data Source Fetchers
 # =============================================
@@ -142,13 +167,16 @@ def fetch_market_news(limit: int = 10) -> list[Report]:
 
     reports = []
     for item in data[:limit]:
+        headline = item.get("headline", "")
+        summary = item.get("summary", "")[:500]
+        detected = _detect_sentiment(headline + " " + summary)
         reports.append(Report(
             source="finnhub",
             category="institutional",
-            title=item.get("headline", ""),
-            content=item.get("summary", "")[:500],
-            sentiment="neutral",
-            relevance=0.5,
+            title=headline,
+            content=summary,
+            sentiment=detected,
+            relevance=0.6 if detected != "neutral" else 0.4,
             timestamp=datetime.fromtimestamp(
                 item.get("datetime", 0), tz=timezone.utc
             ).isoformat() if item.get("datetime") else "",
@@ -277,7 +305,7 @@ def collect_all() -> list[Report]:
                     category="crypto",
                     title=item.get("headline", ""),
                     content=item.get("summary", "")[:300],
-                    sentiment="neutral",
+                    sentiment=_detect_sentiment(item.get("headline", "") + " " + item.get("summary", "")),
                     relevance=0.6,
                     timestamp=datetime.fromtimestamp(
                         item.get("datetime", 0), tz=timezone.utc
