@@ -107,10 +107,45 @@ def fg_label(value: int) -> str:
 
 
 # =============================================
-# 數據讀取
+# 數據讀取 (自動刷新)
 # =============================================
 
+SNAPSHOT_MAX_AGE = 600  # 10 minutes — auto-refresh if older
+_last_refresh: float = 0
+REFRESH_COOLDOWN = 120  # Don't refresh more than once per 2 min
+
+
+def _auto_refresh_snapshot() -> None:
+    """If snapshot is stale (>10min), trigger data collection."""
+    global _last_refresh
+    now = time.time()
+    if now - _last_refresh < REFRESH_COOLDOWN:
+        return
+
+    snap_file = DATA_DIR / "market_snapshot.json"
+    try:
+        if snap_file.exists():
+            mtime = snap_file.stat().st_mtime
+            if now - mtime < SNAPSHOT_MAX_AGE:
+                return  # Fresh enough
+    except Exception:
+        pass
+
+    # Stale — refresh
+    _last_refresh = now
+    logger.info("Snapshot stale, refreshing...")
+    try:
+        from agent.data_collector import collect_all
+        from agent.summarizer import run as run_summarizer
+        collect_all()
+        run_summarizer()
+        logger.info("Snapshot refreshed")
+    except Exception as e:
+        logger.warning("Auto-refresh failed: %s", e)
+
+
 def read_snapshot() -> dict:
+    _auto_refresh_snapshot()
     try:
         with open(DATA_DIR / "market_snapshot.json") as f:
             return json.load(f)
