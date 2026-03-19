@@ -102,8 +102,8 @@ class SMCTrend(IStrategy):
     _confidence_fetch_failures: int = 0
     _crypto_env_cache: dict = {}
 
-    # Pyramid: allow adding to winning positions
-    position_adjustment_enable = True
+    # Pyramid: disabled until base trading frequency stabilizes on 15m
+    position_adjustment_enable = False
     max_entry_position_adjustment = 2  # Up to 2 add-ons (3 total entries)
 
     startup_candle_count = 400  # 400 × 15m = ~4 days warmup
@@ -610,20 +610,38 @@ class SMCTrend(IStrategy):
         return dataframe
 
     def populate_exit_trend(self, dataframe: DataFrame, metadata: dict) -> DataFrame:
-        """Exit on structure break against position."""
-        # Exit long: bearish CHoCH on 1H (trend reversal signal)
-        dataframe.loc[
-            (dataframe["choch"] == -1),
-            "exit_long",
-        ] = 1
-
-        # Exit short: bullish CHoCH on 1H
-        dataframe.loc[
-            (dataframe["choch"] == 1),
-            "exit_short",
-        ] = 1
-
+        """Exit signals are handled by custom_exit() with minimum hold time."""
+        # CHoCH exits moved to custom_exit() to enforce 2-hour minimum hold time.
+        # This prevents rapid entry/exit cycling on 15m candles.
         return dataframe
+
+    def custom_exit(self, pair: str, trade, current_time: datetime,
+                    current_rate: float, current_profit: float, **kwargs):
+        """CHoCH exit with minimum hold time to prevent excessive trading.
+
+        Requires at least 8 candles (2 hours on 15m) before allowing
+        structure-break exits. Stoploss and custom_stoploss still apply normally.
+        """
+        # Minimum hold time: 8 candles × timeframe minutes
+        _tf_minutes = {"1h": 60, "15m": 15, "5m": 5}.get(self.timeframe, 15)
+        min_hold_minutes = 8 * _tf_minutes  # 2 hours on 15m, 8 hours on 1h
+        trade_duration = (current_time - trade.open_date_utc).total_seconds() / 60
+
+        if trade_duration < min_hold_minutes:
+            return None  # Too early — let stoploss handle risk
+
+        # Check CHoCH signal on current candle
+        dataframe, _ = self.dp.get_analyzed_dataframe(pair, self.timeframe)
+        if len(dataframe) == 0:
+            return None
+
+        last = dataframe.iloc[-1]
+        if trade.is_short and last.get("choch") == 1:
+            return "choch_bullish_reversal"
+        elif not trade.is_short and last.get("choch") == -1:
+            return "choch_bearish_reversal"
+
+        return None
 
     def confirm_trade_entry(self, pair: str, order_type: str, amount: float,
                             rate: float, time_in_force: str, current_time: datetime,

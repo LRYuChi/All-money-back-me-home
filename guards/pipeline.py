@@ -44,7 +44,7 @@ def create_default_pipeline() -> GuardPipeline:
             LiquidationGuard(min_distance_mult=2.0),
             TotalExposureGuard(max_pct=80),
             DrawdownGuard(max_drawdown_pct=10),
-            CooldownGuard(minutes=15),
+            CooldownGuard(minutes=60),
             DailyLossGuard(max_pct=5),
             ConsecutiveLossGuard(max_streak=5, pause_hours=24),
         ])
