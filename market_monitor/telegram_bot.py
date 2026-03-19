@@ -289,22 +289,12 @@ def cmd_macro() -> str:
 
 
 def cmd_help() -> str:
-    """指令清單"""
+    """指令清單 (純文字版，按鈕版用 cmd_menu)"""
     return (
-        "📱 交易 AI 助手指令\n"
+        "📱 交易 AI 助手\n"
         "━━━━━━━━━━━━━━━━\n"
-        "/status     - 持倉 + 損益 + 狀態\n"
-        "/confidence - 信心引擎分數\n"
-        "/crypto     - 加密環境 (6 幣種)\n"
-        "/regime     - 市場機制 + 建議\n"
-        "/analysis   - 最新 AI 分析\n"
-        "/trades     - 最近交易\n"
-        "/guards     - 風控狀態\n"
-        "/decisions  - Agent 決策記錄\n"
-        "/macro      - 宏觀指標\n"
-        "/help       - 本清單\n"
-        "\n"
-        "💬 也可直接輸入問題\n"
+        "點擊下方按鈕或輸入指令：\n\n"
+        "💬 也可直接打字問問題\n"
         "例如: 黃金暴跌對 BTC 有影響嗎？"
     )
 
@@ -378,41 +368,94 @@ def handle_ai_query(question: str) -> str:
 # Telegram Bot (polling mode)
 # =============================================
 
-def send_reply(chat_id: int, text: str) -> None:
-    """Send a reply to a specific chat."""
+def send_reply(chat_id: int, text: str, buttons: list[list[dict]] | None = None) -> None:
+    """Send a reply with optional inline keyboard buttons."""
     if len(text) > 4000:
         text = text[:4000] + "\n...(截斷)"
 
+    payload: dict = {"chat_id": chat_id, "text": text}
+    if buttons:
+        payload["reply_markup"] = {"inline_keyboard": buttons}
+
     try:
         url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
-        data = json.dumps({
-            "chat_id": chat_id,
-            "text": text,
-        }).encode()
+        data = json.dumps(payload).encode()
         req = urllib.request.Request(url, data=data, headers={"Content-Type": "application/json"})
         urllib.request.urlopen(req, timeout=10)
     except Exception as e:
         logger.error("Reply failed: %s", e)
 
 
-def process_message(chat_id: int, text: str) -> str:
-    """Process an incoming message and return response."""
+# Main menu button layout
+MAIN_MENU_BUTTONS = [
+    [
+        {"text": "📊 狀態", "callback_data": "cmd_status"},
+        {"text": "🎯 信心", "callback_data": "cmd_confidence"},
+        {"text": "🔗 加密環境", "callback_data": "cmd_crypto"},
+    ],
+    [
+        {"text": "📈 機制", "callback_data": "cmd_regime"},
+        {"text": "🌍 宏觀", "callback_data": "cmd_macro"},
+        {"text": "💰 交易", "callback_data": "cmd_trades"},
+    ],
+    [
+        {"text": "🛡 風控", "callback_data": "cmd_guards"},
+        {"text": "🧠 決策", "callback_data": "cmd_decisions"},
+        {"text": "📋 分析", "callback_data": "cmd_analysis"},
+    ],
+    [
+        {"text": "🔄 刷新主選單", "callback_data": "cmd_menu"},
+    ],
+]
+
+# Callback → command mapping
+CALLBACK_MAP = {
+    "cmd_status": cmd_status,
+    "cmd_confidence": cmd_confidence,
+    "cmd_crypto": cmd_crypto,
+    "cmd_regime": cmd_regime,
+    "cmd_macro": cmd_macro,
+    "cmd_trades": cmd_trades,
+    "cmd_guards": cmd_guards,
+    "cmd_decisions": cmd_decisions,
+    "cmd_analysis": cmd_analysis,
+}
+
+
+def answer_callback(callback_query_id: str) -> None:
+    """Answer callback query to remove loading indicator."""
+    try:
+        url = f"https://api.telegram.org/bot{BOT_TOKEN}/answerCallbackQuery"
+        data = json.dumps({"callback_query_id": callback_query_id}).encode()
+        req = urllib.request.Request(url, data=data, headers={"Content-Type": "application/json"})
+        urllib.request.urlopen(req, timeout=5)
+    except Exception:
+        pass
+
+
+def process_message(chat_id: int, text: str) -> tuple[str, list | None]:
+    """Process an incoming message. Returns (response_text, buttons_or_None)."""
     text = text.strip()
 
     # Command
     if text.startswith("/"):
         cmd = text.split()[0].lstrip("/").split("@")[0].lower()
+
+        # /start and /help → show button menu
+        if cmd in ("start", "help", "menu"):
+            return cmd_help(), MAIN_MENU_BUTTONS
+
         handler = COMMANDS.get(cmd)
         if handler:
             try:
-                return handler()
+                return handler(), None
             except Exception as e:
                 logger.error("Command %s failed: %s", cmd, e)
-                return f"指令執行失敗: {e}"
-        return f"未知指令: /{cmd}\n輸入 /help 查看可用指令"
+                return f"指令執行失敗: {e}", None
+        return f"未知指令: /{cmd}\n輸入 /help 查看可用指令", None
 
     # Free text → AI
-    return handle_ai_query(text)
+    return handle_ai_query(text), None
 
 
 def run_polling():
@@ -440,6 +483,28 @@ def run_polling():
             for update in data.get("result", []):
                 offset = update["update_id"] + 1
 
+                # --- Handle callback queries (button presses) ---
+                callback = update.get("callback_query")
+                if callback:
+                    cb_chat_id = callback.get("message", {}).get("chat", {}).get("id")
+                    cb_data = callback.get("data", "")
+                    cb_id = callback.get("id")
+
+                    if cb_chat_id and is_authorized(cb_chat_id):
+                        logger.info("Button press from %s: %s", cb_chat_id, cb_data)
+                        answer_callback(cb_id)
+
+                        if cb_data == "cmd_menu":
+                            send_reply(cb_chat_id, cmd_help(), MAIN_MENU_BUTTONS)
+                        elif cb_data in CALLBACK_MAP:
+                            try:
+                                result = CALLBACK_MAP[cb_data]()
+                                send_reply(cb_chat_id, result)
+                            except Exception as e:
+                                send_reply(cb_chat_id, f"執行失敗: {e}")
+                    continue
+
+                # --- Handle text messages ---
                 msg = update.get("message", {})
                 chat_id = msg.get("chat", {}).get("id")
                 text = msg.get("text", "")
@@ -452,8 +517,8 @@ def run_polling():
                     continue
 
                 logger.info("Message from %s: %s", chat_id, text[:50])
-                response = process_message(chat_id, text)
-                send_reply(chat_id, response)
+                response, buttons = process_message(chat_id, text)
+                send_reply(chat_id, response, buttons)
 
         except Exception as e:
             logger.error("Polling error: %s", e)
