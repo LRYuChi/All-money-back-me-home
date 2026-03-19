@@ -329,6 +329,11 @@ class SMCTrend(IStrategy):
         # =============================================
         htf_df = self.dp.get_pair_dataframe(pair=pair, timeframe="4h")
         if len(htf_df) > 0:
+            # Diagnostic: verify HTF data is actually 4h, not 15m
+            if len(htf_df) > 1:
+                td = (htf_df["date"].iloc[-1] - htf_df["date"].iloc[-2]).total_seconds()
+                logger.info("HTF dataframe %s: %d candles, interval=%.0fs (expect 14400 for 4h)", pair, len(htf_df), td)
+
             htf_sl = self.htf_swing_length.value
             htf_swing = smc.swing_highs_lows(htf_df, swing_length=htf_sl)
             htf_bos = smc.bos_choch(htf_df, htf_swing, close_break=True)
@@ -379,10 +384,14 @@ class SMCTrend(IStrategy):
             # Diagnostic: how many HTF signals exist?
             n_htf_bos = dataframe["htf_bos"].notna().sum()
             n_htf_choch = dataframe["htf_choch"].notna().sum()
+            # Also check pre-merge signals on raw HTF dataframe
+            n_raw_bos = htf_df["htf_bos"].notna().sum()
+            n_raw_choch = htf_df["htf_choch"].notna().sum()
             htf_trend_last = dataframe["htf_trend"].iloc[-1] if len(dataframe) > 0 else 0
             logger.info(
-                "HTF %s: %d BOS, %d CHoCH signals | trend_now=%d | 4h_candles=%d",
-                pair, n_htf_bos, n_htf_choch, htf_trend_last, len(htf_df)
+                "HTF %s: raw=%d BOS %d CHoCH | merged=%d BOS %d CHoCH | trend=%d | 4h=%d 15m=%d",
+                pair, n_raw_bos, n_raw_choch, n_htf_bos, n_htf_choch,
+                htf_trend_last, len(htf_df), len(dataframe)
             )
 
             # 4H zone alignment: is 1H price within a 4H OB or FVG zone?
