@@ -438,3 +438,132 @@ async def get_dashboard() -> dict[str, Any]:
     _cache = data
     _cache_ts = now
     return data
+
+
+# =============================================
+# Trade Journal API
+# =============================================
+
+def _read_journal(limit: int = 50) -> list[dict]:
+    """Read trade_journal.jsonl (newest first)."""
+    from pathlib import Path
+    journal_path = Path(os.environ.get("DATA_DIR", "/app/data")) / "trade_journal.jsonl"
+    if not journal_path.exists():
+        return []
+    try:
+        with open(journal_path) as f:
+            lines = f.readlines()
+        entries = []
+        for line in reversed(lines):
+            try:
+                entries.append(json.loads(line.strip()))
+            except Exception:
+                continue
+            if len(entries) >= limit:
+                break
+        return entries
+    except Exception:
+        return []
+
+
+@router.get("/journal")
+async def get_trade_journal(limit: int = 30):
+    """交易日誌 — ENTRY/EXIT 配對，含 grade、conditions、R-multiple."""
+    entries = _read_journal(limit * 2)
+    if not entries:
+        return {"trades": [], "stats": {}}
+
+    # Pair ENTRY and EXIT
+    exits = [e for e in entries if e.get("event") == "EXIT"]
+    entry_map: dict[str, dict] = {}
+    for e in entries:
+        if e.get("event") == "ENTRY":
+            key = e.get("pair", "")
+            if key not in entry_map:
+                entry_map[key] = e
+
+    trades = []
+    grade_stats: dict[str, dict] = {}
+    for ex in exits[:limit]:
+        pair = ex.get("pair", "?")
+        en = entry_map.get(pair, {})
+        pnl = ex.get("pnl_usd", 0)
+        grade = en.get("grade", "?")
+
+        if grade not in grade_stats:
+            grade_stats[grade] = {"wins": 0, "losses": 0, "pnl": 0}
+        if pnl > 0:
+            grade_stats[grade]["wins"] += 1
+        else:
+            grade_stats[grade]["losses"] += 1
+        grade_stats[grade]["pnl"] += pnl
+
+        trades.append({
+            "pair": pair,
+            "side": en.get("side", ex.get("side", "?")),
+            "grade": grade,
+            "entry_price": en.get("entry_price", 0),
+            "exit_price": ex.get("exit_price", 0),
+            "confidence_entry": en.get("confidence", 0),
+            "confidence_exit": ex.get("confidence_at_exit", 0),
+            "conditions": en.get("conditions", {}),
+            "r_multiple": ex.get("r_multiple", 0),
+            "pnl_pct": ex.get("pnl_pct", 0),
+            "pnl_usd": pnl,
+            "duration_min": ex.get("duration_min", 0),
+            "exit_reason": ex.get("exit_reason", "?"),
+            "slippage_pct": ex.get("slippage_pct", 0),
+            "entry_ts": en.get("ts", ""),
+            "exit_ts": ex.get("ts", ""),
+            "leverage": en.get("leverage", 1),
+            "atr_pct": en.get("atr_pct", 0),
+            "macro_regime": en.get("macro_regime", ""),
+        })
+
+    # Compute stats per grade
+    for g in grade_stats.values():
+        t = g["wins"] + g["losses"]
+        g["total"] = t
+        g["win_rate"] = round(g["wins"] / t * 100, 1) if t > 0 else 0
+
+    return {"trades": trades, "grade_stats": grade_stats}
+
+
+@router.get("/guards")
+async def get_guard_status():
+    """Guard Pipeline 狀態 — daily loss、streak、cooldown、drawdown."""
+    from pathlib import Path
+    data_dir = Path(os.environ.get("DATA_DIR", "/app/data"))
+
+    result: dict[str, Any] = {"guards": {}, "bot_state": {}}
+
+    # Guard state
+    guard_path = data_dir / "guard_state.json"
+    if guard_path.exists():
+        try:
+            with open(guard_path) as f:
+                result["guards"] = json.load(f)
+        except Exception:
+            pass
+
+    # Bot state (agent flags, daily counters)
+    bot_path = data_dir / "reports" / "bot_state.json"
+    if bot_path.exists():
+        try:
+            with open(bot_path) as f:
+                state = json.load(f)
+            result["bot_state"] = {
+                "guard_rejections_today": state.get("guard_rejections_today", 0),
+                "signals_generated_today": state.get("signals_generated_today", 0),
+                "circuit_breaker_activations": state.get("circuit_breaker_activations", 0),
+                "consecutive_wins": state.get("consecutive_wins", 0),
+                "consecutive_losses": state.get("consecutive_losses", 0),
+                "last_confidence_score": state.get("last_confidence_score", 0),
+                "last_confidence_regime": state.get("last_confidence_regime", ""),
+                "agent_pause_entries": state.get("agent_pause_entries", False),
+                "agent_risk_level": state.get("agent_risk_level", "normal"),
+            }
+        except Exception:
+            pass
+
+    return result

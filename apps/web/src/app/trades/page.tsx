@@ -54,6 +54,33 @@ interface PerformanceData {
   profit_factor: number;
 }
 
+interface JournalTrade {
+  pair: string;
+  side: string;
+  grade: string;
+  entry_price: number;
+  exit_price: number;
+  confidence_entry: number;
+  confidence_exit: number;
+  conditions: Record<string, boolean | number>;
+  r_multiple: number;
+  pnl_pct: number;
+  pnl_usd: number;
+  duration_min: number;
+  exit_reason: string;
+  slippage_pct: number;
+  entry_ts: string;
+  exit_ts: string;
+  leverage: number;
+  atr_pct: number;
+  macro_regime: string;
+}
+
+interface JournalData {
+  trades: JournalTrade[];
+  grade_stats: Record<string, { wins: number; losses: number; total: number; win_rate: number; pnl: number }>;
+}
+
 interface EquityPoint {
   ts: string;
   capital: number;
@@ -75,26 +102,29 @@ function sign(v: number): string {
   return v > 0 ? '+' : '';
 }
 
-type Tab = 'overview' | 'positions' | 'history' | 'performance';
+type Tab = 'overview' | 'positions' | 'history' | 'journal' | 'performance';
 
 export default function TradesPage() {
   const [data, setData] = useState<PaperTradeData | null>(null);
   const [perf, setPerf] = useState<PerformanceData | null>(null);
   const [equity, setEquity] = useState<EquityPoint[]>([]);
+  const [journal, setJournal] = useState<JournalData | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [tab, setTab] = useState<Tab>('overview');
 
   const fetchAll = useCallback(async () => {
     try {
-      const [tradeData, perfData, eqData] = await Promise.all([
+      const [tradeData, perfData, eqData, journalData] = await Promise.all([
         apiClient.get<PaperTradeData>('/api/strategy/trades/paper'),
         apiClient.get<PerformanceData>('/api/strategy/trades/paper/performance'),
         apiClient.get<EquityPoint[]>('/api/strategy/trades/paper/equity-curve').catch(() => []),
+        apiClient.get<JournalData>('/api/dashboard/journal').catch(() => ({ trades: [], grade_stats: {} })),
       ]);
       setData(tradeData);
       setPerf(perfData);
       setEquity(eqData);
+      setJournal(journalData);
       setError(null);
     } catch (err) {
       setError(err instanceof Error ? err.message : '無法載入交易資料');
@@ -131,6 +161,7 @@ export default function TradesPage() {
     { key: 'overview', label: '總覽' },
     { key: 'positions', label: `持倉 (${data.open_positions.length})` },
     { key: 'history', label: `歷史 (${data.closed_trades.length})` },
+    { key: 'journal', label: `日誌 (${journal?.trades.length ?? 0})` },
     { key: 'performance', label: '績效分析' },
   ];
 
@@ -190,6 +221,7 @@ export default function TradesPage() {
       {tab === 'overview' && <OverviewTab data={data} equity={equity} />}
       {tab === 'positions' && <PositionsTab positions={data.open_positions} />}
       {tab === 'history' && <HistoryTab trades={data.closed_trades} />}
+      {tab === 'journal' && <JournalTab journal={journal} />}
       {tab === 'performance' && <PerformanceTab perf={perf} data={data} />}
     </div>
   );
@@ -430,6 +462,113 @@ function HistoryTab({ trades }: { trades: ClosedTrade[] }) {
           ))}
         </tbody>
       </table>
+    </div>
+  );
+}
+
+function JournalTab({ journal }: { journal: JournalData | null }) {
+  if (!journal || journal.trades.length === 0) {
+    return (
+      <div className="rounded-xl bg-gray-800/40 border border-gray-700 p-12 text-center text-gray-500">
+        交易日誌尚無記錄（交易完成後自動寫入）
+      </div>
+    );
+  }
+
+  const gradeColor: Record<string, string> = {
+    'A': 'bg-purple-600/80 text-purple-100',
+    'B+': 'bg-blue-600/80 text-blue-100',
+    'B': 'bg-gray-600/80 text-gray-100',
+  };
+
+  const conditionLabels: Record<string, string> = {
+    htf_trend: 'HTF',
+    in_ob: 'OB',
+    in_fvg: 'FVG',
+    confluence: 'Confluence',
+    in_ote: 'OTE',
+    vwap: 'VWAP',
+    strong_structure: 'Strong',
+  };
+
+  return (
+    <div className="space-y-6">
+      {/* Grade Stats */}
+      {Object.keys(journal.grade_stats).length > 0 && (
+        <div className="grid grid-cols-3 gap-3">
+          {Object.entries(journal.grade_stats).map(([grade, s]) => (
+            <div key={grade} className="rounded-xl p-4 bg-gray-800/60 border border-gray-700">
+              <div className="flex items-center space-x-2 mb-2">
+                <span className={`text-xs font-bold px-2 py-0.5 rounded ${gradeColor[grade] || 'bg-gray-600 text-gray-200'}`}>
+                  Grade {grade}
+                </span>
+                <span className="text-gray-400 text-xs">{s.total} 筆</span>
+              </div>
+              <div className="text-lg font-bold text-white">{s.win_rate}% W</div>
+              <div className={`text-sm ${s.pnl >= 0 ? 'text-green-400' : 'text-red-400'}`}>
+                {s.pnl >= 0 ? '+' : ''}${s.pnl.toFixed(2)}
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+
+      {/* Journal Entries */}
+      <div className="space-y-3">
+        {journal.trades.map((t, i) => (
+          <div key={i} className="rounded-xl bg-gray-900 border border-gray-800 p-4">
+            <div className="flex items-center justify-between mb-2">
+              <div className="flex items-center space-x-2">
+                <span className={t.pnl_usd >= 0 ? 'text-green-400' : 'text-red-400'}>
+                  {t.pnl_usd >= 0 ? '🟢' : '🔴'}
+                </span>
+                <span className="text-white font-medium">{t.pair.replace('/USDT:USDT', '')}</span>
+                <span className={`text-xs px-1.5 py-0.5 rounded ${t.side === 'long' ? 'bg-green-900/50 text-green-400' : 'bg-red-900/50 text-red-400'}`}>
+                  {t.side === 'long' ? 'LONG' : 'SHORT'} {t.leverage.toFixed(1)}x
+                </span>
+                <span className={`text-xs font-bold px-2 py-0.5 rounded ${gradeColor[t.grade] || 'bg-gray-600 text-gray-200'}`}>
+                  {t.grade}
+                </span>
+              </div>
+              <div className="text-right">
+                <div className={`font-bold ${pnlClass(t.pnl_usd)}`}>
+                  {sign(t.pnl_usd)}${fmt(t.pnl_usd)} ({sign(t.pnl_pct)}{fmt(t.pnl_pct)}%)
+                </div>
+                <div className={`text-xs ${pnlClass(t.r_multiple)}`}>
+                  {sign(t.r_multiple)}{fmt(t.r_multiple, 1)}R
+                </div>
+              </div>
+            </div>
+
+            {/* Entry conditions */}
+            <div className="flex flex-wrap gap-1 mb-2">
+              {Object.entries(t.conditions).map(([key, val]) => {
+                if (!val || val === 0) return null;
+                const label = conditionLabels[key] || key;
+                return (
+                  <span key={key} className="text-xs px-1.5 py-0.5 rounded bg-blue-900/40 text-blue-300 border border-blue-800/50">
+                    {typeof val === 'number' ? `${label}=${val > 0 ? '+' : ''}${val}` : label}
+                  </span>
+                );
+              })}
+              {t.macro_regime && (
+                <span className="text-xs px-1.5 py-0.5 rounded bg-yellow-900/40 text-yellow-300 border border-yellow-800/50">
+                  {t.macro_regime}
+                </span>
+              )}
+            </div>
+
+            {/* Details */}
+            <div className="flex items-center space-x-4 text-xs text-gray-500">
+              <span>進 ${fmt(t.entry_price)} → 出 ${fmt(t.exit_price)}</span>
+              <span>信心 {(t.confidence_entry * 100).toFixed(0)}% → {(t.confidence_exit * 100).toFixed(0)}%</span>
+              <span>{t.duration_min >= 60 ? `${Math.floor(t.duration_min / 60)}h${Math.round(t.duration_min % 60)}m` : `${Math.round(t.duration_min)}m`}</span>
+              <span>{t.exit_reason}</span>
+              {t.slippage_pct > 0.1 && <span className="text-yellow-400">滑點 {t.slippage_pct.toFixed(2)}%</span>}
+            </div>
+          </div>
+        ))}
+      </div>
     </div>
   );
 }
