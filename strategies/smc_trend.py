@@ -1345,18 +1345,27 @@ class SMCTrend(IStrategy):
         if r_multiple >= 2.0:
             # Phase 3: Trail at 0.7R below — tighter trail to capture more profit
             trail_dist = atr_sl_pct * 0.7
-            new_sl = -(trail_dist)
-            return max(new_sl, -0.008)  # Never tighter than 0.8%
+            sl = max(-(trail_dist), -0.008)  # Never tighter than 0.8%
+            logger.debug("SL %s: Phase3 trail r=%.2f sl=%.4f", pair, r_multiple, sl)
+            return sl
 
         elif r_multiple >= 1.0:
-            # Phase 2: Breakeven — move stop to entry + 0.3% (lock small profit)
-            # At 1R, first partial (33%) already taken, protect remaining 67%
-            breakeven_sl = -(current_profit - 0.003)  # 0.3% buffer above entry
-            return min(breakeven_sl, -0.003)  # At least 0.3% from current
+            # Phase 2: Breakeven — move stop to entry price + 0.3% buffer
+            # Use position_profit (leverage-normalized), not current_profit
+            if position_profit > 0:
+                breakeven_sl = -(position_profit - 0.003)
+                sl = min(breakeven_sl, -0.003)  # At least 0.3% from current
+            else:
+                sl = -atr_sl_pct  # Not actually in profit, keep ATR stop
+            logger.debug("SL %s: Phase2 BE r=%.2f sl=%.4f pos_p=%.4f", pair, r_multiple, sl, position_profit)
+            return sl
 
         else:
-            # Phase 1: ATR-based initial stop (unchanged)
-            return -atr_sl_pct
+            # Phase 1: ATR-based initial stop
+            # Floor: never tighter than 0.5% from current rate (prevents noise stops)
+            sl = min(-atr_sl_pct, -0.005)
+            logger.debug("SL %s: Phase1 ATR r=%.2f sl=%.4f atr_sl=%.4f", pair, r_multiple, sl, atr_sl_pct)
+            return sl
 
     def custom_stake_amount(self, current_time, current_rate: float,
                             proposed_stake: float, min_stake: float | None,
