@@ -593,11 +593,11 @@ class SMCTrend(IStrategy):
         # Adam Theory directional confluence filter (with slope threshold)
         adam_long_filter = (
             (dataframe["adam_bullish"].fillna(False))
-            & (dataframe["adam_slope"] > 0.03)
+            & (dataframe["adam_slope"] > 0.005)
         ) | (self.use_adam_filter.value == 0)
         adam_short_filter = (
             (~dataframe["adam_bullish"].fillna(True))
-            & (dataframe["adam_slope"] < -0.03)
+            & (dataframe["adam_slope"] < -0.005)
         ) | (self.use_adam_filter.value == 0)
 
         # Confidence gates: Grade A (strong confluence) has lower threshold
