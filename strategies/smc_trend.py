@@ -749,21 +749,24 @@ class SMCTrend(IStrategy):
         # === Anti-fragile degradation ===
         # If no signals for 24 consecutive cycles (~6 hours on 15m),
         # relax non-core filters and re-evaluate
-        # Count based on LAST candle (not entire dataframe) to properly detect dry spells
-        self._no_signal_count = getattr(self, "_no_signal_count", 0)
+        # Per-pair signal counter (not global — prevents one pair resetting another's counter)
+        if not hasattr(self, "_no_signal_count"):
+            self._no_signal_count = {}
+        pair = metadata.get("pair", "?")
         last_has_signal = False
         if len(dataframe) > 0:
             last_row = dataframe.iloc[-1]
             last_has_signal = bool(last_row.get("enter_long", 0)) or bool(last_row.get("enter_short", 0))
         if last_has_signal:
-            self._no_signal_count = 0
+            self._no_signal_count[pair] = 0
         else:
-            self._no_signal_count += 1
+            self._no_signal_count[pair] = self._no_signal_count.get(pair, 0) + 1
 
-        if self._no_signal_count >= 24 and len(dataframe) > 0:
+        _pair_count = self._no_signal_count.get(pair, 0)
+        if _pair_count >= 24 and len(dataframe) > 0:
             logger.warning(
-                "Anti-fragile: %d empty cycles — relaxing VWAP/adam filters",
-                self._no_signal_count
+                "Anti-fragile %s: %d empty cycles — relaxing VWAP/adam filters",
+                pair, _pair_count
             )
             # Re-evaluate: drop VWAP and Adam, keep HTF + OB/FVG + confidence + FR + vol
             dataframe.loc[
@@ -791,8 +794,8 @@ class SMCTrend(IStrategy):
             n_long = int(dataframe.get("enter_long", 0).sum())
             n_short = int(dataframe.get("enter_short", 0).sum())
             if n_long + n_short > 0:
-                logger.info("Anti-fragile recovered: %d long, %d short signals", n_long, n_short)
-                self._no_signal_count = 0  # Reset after recovery
+                logger.info("Anti-fragile %s recovered: %d long, %d short signals", pair, n_long, n_short)
+                self._no_signal_count[pair] = 0  # Reset after recovery
 
         return dataframe
 
@@ -849,6 +852,10 @@ class SMCTrend(IStrategy):
         # === Rejection dedup: don't retry same pair on same candle ===
         if not hasattr(self, "_last_reject"):
             self._last_reject = {}
+        # Periodic cleanup (every ~100 calls, remove entries older than 1 hour)
+        if len(self._last_reject) > 50:
+            _cutoff = (current_time.timestamp() if hasattr(current_time, 'timestamp') else 0) - 3600
+            self._last_reject = {k: v for k, v in self._last_reject.items() if v > _cutoff}
         _reject_key = f"{pair}_{side}"
         _now_ts = current_time.timestamp() if hasattr(current_time, 'timestamp') else 0
         _tf_sec = {"1h": 3600, "15m": 900, "5m": 300}.get(self.timeframe, 900)
@@ -1246,14 +1253,12 @@ class SMCTrend(IStrategy):
           conf=0.9 → 2.62x
           conf=1.0 → 3.0x (max)
         """
-        # Use live macro confidence if available, else fall back to dataframe
-        if self._live_confidence is not None:
-            confidence = self._live_confidence
-        else:
-            dataframe, _ = self.dp.get_analyzed_dataframe(pair, self.timeframe)
-            if len(dataframe) == 0:
-                return 1.0
-            confidence = dataframe.iloc[-1].get("confidence", 0.5)
+        # Use dataframe confidence (same source as guards and position sizing)
+        # This ensures leverage, guard checks, and stake calculations are consistent
+        dataframe, _ = self.dp.get_analyzed_dataframe(pair, self.timeframe)
+        if len(dataframe) == 0:
+            return 1.0
+        confidence = dataframe.iloc[-1].get("confidence", 0.5)
 
         max_lev = self.max_leverage.value
 
@@ -1266,16 +1271,6 @@ class SMCTrend(IStrategy):
             else:
                 lev = 1.5      # Fallback
             return min(lev, max_leverage)
-
-        # Normal mode: use higher of live confidence and dataframe confidence
-        # Live confidence (macro) can be overly conservative, blend with local signal
-        local_conf = confidence
-        if self._live_confidence is not None:
-            dataframe, _ = self.dp.get_analyzed_dataframe(pair, self.timeframe)
-            if len(dataframe) > 0:
-                local_conf = dataframe.iloc[-1].get("confidence", confidence)
-            # Blend: 60% macro + 40% local (macro still dominant but less crushing)
-            confidence = self._live_confidence * 0.6 + local_conf * 0.4
 
         # Quadratic scaling with floor: minimum 1.5x if confidence > 0.2
         lev = 1.0 + (max_lev - 1.0) * (confidence ** 2)
