@@ -22,9 +22,13 @@ interface OpenPosition {
   stop_loss: number;
   take_profit_levels?: number[];
   position_size_usd?: number;
+  leverage?: number;
   confidence?: number;
   reason?: string;
   entry_time?: string;
+  current_rate?: number;
+  profit_pct?: number;
+  profit_abs?: number;
 }
 
 interface ClosedTrade {
@@ -116,8 +120,11 @@ export default function TradesPage() {
   const fetchAll = useCallback(async () => {
     try {
       const [tradeData, perfData, eqData, journalData] = await Promise.all([
-        apiClient.get<PaperTradeData>('/api/strategy/trades/paper'),
-        apiClient.get<PerformanceData>('/api/strategy/trades/paper/performance'),
+        // Prefer Freqtrade live data, fallback to scanner paper trades
+        apiClient.get<PaperTradeData>('/api/dashboard/ft-trades').catch(() =>
+          apiClient.get<PaperTradeData>('/api/strategy/trades/paper')
+        ),
+        apiClient.get<PerformanceData>('/api/strategy/trades/paper/performance').catch(() => null),
         apiClient.get<EquityPoint[]>('/api/strategy/trades/paper/equity-curve').catch(() => []),
         apiClient.get<JournalData>('/api/dashboard/journal').catch(() => ({ trades: [], grade_stats: {} })),
       ]);
@@ -366,9 +373,9 @@ function PositionsTab({ positions }: { positions: OpenPosition[] }) {
             <th className="text-left px-4 py-3 text-gray-400 font-medium">方向</th>
             <th className="text-right px-4 py-3 text-gray-400 font-medium">進場價格</th>
             <th className="text-right px-4 py-3 text-gray-400 font-medium">停損</th>
-            <th className="text-right px-4 py-3 text-gray-400 font-medium">止盈</th>
+            <th className="text-right px-4 py-3 text-gray-400 font-medium">現價</th>
             <th className="text-right px-4 py-3 text-gray-400 font-medium">倉位</th>
-            <th className="text-right px-4 py-3 text-gray-400 font-medium">信心</th>
+            <th className="text-right px-4 py-3 text-gray-400 font-medium">損益</th>
             <th className="text-left px-4 py-3 text-gray-400 font-medium">原因</th>
             <th className="text-left px-4 py-3 text-gray-400 font-medium">時間</th>
           </tr>
@@ -383,17 +390,17 @@ function PositionsTab({ positions }: { positions: OpenPosition[] }) {
                 </span>
               </td>
               <td className="px-4 py-3 text-right text-gray-300">${fmt(pos.entry_price)}</td>
-              <td className="px-4 py-3 text-right text-red-400/70">${fmt(pos.stop_loss)}</td>
+              <td className="px-4 py-3 text-right text-red-400/70">
+                {pos.stop_loss ? `$${fmt(pos.stop_loss)}` : '—'}
+              </td>
               <td className="px-4 py-3 text-right text-green-400/70">
-                {pos.take_profit_levels?.length
-                  ? `$${fmt(pos.take_profit_levels[0])}`
-                  : '—'}
+                {pos.current_rate ? `$${fmt(pos.current_rate)}` : pos.take_profit_levels?.length ? `$${fmt(pos.take_profit_levels[0])}` : '—'}
               </td>
               <td className="px-4 py-3 text-right text-gray-300">
-                {pos.position_size_usd ? `$${fmt(pos.position_size_usd)}` : '—'}
+                {pos.position_size_usd ? `$${fmt(pos.position_size_usd)}${pos.leverage ? ` ${pos.leverage.toFixed(1)}x` : ''}` : '—'}
               </td>
-              <td className="px-4 py-3 text-right text-gray-300">
-                {pos.confidence ? `${(pos.confidence * 100).toFixed(0)}%` : '—'}
+              <td className={`px-4 py-3 text-right font-medium ${pnlClass(pos.profit_pct ?? 0)}`}>
+                {pos.profit_pct != null ? `${sign(pos.profit_pct)}${fmt(pos.profit_pct)}%` : pos.confidence ? `${(pos.confidence * 100).toFixed(0)}%` : '—'}
               </td>
               <td className="px-4 py-3 text-gray-400 text-xs max-w-[200px] truncate">
                 {pos.reason || '—'}

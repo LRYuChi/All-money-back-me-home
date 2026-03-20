@@ -204,8 +204,45 @@ def _get_macro() -> dict:
     return data
 
 
+def _ft_api(path: str) -> dict | list | None:
+    """Query Freqtrade REST API (shared helper)."""
+    import base64
+    creds = f"{os.environ.get('FT_USER', 'freqtrade')}:{os.environ.get('FT_PASS', 'freqtrade')}"
+    auth = base64.b64encode(creds.encode()).decode()
+    headers = {"Authorization": f"Basic {auth}"}
+    for host in ["freqtrade:8080", "localhost:8080"]:
+        try:
+            req = urllib.request.Request(f"http://{host}/api/v1/{path}", headers=headers)
+            with urllib.request.urlopen(req, timeout=5) as resp:
+                return json.loads(resp.read())
+        except Exception:
+            continue
+    return None
+
+
 def _get_trading_status() -> dict:
-    """Get paper trading status from trade store."""
+    """Get trading status from Freqtrade API (live data, not scanner)."""
+    try:
+        profit = _ft_api("profit")
+        balance = _ft_api("balance")
+        status = _ft_api("status")
+        if profit and balance:
+            total_bal = balance.get("total", 1000)
+            initial = 1000  # dry_run_wallet
+            return {
+                "capital": round(total_bal, 2),
+                "initial_capital": initial,
+                "total_pnl": round(profit.get("profit_all_coin", 0), 2),
+                "total_pnl_pct": round(profit.get("profit_all_percent", 0), 2),
+                "open_positions": len(status) if isinstance(status, list) else 0,
+                "total_trades": profit.get("trade_count", 0),
+                "win_rate": round(
+                    profit.get("winning_trades", 0) / max(profit.get("closed_trade_count", 1), 1) * 100, 1
+                ),
+            }
+    except Exception:
+        pass
+    # Fallback to scanner TradeStore
     try:
         from ..services.trade_store import TradeStore
         store = TradeStore()
@@ -216,8 +253,7 @@ def _get_trading_status() -> dict:
         wins = sum(1 for t in closed if (t.get("pnl_usd") or 0) > 0)
         total = len(closed)
         return {
-            "capital": capital,
-            "initial_capital": initial,
+            "capital": capital, "initial_capital": initial,
             "total_pnl": round(capital - initial, 2),
             "total_pnl_pct": round((capital - initial) / initial * 100, 2) if initial else 0,
             "open_positions": len(state.get("open_positions", [])),
@@ -411,6 +447,72 @@ def _get_next_killzone() -> dict:
 
     # Next day London
     return {"name": "倫敦開盤", "starts_in_hours": 24 - hour + 7, "utc_start": "07:00"}
+
+
+@router.get("/ft-trades")
+async def get_ft_trades():
+    """Freqtrade 交易數據 — open positions + closed trades + performance."""
+    status = _ft_api("status") or []
+    trades_resp = _ft_api("trades?limit=50") or {"trades": []}
+    profit = _ft_api("profit") or {}
+    balance = _ft_api("balance") or {"total": 1000}
+
+    all_trades = trades_resp.get("trades", []) if isinstance(trades_resp, dict) else []
+    open_positions = []
+    closed_trades = []
+
+    for t in (status if isinstance(status, list) else []):
+        open_positions.append({
+            "symbol": t.get("pair", "?"),
+            "direction": "short" if t.get("is_short") else "long",
+            "entry_price": t.get("open_rate", 0),
+            "stop_loss": t.get("stop_loss", 0),
+            "take_profit_levels": [],
+            "position_size_usd": t.get("stake_amount", 0),
+            "leverage": t.get("leverage", 1),
+            "confidence": 0,
+            "reason": t.get("enter_tag", ""),
+            "entry_time": t.get("open_date", ""),
+            "current_rate": t.get("current_rate", 0),
+            "profit_pct": t.get("profit_pct", 0),
+            "profit_abs": t.get("profit_abs", 0),
+        })
+
+    for t in all_trades:
+        if t.get("is_open"):
+            continue
+        closed_trades.append({
+            "symbol": t.get("pair", "?"),
+            "direction": "short" if t.get("is_short") else "long",
+            "entry_price": t.get("open_rate", 0),
+            "exit_price": t.get("close_rate", 0),
+            "pnl_pct": t.get("profit_pct", 0) or 0,
+            "pnl_usd": t.get("profit_abs", 0) or 0,
+            "exit_reason": t.get("exit_reason", "?"),
+            "r_multiple": None,
+            "leverage": t.get("leverage", 1),
+            "duration_bars": t.get("trade_duration", 0),
+            "entry_time": t.get("open_date", ""),
+            "exit_time": t.get("close_date", ""),
+        })
+
+    capital = balance.get("total", 1000)
+    initial = 1000
+    total_pnl = profit.get("profit_all_coin", 0)
+    total_closed = profit.get("closed_trade_count", 0) or len(closed_trades)
+    wins = profit.get("winning_trades", 0)
+
+    return {
+        "capital": round(capital, 2),
+        "initial_capital": initial,
+        "total_pnl": round(total_pnl, 2),
+        "total_pnl_pct": round(total_pnl / initial * 100, 2) if initial else 0,
+        "open_positions": open_positions,
+        "closed_trades": closed_trades,
+        "win_rate": round(wins / max(total_closed, 1) * 100, 1),
+        "total_trades": profit.get("trade_count", 0),
+        "last_updated": datetime.utcnow().isoformat(),
+    }
 
 
 @router.get("")
