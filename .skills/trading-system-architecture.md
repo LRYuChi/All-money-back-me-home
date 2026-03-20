@@ -169,9 +169,9 @@ base_scale = 0.2 + 1.3 × confidence  (0.2x - 1.5x)
 - 硬上限: 2% 帳戶風險/筆交易
 
 ### 部分止盈 + 金字塔加倉
-- 1.5R: 賣 33%
-- 2.5R: 再賣 33%
-- 剩餘 34%: trailing stop
+- 1.0R: 賣 33% + 移 stop 到 breakeven
+- 2.0R: 再賣 33% + Phase 3 trail 啟動
+- 2.5R: custom_exit 全倉止盈（或 trail 剩餘 34%）
 - 金字塔: 利潤 >5% + confidence ≥ 0.5, 最多 3 筆
 
 ### 止損 (3 階段 ATR + 動態倍數)

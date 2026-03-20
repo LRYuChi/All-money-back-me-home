@@ -835,9 +835,9 @@ class SMCTrend(IStrategy):
                 # Normalize by leverage: current_profit is account-level (includes leverage)
                 position_profit = current_profit / max(trade.leverage, 1.0)
                 r_multiple = position_profit / atr_sl_pct
-                # Full take-profit at 3.5R — exceptional trade, lock in gains
-                if r_multiple >= 3.5:
-                    return "take_profit_3R"
+                # Full take-profit at 2.5R — optimal expectancy for 15m SMC
+                if r_multiple >= 2.5:
+                    return "take_profit_2.5R"
 
         # CHoCH exit: 4H structure break after hold time (use HTF, not 15m noise)
         if trade.is_short and last.get("htf_choch") == 1:
@@ -1342,16 +1342,15 @@ class SMCTrend(IStrategy):
         else:
             r_multiple = 0
 
-        if r_multiple >= 2.5:
+        if r_multiple >= 2.0:
             # Phase 3: Trail at 0.7R below — tighter trail to capture more profit
             trail_dist = atr_sl_pct * 0.7
             new_sl = -(trail_dist)
             return max(new_sl, -0.008)  # Never tighter than 0.8%
 
-        elif r_multiple >= 1.5:
+        elif r_multiple >= 1.0:
             # Phase 2: Breakeven — move stop to entry + 0.3% (lock small profit)
-            # Was: 1.0R → too aggressive, 15m normal retracement sweeps it
-            # Now: 1.5R → gives trade room to breathe
+            # At 1R, first partial (33%) already taken, protect remaining 67%
             breakeven_sl = -(current_profit - 0.003)  # 0.3% buffer above entry
             return min(breakeven_sl, -0.003)  # At least 0.3% from current
 
@@ -1502,8 +1501,8 @@ class SMCTrend(IStrategy):
                 trade_info = trade.get_custom_data("partials") if hasattr(trade, "get_custom_data") else None
                 partials_done = int(trade_info) if trade_info else 0
 
-                # 1.5R → sell 33% (was 1R, too early on 15m)
-                if r_multiple >= 1.5 and partials_done < 1:
+                # 1.0R → sell 33% (research: 70%+ trades reach 1R, lock early profit)
+                if r_multiple >= 1.0 and partials_done < 1:
                     if hasattr(trade, "set_custom_data"):
                         trade.set_custom_data("partials", 1)
                     partial_amount = trade.stake_amount * 0.33
@@ -1512,8 +1511,8 @@ class SMCTrend(IStrategy):
                     logger.info("Partial exit 1R for %s: -%.2f USDT (R=%.1f)", pair, partial_amount, r_multiple)
                     return -partial_amount
 
-                # 2.5R → sell another 33% (was 2R)
-                if r_multiple >= 2.5 and partials_done < 2:
+                # 2.0R → sell another 33% (research: optimal expectancy at 2-2.5R)
+                if r_multiple >= 2.0 and partials_done < 2:
                     if hasattr(trade, "set_custom_data"):
                         trade.set_custom_data("partials", 2)
                     partial_amount = trade.stake_amount * 0.33
