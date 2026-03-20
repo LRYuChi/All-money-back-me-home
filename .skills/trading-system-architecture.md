@@ -174,8 +174,19 @@ base_scale = 0.2 + 1.3 × confidence  (0.2x - 1.5x)
 - 剩餘 34%: trailing stop
 - 金字塔: 利潤 >5% + confidence ≥ 0.5, 最多 3 筆
 
-### 止損 (3 階段 ATR)
-1. 初始: ATR × sl_mult (預設 2.2)
+### 止損 (3 階段 ATR + 動態倍數)
+
+**動態 ATR 倍數** (base_sl_mult=1.315 from hyperopt):
+| ATR% 範圍 | 倍數 | 邏輯 |
+|-----------|------|------|
+| < 0.2% | 2.0x base (2.63) | 極窄盤整，防噪音掃損 |
+| 0.2-0.4% | 1.3x base (1.71) | 低波動，略寬 |
+| 0.4-0.8% | 1.0x base (1.315) | 正常，用 hyperopt 值 |
+| 0.8-1.5% | 0.85x base (1.12) | 高波動，略緊 |
+| > 1.5% | 0.7x base (0.92) | 極端，保護資金 |
+
+**3 階段管理:**
+1. 初始: ATR × dynamic_sl_mult (min 0.3%)
 2. 1.5R 利潤: 移到打平 + 0.3% buffer
 3. 2.5R+ 利潤: Trail at 0.7R below high
 

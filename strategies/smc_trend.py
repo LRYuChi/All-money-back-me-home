@@ -1268,7 +1268,25 @@ class SMCTrend(IStrategy):
         if atr <= 0:
             return None
 
-        sl_mult = self.atr_sl_mult.value  # Default 1.5
+        base_sl_mult = self.atr_sl_mult.value  # Default 1.315 (hyperopt)
+
+        # Dynamic ATR multiplier: widen stops in consolidation, tighten in high vol
+        atr_pct = atr / trade.open_rate
+        if atr_pct < 0.002:
+            # Very tight consolidation → widen to 2x base (avoid noise sweeps)
+            sl_mult = base_sl_mult * 2.0
+        elif atr_pct < 0.004:
+            # Normal-low vol → slight widen 1.3x
+            sl_mult = base_sl_mult * 1.3
+        elif atr_pct > 0.015:
+            # Extreme volatility → tighten to 0.7x (protect capital)
+            sl_mult = base_sl_mult * 0.7
+        elif atr_pct > 0.008:
+            # High vol → slight tighten 0.85x
+            sl_mult = base_sl_mult * 0.85
+        else:
+            # Normal range (0.4%-0.8%) → use base
+            sl_mult = base_sl_mult
 
         # ATR-based risk distance (floor: 0.3% prevents noise-triggered stops in consolidation)
         atr_sl_dist = atr * sl_mult

@@ -228,3 +228,52 @@ class TestSmallAccountLeverage:
         # 3.0 > 2.55 → REJECT
         assert result is not None
         assert "Leverage" in result
+
+
+class TestDynamicATRMultiplier:
+    """Verify dynamic ATR sl_mult logic with various volatility regimes."""
+
+    BASE_SL_MULT = 1.315  # hyperopt optimized
+
+    @staticmethod
+    def _calc_sl_mult(atr_pct: float) -> float:
+        """Replicate dynamic ATR multiplier from custom_stoploss."""
+        base = 1.315
+        if atr_pct < 0.002:
+            return base * 2.0
+        elif atr_pct < 0.004:
+            return base * 1.3
+        elif atr_pct > 0.015:
+            return base * 0.7
+        elif atr_pct > 0.008:
+            return base * 0.85
+        else:
+            return base
+
+    def test_consolidation_widens_stop(self):
+        """ATR < 0.2% → 2x multiplier to avoid noise sweeps."""
+        mult = self._calc_sl_mult(0.001)
+        assert mult == self.BASE_SL_MULT * 2.0
+        # BTC at $70k with ATR=$70 → sl = 70 * 2.63 / 70000 = 0.264%
+        assert mult > 2.0
+
+    def test_normal_vol_uses_base(self):
+        """ATR 0.4%-0.8% → use base hyperopt multiplier."""
+        mult = self._calc_sl_mult(0.005)
+        assert mult == self.BASE_SL_MULT
+
+    def test_high_vol_tightens_stop(self):
+        """ATR > 1.5% → 0.7x multiplier to protect capital."""
+        mult = self._calc_sl_mult(0.02)
+        assert mult == self.BASE_SL_MULT * 0.7
+        assert mult < 1.0
+
+    def test_current_market_btc(self):
+        """Real BTC data: atr_pct=0.356% → low-normal, 1.3x widen."""
+        mult = self._calc_sl_mult(0.00356)
+        assert mult == self.BASE_SL_MULT * 1.3  # Slightly wider in low vol
+
+    def test_current_market_eth(self):
+        """Real ETH data: atr_pct=0.492% → normal range, base mult."""
+        mult = self._calc_sl_mult(0.00492)
+        assert mult == self.BASE_SL_MULT
