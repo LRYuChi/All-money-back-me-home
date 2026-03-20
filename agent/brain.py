@@ -28,6 +28,22 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from agent.tools import ToolExecutor, get_tool_definitions, validate_tool_call
 from agent.memory import AgentMemory
 
+# P0/P1 模組整合
+try:
+    from agent.skill_loader import SkillLoader
+    from agent.trigger_engine import TriggerEngine
+    from agent.prompt_builder import PromptBuilder
+    from agent.hallucination_guard import HallucinationGuard
+    from agent.observability import Observability
+    from agent.model_router import ModelRouter
+    from agent.cache_layer import AgentCache
+    from agent.token_metrics import TokenMetrics
+    _SKILLS_AVAILABLE = True
+except ImportError as e:
+    _SKILLS_AVAILABLE = False
+    import logging as _logging
+    _logging.getLogger(__name__).warning("Skills 模組載入失敗: %s, 使用原有模式", e)
+
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
@@ -101,6 +117,21 @@ class AgentBrain:
         self._last_full_analysis = 0
         self._last_quick_check = 0
 
+        # Skills architecture (P0/P1)
+        if _SKILLS_AVAILABLE:
+            self.skill_loader = SkillLoader()
+            self.trigger_engine = TriggerEngine()
+            self.prompt_builder = PromptBuilder()
+            self.hallucination_guard = HallucinationGuard()
+            self.observability = Observability()
+            self.model_router = ModelRouter()
+            self.cache = AgentCache(ttl_seconds=900)
+            self.token_metrics = TokenMetrics()
+            logger.info("Skills 架構已載入")
+        else:
+            self.skill_loader = None
+            self.trigger_engine = None
+
     def run_forever(self) -> None:
         """Main loop — runs scheduled tasks."""
         logger.info("Agent Brain started. Tier=%d", self.tier)
@@ -128,6 +159,19 @@ class AgentBrain:
         """
         logger.info("=== Full Analysis Cycle ===")
         self._last_full_analysis = time.time()
+
+        # 嘗試 Skills 架構（優先）
+        if _SKILLS_AVAILABLE and self.skill_loader:
+            try:
+                lightweight_state = self._get_lightweight_state()
+                skills_result = self.run_skills_cycle(lightweight_state)
+                if skills_result is not None:
+                    # Skills 架構產生了有效決策，執行它
+                    self._execute_decision(skills_result)
+                    return
+                # skills_result is None = 無觸發或 no_action，繼續原有流程
+            except Exception as e:
+                logger.warning("Skills 週期失敗，降級至原有模式: %s", e)
 
         # 1. Gather all market data
         market = self.executor.execute("get_market_overview", {})
@@ -276,6 +320,189 @@ Agent Tier: {self.tier}
             messages.append({"role": "user", "content": tool_results})
 
         return final_text or "Analysis completed (tools only)"
+
+    def run_skills_cycle(self, state: dict) -> dict | None:
+        """
+        Skills 架構的決策週期（取代原有的固定 prompt 模式）。
+        流程: 觸發判斷 → 快取 → Skill 選擇 → 壓縮 Prompt → Claude → 驗證 → 執行
+        """
+        if not _SKILLS_AVAILABLE:
+            return None  # 降級到原有模式
+
+        # Step 1: 觸發判斷（0 token）
+        should_call, reason, priority, all_reasons = self.trigger_engine.should_invoke_claude(state)
+
+        if not should_call:
+            self.token_metrics.record(event="skipped", trigger_reason=reason)
+            return None
+
+        # Step 2: 快取查詢（0 token）
+        cached = self.cache.get(state)
+        if cached:
+            self.token_metrics.record(event="cache_hit", trigger_reason=reason)
+            if cached.get("action") != "no_action":
+                return cached
+            return None
+
+        # Step 3: Skill 載入（三層降級）
+        skill_context, load_method = self.skill_loader.load_with_fallback(
+            trigger_reason=reason, priority=priority,
+            regime=state.get("regime", "UNKNOWN"),
+            token_budget={"critical": 1500, "high": 1000, "medium": 600, "routine": 2000}.get(priority, 800)
+        )
+
+        # Step 4: 幻覺防護 — 輸入層
+        grounding = self.hallucination_guard.build_grounded_prompt(state)
+
+        # Step 5: 壓縮 Prompt
+        perf = state.get("performance", {})
+        market = state.get("market", {})
+        memories = []
+        if hasattr(self, 'memory') and self.memory and priority in ("routine", "high", "critical"):
+            try:
+                memories = self.memory.retrieve_relevant(
+                    regime=state.get("regime", "UNKNOWN"),
+                    limit=5
+                )
+            except Exception:
+                pass
+
+        prompt = self.prompt_builder.build_prompt(
+            skill_context=skill_context,
+            state=state, perf=perf, market=market,
+            memories=memories, trigger_reason=reason,
+            priority=priority, all_reasons=all_reasons,
+        )
+        prompt = grounding + "\n\n" + prompt
+
+        # Step 6: 選擇模型
+        model = self.model_router.get_model("decision_normal", priority)
+        max_output = self.model_router.get_max_output_tokens(priority)
+
+        # Step 7: 呼叫 Claude
+        try:
+            import anthropic
+            client = anthropic.Anthropic()
+            response = client.messages.create(
+                model=model,
+                max_tokens=max_output,
+                messages=[{"role": "user", "content": prompt}],
+            )
+            raw_text = response.content[0].text
+            input_tokens = response.usage.input_tokens
+            output_tokens = response.usage.output_tokens
+        except Exception as e:
+            logger.error("Claude API 呼叫失敗: %s", e)
+            self.token_metrics.record(event="api_error", trigger_reason=reason)
+            return None
+
+        # Step 8: 解析輸出
+        decision = self.prompt_builder.parse_minimal_output(raw_text)
+
+        # Step 9: 幻覺防護 — 輸出層
+        valid, errors = self.hallucination_guard.validate_decision(decision, state)
+        if not valid:
+            logger.warning("決策驗證失敗: %s", errors)
+            decision = {"action": "no_action", "reason": f"驗證失敗: {'; '.join(errors)}", "confidence": 0.0}
+
+        # Step 10: 快取 + Token 記錄
+        self.cache.set(state, decision)
+        cost = self.model_router.estimate_cost(model, input_tokens, output_tokens)
+        self.token_metrics.record(
+            event="api_call", tokens=input_tokens + output_tokens,
+            cost_usd=cost, model=model, priority=priority,
+            action=decision.get("action", ""), trigger_reason=reason,
+            skills_used=self.skill_loader.select_skills(reason, priority, state.get("regime", "UNKNOWN")),
+        )
+
+        # Step 11: 可觀測性追蹤
+        self.observability.emit_trace(
+            inputs={"regime": state.get("regime"), "trigger": reason, "data_quality": grounding[:100]},
+            reasoning={"model": model, "prompt_tokens": input_tokens, "output_tokens": output_tokens},
+            output={"decision": decision, "validation": {"valid": valid, "errors": errors}},
+            skills_used=self.skill_loader.select_skills(reason, priority, state.get("regime", "UNKNOWN")),
+            tokens_input=input_tokens, tokens_output=output_tokens,
+            cost_usd=cost, model=model, priority=priority,
+            trigger_reason=reason, load_method=load_method,
+        )
+
+        # Step 12: 排程決策後驗證
+        if decision.get("action") != "no_action":
+            try:
+                self.hallucination_guard.schedule_verification(
+                    decision_id=f"skills_{int(time.time())}",
+                    decision=decision,
+                    current_metrics=perf,
+                )
+            except Exception:
+                pass
+
+        logger.info(
+            "Skills 決策: action=%s conf=%.2f model=%s tokens=%d cost=$%.4f trigger=%s",
+            decision.get("action"), decision.get("confidence", 0),
+            model, input_tokens + output_tokens, cost, reason,
+        )
+
+        return decision if decision.get("action") != "no_action" else None
+
+    def _get_lightweight_state(self) -> dict:
+        """取得輕量狀態快照（不呼叫 API，只讀本地數據）"""
+        state = {}
+        try:
+            from market_monitor.state_store import BotStateStore
+            bot_state = BotStateStore.read()
+            state.update({
+                "regime": bot_state.get("last_confidence_regime", "UNKNOWN"),
+                "confidence_score": bot_state.get("last_confidence_score", 0.5),
+                "consecutive_losses": bot_state.get("consecutive_losses", 0),
+                "guard_rejections": bot_state.get("guard_rejections_today", 0),
+                "agent_risk_level": bot_state.get("agent_risk_level"),
+            })
+            # Crypto env
+            crypto = bot_state.get("crypto_env_cache", {})
+            state["crypto_env"] = crypto
+        except Exception:
+            pass
+
+        # Performance from memory
+        try:
+            if hasattr(self, 'memory') and self.memory:
+                stats = self.memory.get_stats()
+                state["performance"] = stats
+                state["last_routine_analysis"] = stats.get("last_analysis_time")
+        except Exception:
+            pass
+
+        return state
+
+    def _execute_decision(self, decision: dict):
+        """執行 Skills 架構的決策"""
+        action = decision.get("action", "no_action")
+        changes = decision.get("changes", {})
+        reason = decision.get("reason", "")
+
+        if action == "no_action":
+            return
+
+        try:
+            from agent.tools import execute_tool
+            result = execute_tool(action, changes)
+            logger.info("Skills 決策已執行: %s → %s", action, result)
+        except ImportError:
+            # Fallback: direct state store update
+            from market_monitor.state_store import BotStateStore
+            if action == "pause_bot":
+                BotStateStore.update(agent_pause_entries=True)
+            elif action == "adjust_risk":
+                level = changes.get("risk_level", changes.get("level", "conservative"))
+                BotStateStore.update(agent_risk_level=level)
+            elif action == "adjust_params":
+                if "leverage_cap" in changes:
+                    BotStateStore.update(agent_leverage_cap=changes["leverage_cap"])
+            elif action == "send_alert":
+                from market_monitor.telegram_zh import send_message
+                send_message(f"🤖 Agent: {reason}")
+            logger.info("Skills 決策已執行(fallback): %s", action)
 
     def _handle_tool_call(self, name: str, args: dict, context: dict) -> dict:
         """Validate and execute a tool call."""

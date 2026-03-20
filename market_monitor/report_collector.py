@@ -365,7 +365,8 @@ def generate_digest(reports: list[Report]) -> str:
                      "sentiment": "市場情緒"}.get(cat, cat)
         lines = []
         for item in items[:8]:  # Max 8 per category
-            lines.append(f"- [{item.sentiment.upper()}] {item.title}: {item.content[:200]}")
+            time_str = item.timestamp[:16] if item.timestamp else "?"
+            lines.append(f"- [{time_str}][{item.sentiment.upper()}] {item.title}: {item.content[:200]}")
         sections.append(f"## {cat_label}\n" + "\n".join(lines))
 
     prompt_content = "\n\n".join(sections)
@@ -374,10 +375,12 @@ def generate_digest(reports: list[Report]) -> str:
     if ANTHROPIC_API_KEY:
         try:
             digest = _call_claude_digest(prompt_content)
-            if digest:
-                return digest
         except Exception as e:
-            logger.warning("Claude digest failed: %s — falling back to simple digest", e)
+            logger.warning("Claude digest 失敗，使用簡易摘要: %s", e)
+            digest = None
+
+        if digest:
+            return digest
 
     # Fallback: simple Python digest
     return _simple_digest(groups)

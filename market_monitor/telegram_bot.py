@@ -15,7 +15,7 @@ import os
 import sys
 import time
 import urllib.request
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
@@ -24,7 +24,12 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(name)s - %(level
 logger = logging.getLogger("telegram_bot")
 
 BOT_TOKEN = os.environ.get("TG_AI_BOT_TOKEN", "")
-AUTHORIZED_CHAT_IDS = [int(x) for x in os.environ.get("TELEGRAM_CHAT_ID", "1481081110").split(",")]
+_raw_ids = os.environ.get("TELEGRAM_CHAT_ID", "")
+if not _raw_ids:
+    logger.error("TELEGRAM_CHAT_ID 未設定，Telegram Bot 無法啟動")
+    AUTHORIZED_CHAT_IDS = []
+else:
+    AUTHORIZED_CHAT_IDS = [int(x.strip()) for x in _raw_ids.split(",") if x.strip()]
 DATA_DIR = Path(os.environ.get("DATA_DIR", "/app/data"))
 ANTHROPIC_API_KEY = os.environ.get("ANTHROPIC_API_KEY", "")
 _last_ai_call: float = 0
@@ -218,8 +223,7 @@ def _next_analysis_countdown() -> str:
             mins = int((delta.total_seconds() % 3600) // 60)
             return f"{hrs}h{mins}m"
     # Next day 00:00
-    tomorrow = now.replace(hour=0, minute=0, second=0, microsecond=0)
-    tomorrow = tomorrow.replace(day=tomorrow.day + 1)
+    tomorrow = (now.replace(hour=0, minute=0, second=0, microsecond=0) + timedelta(days=1))
     delta = tomorrow - now
     hrs = int(delta.total_seconds() // 3600)
     return f"{hrs}h"
@@ -830,6 +834,14 @@ def handle_ai_query(question: str) -> str:
     _last_ai_call = time.time()
     summary = read_summary()
 
+    # Add data freshness info
+    snapshot_path = DATA_DIR / "market_snapshot.json"
+    data_age = "未知"
+    if snapshot_path.exists():
+        age_sec = time.time() - snapshot_path.stat().st_mtime
+        data_age = f"{age_sec/60:.0f} 分鐘前"
+    data_warning = f"⚠️ 以下數據更新於 {data_age}。超過 30 分鐘的數據請標注「可能過期」。\n\n"
+
     try:
         import anthropic
         client = anthropic.Anthropic()
@@ -837,7 +849,7 @@ def handle_ai_query(question: str) -> str:
             model="claude-sonnet-4-6",
             max_tokens=800,
             system="你是加密貨幣合約交易AI助手。用繁體中文簡潔回答，300字以內。基於數據客觀分析。",
-            messages=[{"role": "user", "content": f"市場數據:\n{summary}\n\n問題: {question}"}],
+            messages=[{"role": "user", "content": f"{data_warning}市場數據:\n{summary}\n\n問題: {question}"}],
         )
         text = response.content[0].text if response.content else "無法生成回答"
         tokens = f"({response.usage.input_tokens}in/{response.usage.output_tokens}out)"

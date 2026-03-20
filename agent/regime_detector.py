@@ -44,7 +44,14 @@ class RegimeDetector:
         factors["confidence"] = {"score": conf_score, "regime": conf_regime}
 
         # 2. BTC price momentum
-        btc = next((c for c in data.get("crypto", []) if c.get("name") == "BTC"), {})
+        # Handle both dict and list formats
+        crypto_data = data.get("crypto", data.get("crypto_env", {}))
+        if isinstance(crypto_data, dict):
+            btc = crypto_data.get("BTC", {})
+        elif isinstance(crypto_data, list):
+            btc = next((c for c in crypto_data if c.get("name") == "BTC"), {})
+        else:
+            btc = {}
         btc_change = btc.get("change_pct", 0)
         btc_rsi = btc.get("rsi", 50)
         factors["btc"] = {"change_pct": btc_change, "rsi": btc_rsi}
@@ -54,7 +61,11 @@ class RegimeDetector:
         factors["vix"] = vix
 
         # 4. Fear & Greed
-        fg = data.get("macro", {}).get("fear_greed", {}).get("value", 50)
+        fg_raw = data.get("macro", {}).get("fear_greed", 50)
+        if isinstance(fg_raw, dict):
+            fg = fg_raw.get("value", 50)
+        else:
+            fg = fg_raw if isinstance(fg_raw, (int, float)) else 50
         factors["fear_greed"] = fg
 
         # 5. Crypto Environment
@@ -68,6 +79,12 @@ class RegimeDetector:
 
         # === Classification Logic ===
         regime, confidence = self._classify(conf_score, conf_regime, btc_change, btc_rsi, vix, fg, btc_env)
+
+        logger.info(
+            "Regime: %s (conf=%.2f) | factors: conf_score=%.2f btc_change=%.1f%% vix=%.1f fg=%d btc_env=%.2f",
+            regime, confidence, conf_score, btc_change * 100 if btc_change else 0,
+            vix, fg, btc_env
+        )
 
         return {
             "regime": regime,
