@@ -10,10 +10,12 @@ from __future__ import annotations
 
 import json
 import logging
+import math
 import os
 import sqlite3
 import time
 import uuid
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -178,8 +180,141 @@ class AgentMemory:
         }
 
     # ------------------------------------------------------------------
+    # Smart Retrieval (forgetting curve)
+    # ------------------------------------------------------------------
+
+    def retrieve_relevant(self, regime: str, domain: str = None, limit: int = 10) -> list[dict]:
+        """智慧檢索：結合 regime 匹配 + 使用頻率 + 新鮮度 + 成功率"""
+        conditions = ["archived = 0"]
+        params = []
+        if domain:
+            conditions.append("domain = ?")
+            params.append(domain)
+
+        sql = f"""
+            SELECT *,
+                julianday('now') - julianday(COALESCE(last_accessed, timestamp)) as days_since_access
+            FROM decisions
+            WHERE {' AND '.join(conditions)}
+            ORDER BY timestamp DESC
+            LIMIT 200
+        """
+        rows = self._query(sql, params)
+
+        scored = []
+        for row in rows:
+            r = dict(row) if not isinstance(row, dict) else row
+            regime_score = 3.0 if r.get("regime") == regime else 1.0
+            freq_score = math.log((r.get("access_count", 0) or 0) + 1)
+            days = r.get("days_since_access", 30) or 30
+            recency_score = 1.0 / (days + 1)
+            success = r.get("was_successful")
+            success_score = 1.5 if success == 1 else (0.5 if success == 0 else 1.0)
+
+            total = regime_score * 3 + freq_score * 2 + recency_score * 1 + success_score * 2
+            scored.append((total, r))
+
+        scored.sort(key=lambda x: x[0], reverse=True)
+
+        # Touch top results (increment access_count)
+        result = []
+        for _, r in scored[:limit]:
+            self._touch_decision(r.get("id"))
+            result.append(r)
+        return result
+
+    def _touch_decision(self, decision_id: str):
+        """更新 access_count 和 last_accessed（越用越容易被找到）"""
+        if not decision_id:
+            return
+        try:
+            now = datetime.now(timezone.utc).isoformat()
+            with self._connect() as conn:
+                conn.execute(
+                    "UPDATE decisions SET access_count = COALESCE(access_count, 0) + 1, last_accessed = ? WHERE id = ?",
+                    (now, decision_id),
+                )
+        except Exception:
+            pass
+
+    # ------------------------------------------------------------------
+    # Bidirectional Links (Obsidian-style)
+    # ------------------------------------------------------------------
+
+    def add_link(self, source_type: str, source_id: str, target_type: str, target_id: str, relation: str):
+        """建立雙向連結（Obsidian 式）"""
+        now = datetime.now(timezone.utc).isoformat()
+        with self._connect() as conn:
+            conn.execute(
+                "INSERT OR IGNORE INTO links VALUES (?, ?, ?, ?, ?, ?)",
+                (source_type, source_id, target_type, target_id, relation, now),
+            )
+
+    def get_related(self, item_type: str, item_id: str) -> list[dict]:
+        """取得所有相關項目（雙向查詢）"""
+        rows = self._query("""
+            SELECT * FROM links
+            WHERE (source_type=? AND source_id=?) OR (target_type=? AND target_id=?)
+        """, (item_type, item_id, item_type, item_id))
+        return [dict(r) if not isinstance(r, dict) else r for r in rows]
+
+    # ------------------------------------------------------------------
+    # Knowledge CRUD (v2)
+    # ------------------------------------------------------------------
+
+    def upsert_knowledge(self, domain: str, title: str, content: str, regime: str = None,
+                         confidence: float = 0.5, evidence_count: int = 1):
+        """新增或更新知識規則"""
+        now = datetime.now(timezone.utc).isoformat()
+        existing = self._query(
+            "SELECT id, evidence_count, version FROM knowledge WHERE title = ? AND domain = ?",
+            (title, domain),
+        )
+        with self._connect() as conn:
+            if existing:
+                row = existing[0]
+                r = dict(row) if not isinstance(row, dict) else row
+                conn.execute("""
+                    UPDATE knowledge SET content=?, confidence=?, evidence_count=?,
+                    version=?, updated_at=? WHERE id=?
+                """, (content, confidence, evidence_count,
+                      (r.get("version", 1) or 1) + 1, now, r.get("id")))
+            else:
+                conn.execute("""
+                    INSERT INTO knowledge (id, domain, regime, title, content, confidence,
+                    evidence_count, access_count, version, created_at, updated_at)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, 0, 1, ?, ?)
+                """, (str(uuid.uuid4())[:12], domain, regime, title, content, confidence,
+                      evidence_count, now, now))
+
+    def get_knowledge_v2(self, domain: str = None, regime: str = None, limit: int = 10) -> list[dict]:
+        """取得知識規則（按信心排序）— v2 schema"""
+        conditions = []
+        params: list[Any] = []
+        if domain:
+            conditions.append("domain = ?")
+            params.append(domain)
+        if regime:
+            conditions.append("(regime = ? OR regime IS NULL)")
+            params.append(regime)
+        where = f"WHERE {' AND '.join(conditions)}" if conditions else ""
+        params.append(limit)
+        rows = self._query(f"SELECT * FROM knowledge {where} ORDER BY confidence DESC, access_count DESC LIMIT ?", params)
+        return [dict(r) if not isinstance(r, dict) else r for r in rows]
+
+    # ------------------------------------------------------------------
     # Helpers
     # ------------------------------------------------------------------
+
+    def _query(self, sql: str, params: tuple = ()) -> list:
+        """Execute a read query and return rows."""
+        try:
+            with self._connect() as conn:
+                conn.row_factory = sqlite3.Row
+                return conn.execute(sql, params).fetchall()
+        except Exception as e:
+            logger.warning("Query failed: %s", e)
+            return []
 
     @staticmethod
     def _row_to_dict(row: tuple) -> dict:
