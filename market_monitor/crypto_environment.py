@@ -314,18 +314,14 @@ class CryptoEnvironmentEngine:
         }
 
     def _fear_greed(self, symbol: str) -> dict:
-        """CFGI.io per-token Fear & Greed (or fallback to Alternative.me)."""
-        # Try CFGI.io first (per-token)
-        data = _fetch(f"https://cfgi.io/api/fear-greed/{symbol}", f"fg_{symbol}")
-        if data and isinstance(data, dict) and "value" in data:
-            val = int(data["value"])
+        """Crypto Fear & Greed Index (Alternative.me — global, free, reliable)."""
+        # Alternative.me F&G (BTC-driven global sentiment, applies to all crypto)
+        # Note: CFGI.io per-token API is discontinued (404 since ~2026-03)
+        data = _fetch("https://api.alternative.me/fng/?limit=1", "fg_alt")
+        if data and data.get("data"):
+            val = int(data["data"][0]["value"])
         else:
-            # Fallback: Alternative.me (BTC only)
-            data = _fetch("https://api.alternative.me/fng/?limit=1", "fg_alt")
-            if data and data.get("data"):
-                val = int(data["data"][0]["value"])
-            else:
-                return {"score": 0.5, "value": None, "signal": "no data"}
+            return {"score": 0.5, "value": None, "signal": "no data"}
 
         # Contrarian at extremes, confirming in middle
         if val <= 20:

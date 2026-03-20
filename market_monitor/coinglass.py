@@ -72,7 +72,12 @@ def _fetch(
         return result
 
     except Exception as e:
-        logger.warning("CoinGlass fetch failed (%s): %s", endpoint, e)
+        # Rate-limit warnings: log each endpoint failure once per 30 min
+        _err_key = f"_err_{endpoint}"
+        last_err = _cache_ts.get(_err_key, 0)
+        if time.time() - last_err > 1800:
+            logger.warning("CoinGlass fetch failed (%s): %s", endpoint, e)
+            _cache_ts[_err_key] = time.time()
         return None
 
 
