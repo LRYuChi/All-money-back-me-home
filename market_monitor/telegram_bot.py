@@ -1030,15 +1030,15 @@ def setup_bot_commands() -> None:
     """設置 Telegram 底部命令選單 (輸入 / 時顯示)。"""
     commands = [
         {"command": "overview", "description": "一鍵全覽"},
+        {"command": "positions", "description": "當前持倉詳情"},
+        {"command": "trades", "description": "交易紀錄 (20筆)"},
+        {"command": "trade_stats", "description": "統計 (勝率/PF)"},
         {"command": "analysis", "description": "完整分析儀表板"},
-        {"command": "status", "description": "持倉 + 損益 + 狀態"},
         {"command": "confidence", "description": "信心引擎分數"},
         {"command": "crypto", "description": "加密環境 (6幣種)"},
         {"command": "regime", "description": "市場機制 + 建議"},
         {"command": "macro", "description": "宏觀指標"},
-        {"command": "trades", "description": "最近交易"},
         {"command": "guards", "description": "風控狀態"},
-        {"command": "decisions", "description": "Agent 決策"},
     ]
     try:
         url = f"https://api.telegram.org/bot{BOT_TOKEN}/setMyCommands"
@@ -1096,6 +1096,14 @@ def run_polling():
         logger.warning("Failed to clear webhook: %s", e)
 
     setup_bot_commands()
+
+    # Push updated keyboard to user on startup
+    try:
+        chat_id = os.environ.get("TELEGRAM_CHAT_ID")
+        if chat_id:
+            send_reply(int(chat_id), "Bot 已啟動 — 按鈕選單已更新", with_menu=True)
+    except Exception:
+        pass
 
     offset = 0
     while True:
