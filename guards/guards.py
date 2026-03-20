@@ -246,3 +246,49 @@ class LiquidationGuard(Guard):
                 f"Reduce leverage from {ctx.leverage}x"
             )
         return None
+
+
+class DirectionalExposureGuard(Guard):
+    """Reduce TotalExposure limit when all open positions share the same direction.
+
+    Crypto assets are highly correlated (BTC-ETH ~0.82, BTC-SOL ~0.75).
+    When all positions are long (or all short), a market-wide move amplifies
+    losses across the portfolio. This guard tightens the overall exposure
+    ceiling when directional concentration is detected.
+
+    Example: 3 long positions → reduce max exposure from 80% to 60%.
+    """
+
+    def __init__(self, max_same_dir: int = 2, reduced_pct: float = 60.0, normal_pct: float = 80.0):
+        self.max_same_dir = max_same_dir
+        self.reduced_pct = reduced_pct
+        self.normal_pct = normal_pct
+
+    def check(self, ctx: GuardContext) -> Optional[str]:
+        if not ctx.open_positions:
+            return None
+
+        # Count positions in same direction as new trade
+        same_dir_count = 0
+        for pos in ctx.open_positions.values():
+            pos_side = pos.get("side", "long")
+            if pos_side == ctx.side:
+                same_dir_count += 1
+
+        if same_dir_count >= self.max_same_dir:
+            # Tighter exposure limit
+            existing_exposure = sum(
+                float(pos.get("value", 0))
+                for pos in ctx.open_positions.values()
+            )
+            new_exposure = ctx.amount * ctx.leverage
+            total = existing_exposure + new_exposure
+            max_allowed = ctx.account_balance * (self.reduced_pct / 100)
+
+            if total > max_allowed:
+                return (
+                    f"Directional concentration: {same_dir_count + 1} {ctx.side} positions, "
+                    f"total exposure {total:.2f} exceeds reduced "
+                    f"{self.reduced_pct}% limit ({max_allowed:.2f})"
+                )
+        return None

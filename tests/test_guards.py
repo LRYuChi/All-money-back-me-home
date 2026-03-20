@@ -7,6 +7,7 @@ from guards.guards import (
     ConsecutiveLossGuard,
     CooldownGuard,
     DailyLossGuard,
+    DirectionalExposureGuard,
     DrawdownGuard,
     LiquidationGuard,
     MaxLeverageGuard,
@@ -251,6 +252,51 @@ def test_liquidation_reject_high_leverage():
 
 def test_liquidation_reject_extreme_leverage():
     guard = LiquidationGuard(min_distance_mult=2.0)
-    ctx = make_ctx(leverage=20.0)  # liq_dist = 5% - 0.4% = 4.6%, way under 10%
+    ctx = make_ctx(leverage=20.0)  # liq_dist = 5% - 1% = 4%, way under 10%
     result = guard.check(ctx)
     assert result is not None
+
+
+# --- DirectionalExposureGuard ---
+
+def test_directional_pass_mixed_directions():
+    """Mixed long/short positions pass even at high exposure."""
+    guard = DirectionalExposureGuard(max_same_dir=2, reduced_pct=60)
+    ctx = make_ctx(
+        amount=100, leverage=3,
+        open_positions={
+            "BTC/USDT:USDT": {"value": 300, "side": "long"},
+            "ETH/USDT:USDT": {"value": 300, "side": "short"},  # opposite direction
+        },
+    )
+    assert guard.check(ctx) is None  # Only 1 same-dir (long), threshold is 2
+
+
+def test_directional_reject_all_same_direction():
+    """Three longs trigger directional concentration limit."""
+    guard = DirectionalExposureGuard(max_same_dir=2, reduced_pct=60)
+    ctx = make_ctx(
+        amount=100, leverage=3,  # new long: $300
+        open_positions={
+            "BTC/USDT:USDT": {"value": 250, "side": "long"},
+            "ETH/USDT:USDT": {"value": 250, "side": "long"},  # 2 existing longs
+        },
+    )
+    # Total = 250 + 250 + 300 = 800 > 60% of 1000 = 600
+    result = guard.check(ctx)
+    assert result is not None
+    assert "Directional" in result
+
+
+def test_directional_pass_below_reduced_limit():
+    """Same direction but total exposure still under reduced limit."""
+    guard = DirectionalExposureGuard(max_same_dir=2, reduced_pct=60)
+    ctx = make_ctx(
+        amount=50, leverage=2,  # new: $100
+        open_positions={
+            "BTC/USDT:USDT": {"value": 200, "side": "long"},
+            "ETH/USDT:USDT": {"value": 200, "side": "long"},
+        },
+    )
+    # Total = 200 + 200 + 100 = 500 < 600
+    assert guard.check(ctx) is None

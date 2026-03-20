@@ -941,7 +941,10 @@ class SMCTrend(IStrategy):
                 open_pos = {}
                 if hasattr(self, 'dp') and self.dp:
                     for t in Trade.get_trades_proxy(is_open=True):
-                        open_pos[t.pair] = {"value": t.stake_amount * t.leverage}
+                        open_pos[t.pair] = {
+                            "value": t.stake_amount * t.leverage,
+                            "side": t.trade_direction if hasattr(t, "trade_direction") else "long",
+                        }
 
                 ctx = GuardContext(
                     symbol=pair,
@@ -1375,6 +1378,27 @@ class SMCTrend(IStrategy):
             logger.error("Risk cap calculation failed — using conservative 1%% of balance: %s", e)
             if self.wallets:
                 adjusted = min(adjusted, self.wallets.get_total("USDT") * 0.01)
+
+        # Pre-limit stake so MaxPositionGuard won't reject
+        # position_value = stake × leverage must fit within Guard's effective % limit
+        try:
+            if self.wallets and current_rate > 0:
+                acct = self.wallets.get_total("USDT")
+                est_lev = 1.0 + (self.max_leverage.value - 1.0) * (confidence ** 2)
+                # Mirror MaxPositionGuard's confidence-aware effective pct
+                if confidence >= 0.7:
+                    t = min((confidence - 0.7) / 0.3, 1.0)
+                    eff_pct = 30.0 + (45.0 - 30.0) * t
+                else:
+                    eff_pct = 30.0
+                max_pos_value = acct * (eff_pct / 100)
+                max_stake_guard = max_pos_value / est_lev if est_lev > 0 else max_pos_value
+                if adjusted > max_stake_guard:
+                    logger.info("Stake %.1f → %.1f (pre-limit for %.0f%% guard, lev=%.2fx)",
+                                adjusted, max_stake_guard, eff_pct, est_lev)
+                    adjusted = max_stake_guard
+        except Exception:
+            pass
 
         if min_stake is not None:
             adjusted = max(adjusted, min_stake)
