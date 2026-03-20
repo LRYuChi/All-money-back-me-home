@@ -637,6 +637,9 @@ class SMCTrend(IStrategy):
         ote_bonus_long = dataframe["in_ote_long"].fillna(False)
         ote_bonus_short = dataframe["in_ote_short"].fillna(False)
 
+        # Strong structure: Grade A or Grade B with OTE/sweep — can bypass VWAP
+        strong_long = zone_long_a | (zone_long_b & (ote_bonus_long | eql_swept_recently))
+
         dataframe.loc[
             (
                 (dataframe["htf_trend"] > 0)                    # 4H bullish
@@ -646,7 +649,7 @@ class SMCTrend(IStrategy):
                     | (zone_long_b & (ote_bonus_long | eql_swept_recently) & confidence_ok_a)  # Grade B + OTE/sweep: conf > 0.1
                 )
                 & adam_long_filter                                # Adam projection up
-                & vwap_long                                      # Above VWAP
+                & (vwap_long | strong_long)                      # VWAP or strong SMC structure
                 & (dataframe["fr_ok_long"])              # Funding rate OK
                 & (dataframe["vol_regime_ok"])           # Volatility normal
                 & killzone_filter
@@ -661,6 +664,9 @@ class SMCTrend(IStrategy):
             (dataframe["in_bearish_ob"] | dataframe["in_bearish_fvg"])
         )
 
+        # Strong structure for shorts
+        strong_short = zone_short_a | (zone_short_b & (ote_bonus_short | eqh_swept_recently))
+
         dataframe.loc[
             (
                 (dataframe["htf_trend"] < 0)                    # 4H bearish
@@ -670,7 +676,7 @@ class SMCTrend(IStrategy):
                     | (zone_short_b & (ote_bonus_short | eqh_swept_recently) & confidence_ok_a) # Grade B + OTE/sweep: conf > 0.1
                 )
                 & adam_short_filter                               # Adam projection down
-                & vwap_short                                     # Below VWAP
+                & (vwap_short | strong_short)                    # VWAP or strong SMC structure
                 & (dataframe["fr_ok_short"])             # Funding rate OK
                 & (dataframe["vol_regime_ok"])           # Volatility normal
                 & killzone_filter
@@ -743,11 +749,16 @@ class SMCTrend(IStrategy):
         # === Anti-fragile degradation ===
         # If no signals for 24 consecutive cycles (~6 hours on 15m),
         # relax non-core filters and re-evaluate
+        # Count based on LAST candle (not entire dataframe) to properly detect dry spells
         self._no_signal_count = getattr(self, "_no_signal_count", 0)
-        if n_long + n_short == 0:
-            self._no_signal_count += 1
-        else:
+        last_has_signal = False
+        if len(dataframe) > 0:
+            last_row = dataframe.iloc[-1]
+            last_has_signal = bool(last_row.get("enter_long", 0)) or bool(last_row.get("enter_short", 0))
+        if last_has_signal:
             self._no_signal_count = 0
+        else:
+            self._no_signal_count += 1
 
         if self._no_signal_count >= 24 and len(dataframe) > 0:
             logger.warning(
