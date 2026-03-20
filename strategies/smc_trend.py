@@ -122,10 +122,10 @@ class SMCTrend(IStrategy):
 
     # ATR-based risk management
     atr_period = IntParameter(10, 20, default=14, space="buy", optimize=True)
-    # Seg 4 optimal: wider stop (less whipsaw), tighter TP (more achievable)
-    atr_sl_mult = DecimalParameter(1.0, 3.0, default=1.87, space="buy",
+    # Wider stop for 15m: reduce whipsaw; let profits run further
+    atr_sl_mult = DecimalParameter(1.0, 3.0, default=2.2, space="buy",
                                    optimize=True)
-    atr_tp_mult = DecimalParameter(2.0, 5.0, default=3.0, space="sell",
+    atr_tp_mult = DecimalParameter(2.0, 5.0, default=3.5, space="sell",
                                    optimize=True)
 
     # Adam Theory projection
@@ -802,8 +802,8 @@ class SMCTrend(IStrategy):
             atr_sl_pct = (atr * self.atr_sl_mult.value) / trade.open_rate
             if atr_sl_pct > 0:
                 r_multiple = current_profit / atr_sl_pct
-                # Full take-profit at 3R — exceptional trade, lock in gains
-                if r_multiple >= 3.0:
+                # Full take-profit at 3.5R — exceptional trade, lock in gains
+                if r_multiple >= 3.5:
                     return "take_profit_3R"
 
         # CHoCH exit: structure break after hold time
@@ -1186,8 +1186,20 @@ class SMCTrend(IStrategy):
                 lev = 1.5      # Fallback
             return min(lev, max_leverage)
 
-        # Normal mode: quadratic scaling
+        # Normal mode: use higher of live confidence and dataframe confidence
+        # Live confidence (macro) can be overly conservative, blend with local signal
+        local_conf = confidence
+        if self._live_confidence is not None:
+            dataframe, _ = self.dp.get_analyzed_dataframe(pair, self.timeframe)
+            if len(dataframe) > 0:
+                local_conf = dataframe.iloc[-1].get("confidence", confidence)
+            # Blend: 60% macro + 40% local (macro still dominant but less crushing)
+            confidence = self._live_confidence * 0.6 + local_conf * 0.4
+
+        # Quadratic scaling with floor: minimum 1.5x if confidence > 0.2
         lev = 1.0 + (max_lev - 1.0) * (confidence ** 2)
+        if confidence > 0.2:
+            lev = max(lev, 1.5)  # Floor: don't go below 1.5x for non-HIBERNATE
 
         # Agent leverage cap
         agent_cap = getattr(self, "_agent_lev_cap", None)
@@ -1228,23 +1240,21 @@ class SMCTrend(IStrategy):
         else:
             r_multiple = 0
 
-        if r_multiple >= 2.0:
-            # Phase 3: Trail at 1R below — lock in at least 1R profit
-            # Return stoploss relative to current_rate
-            trail_dist = atr_sl_pct  # Trail by 1R
+        if r_multiple >= 2.5:
+            # Phase 3: Trail at 0.7R below — tighter trail to capture more profit
+            trail_dist = atr_sl_pct * 0.7
             new_sl = -(trail_dist)
-            return max(new_sl, -0.01)  # Never tighter than 1%
+            return max(new_sl, -0.008)  # Never tighter than 0.8%
 
-        elif r_multiple >= 1.0:
-            # Phase 2: Breakeven — move stop to entry price
-            # Stoploss relative to current_rate: need to protect entry
-            # current_profit is already the distance from entry
-            # Return a value that puts stop at entry (slight buffer for fees)
-            breakeven_sl = -(current_profit - 0.002)  # 0.2% buffer for fees
-            return min(breakeven_sl, -0.002)  # At least 0.2% from current
+        elif r_multiple >= 1.5:
+            # Phase 2: Breakeven — move stop to entry + 0.3% (lock small profit)
+            # Was: 1.0R → too aggressive, 15m normal retracement sweeps it
+            # Now: 1.5R → gives trade room to breathe
+            breakeven_sl = -(current_profit - 0.003)  # 0.3% buffer above entry
+            return min(breakeven_sl, -0.003)  # At least 0.3% from current
 
         else:
-            # Phase 1: ATR-based initial stop
+            # Phase 1: ATR-based initial stop (unchanged)
             return -atr_sl_pct
 
     def custom_stake_amount(self, current_time, current_rate: float,
@@ -1361,8 +1371,8 @@ class SMCTrend(IStrategy):
                 trade_info = trade.get_custom_data("partials") if hasattr(trade, "get_custom_data") else None
                 partials_done = int(trade_info) if trade_info else 0
 
-                # 1R → sell 33%
-                if r_multiple >= 1.0 and partials_done < 1:
+                # 1.5R → sell 33% (was 1R, too early on 15m)
+                if r_multiple >= 1.5 and partials_done < 1:
                     if hasattr(trade, "set_custom_data"):
                         trade.set_custom_data("partials", 1)
                     partial_amount = trade.stake_amount * 0.33
@@ -1371,8 +1381,8 @@ class SMCTrend(IStrategy):
                     logger.info("Partial exit 1R for %s: -%.2f USDT (R=%.1f)", pair, partial_amount, r_multiple)
                     return -partial_amount
 
-                # 2R → sell another 33%
-                if r_multiple >= 2.0 and partials_done < 2:
+                # 2.5R → sell another 33% (was 2R)
+                if r_multiple >= 2.5 and partials_done < 2:
                     if hasattr(trade, "set_custom_data"):
                         trade.set_custom_data("partials", 2)
                     partial_amount = trade.stake_amount * 0.33
