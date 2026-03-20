@@ -115,6 +115,11 @@ services:
       - FT_PASS=${FT_PASS:-freqtrade}
       - DATA_DIR=/app/data
     restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('https://api.telegram.org', timeout=5)"]
+      interval: 60s
+      timeout: 10s
+      retries: 3
     logging:
       driver: json-file
       options:

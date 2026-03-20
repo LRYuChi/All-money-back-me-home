@@ -21,24 +21,41 @@ if not BOT_TOKEN or not CHAT_ID:
     logger.warning("TELEGRAM_TOKEN 或 TELEGRAM_CHAT_ID 未設定，Telegram 通知已停用")
 
 
-def send_message(text: str, parse_mode: str = "Markdown") -> bool:
-    """發送 Telegram 訊息."""
+def _send_raw(text: str, parse_mode: str | None = None) -> bool:
+    """Low-level Telegram send (single message, ≤4096 chars)."""
+    payload: dict = {"chat_id": CHAT_ID, "text": text}
+    if parse_mode:
+        payload["parse_mode"] = parse_mode
     try:
         url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
-        data = json.dumps({
-            "chat_id": CHAT_ID,
-            "text": text,
-            "parse_mode": parse_mode,
-        }).encode("utf-8")
-        req = urllib.request.Request(
-            url, data=data,
-            headers={"Content-Type": "application/json"},
-        )
+        data = json.dumps(payload).encode("utf-8")
+        req = urllib.request.Request(url, data=data, headers={"Content-Type": "application/json"})
         with urllib.request.urlopen(req, timeout=10) as resp:
             return resp.status == 200
-    except Exception as e:
-        logger.warning("Telegram 發送失敗: %s", e)
+    except Exception:
         return False
+
+
+def send_message(text: str, parse_mode: str = "Markdown") -> bool:
+    """發送 Telegram 訊息 — 自動降級 + 長訊息分割."""
+    if not BOT_TOKEN or not CHAT_ID:
+        return False
+
+    # Split long messages (Telegram limit = 4096)
+    MAX_LEN = 4000
+    chunks = [text] if len(text) <= MAX_LEN else [
+        text[i:i + MAX_LEN] for i in range(0, len(text), MAX_LEN)
+    ]
+
+    ok = True
+    for chunk in chunks:
+        # Try with parse_mode first, fallback to plain text on 400 error
+        if not _send_raw(chunk, parse_mode):
+            # Retry without Markdown (fixes special char issues like _ * [ ] etc.)
+            if not _send_raw(chunk, None):
+                logger.warning("Telegram 發送失敗 (plain fallback): %s", chunk[:80])
+                ok = False
+    return ok
 
 
 def notify_startup(strategy: str, pairs: list[str], wallet: float = 1000):

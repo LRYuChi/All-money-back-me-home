@@ -41,10 +41,10 @@ AI_COOLDOWN = 30
 
 PERSISTENT_MENU = {
     "keyboard": [
-        ["📊 全覽", "📋 分析"],
+        ["📊 全覽", "📋 持倉", "📋 分析"],
         ["🎯 信心", "🔗 加密環境", "📈 機制"],
-        ["🌍 宏觀", "💰 交易", "📊 狀態"],
-        ["🛡 風控", "🧠 決策"],
+        ["💰 交易", "📊 統計", "🛡 風控"],
+        ["🌍 宏觀", "🧠 決策"],
     ],
     "resize_keyboard": True,
     "is_persistent": True,
@@ -53,15 +53,16 @@ PERSISTENT_MENU = {
 # 按鈕文字 → handler 映射
 BUTTON_MAP: dict[str, str] = {
     "📊 全覽": "overview",
-    "📊 狀態": "status",
+    "📋 持倉": "positions",
+    "📋 分析": "analysis",
     "🎯 信心": "confidence",
     "🔗 加密環境": "crypto",
     "📈 機制": "regime",
-    "🌍 宏觀": "macro",
     "💰 交易": "trades",
+    "📊 統計": "trade_stats",
     "🛡 風控": "guards",
+    "🌍 宏觀": "macro",
     "🧠 決策": "decisions",
-    "📋 分析": "analysis",
 }
 
 # =============================================
@@ -627,26 +628,170 @@ def cmd_analysis() -> str:
 
 
 def cmd_trades() -> str:
-    result = query_ft("trades?limit=5")
+    """完整交易紀錄 — 最近 20 筆含統計."""
+    result = query_ft("trades?limit=20")
     if not result or not result.get("trades"):
-        return "💰 最近交易\n━━━━━━━━━━━━━━━━\n尚無交易記錄。"
+        return "💰 交易紀錄\n━━━━━━━━━━━━━━━━\n尚無交易記錄。"
 
-    lines = ["💰 最近交易", "━━━━━━━━━━━━━━━━"]
-    for t in result["trades"][:5]:
+    trades = result["trades"]
+    wins = sum(1 for t in trades if (t.get("profit_pct") or 0) > 0 and not t.get("is_open"))
+    losses = sum(1 for t in trades if (t.get("profit_pct") or 0) <= 0 and not t.get("is_open"))
+    closed = wins + losses
+    wr = (wins / closed * 100) if closed > 0 else 0
+    total_pnl = sum(t.get("profit_abs", 0) or 0 for t in trades if not t.get("is_open"))
+
+    lines = [f"💰 交易紀錄 ({closed}筆 {wins}W {losses}L {wr:.0f}%)", "━━━━━━━━━━━━━━━━"]
+    if total_pnl != 0:
+        lines.append(f"累計損益: ${total_pnl:+.2f}")
+
+    for t in trades[:20]:
         pair = t.get("pair", "?").replace("/USDT:USDT", "")
         pnl = t.get("profit_pct", 0) or 0
         pnl_abs = t.get("profit_abs", 0) or 0
-        reason = t.get("exit_reason", "open")
+        reason = t.get("exit_reason") or ("持倉中" if t.get("is_open") else "?")
         side = "Short" if t.get("is_short") else "Long"
         lev = t.get("leverage", 1) or 1
-        icon = "🟢" if pnl >= 0 else "🔴"
+        icon = "⚪" if t.get("is_open") else ("🟢" if pnl > 0 else "🔴")
+        tid = t.get("trade_id", "?")
+
+        # Duration
         dur = t.get("trade_duration", 0) or 0
-        dur_str = f"{dur // 60}h{dur % 60}m" if dur else "?"
+        if dur >= 60:
+            dur_str = f"{dur // 60}h{dur % 60}m"
+        elif dur > 0:
+            dur_str = f"{dur}m"
+        else:
+            dur_str = "持倉中"
+
+        # Entry/exit prices
+        open_r = t.get("open_rate", 0)
+        close_r = t.get("close_rate") or t.get("current_rate", 0)
+        if open_r > 1000:
+            price_str = f"${open_r:,.0f}->${close_r:,.0f}"
+        elif open_r > 1:
+            price_str = f"${open_r:.2f}->${close_r:.2f}"
+        else:
+            price_str = f"${open_r:.4f}->${close_r:.4f}"
+
+        lines.append(f"\n{icon} #{tid} {pair} {side} {lev:.1f}x")
+        lines.append(f"  {price_str}")
+        lines.append(f"  {pnl:+.2f}% ${pnl_abs:+.2f} | {dur_str} | {reason}")
+
+    return "\n".join(lines)
+
+
+def cmd_positions() -> str:
+    """當前持倉詳情."""
+    result = query_ft("status")
+    if not result or len(result) == 0:
+        return "📋 持倉\n━━━━━━━━━━━━━━━━\n目前無持倉。"
+
+    bal_data = query_ft("balance")
+    total_bal = bal_data.get("total", 1000) if bal_data else 1000
+
+    unrealized = sum((t.get("profit_abs") or 0) for t in result)
+    lines = [f"📋 持倉 ({len(result)}筆 未實現${unrealized:+.2f})", "━━━━━━━━━━━━━━━━"]
+
+    total_used = 0
+    for t in result:
+        pair = t.get("pair", "?").replace("/USDT:USDT", "")
+        side = "Short" if t.get("is_short") else "Long"
+        lev = t.get("leverage", 1) or 1
+        pnl_pct = t.get("profit_pct", 0) or 0
+        stake = t.get("stake_amount", 0) or 0
+        open_r = t.get("open_rate", 0)
+        cur_r = t.get("current_rate", 0)
+        sl = t.get("stop_loss", 0)
+
+        pos_val = stake * lev
+        total_used += stake
+
+        # Duration
+        open_date = t.get("open_date", "")
+        if open_date:
+            try:
+                from datetime import datetime, timezone
+                opened = datetime.fromisoformat(open_date.replace("Z", "+00:00"))
+                delta = datetime.now(timezone.utc) - opened
+                hours = delta.total_seconds() / 3600
+                dur_str = f"{int(hours)}h{int((hours % 1) * 60)}m"
+            except Exception:
+                dur_str = "?"
+        else:
+            dur_str = "?"
+
+        icon = "🟢" if pnl_pct >= 0 else "🔴"
+        if open_r > 1000:
+            price_str = f"進${open_r:,.0f} 現${cur_r:,.0f}"
+        elif open_r > 1:
+            price_str = f"進${open_r:.2f} 現${cur_r:.2f}"
+        else:
+            price_str = f"進${open_r:.4f} 現${cur_r:.4f}"
+
+        sl_str = f"SL ${sl:,.0f}" if sl and sl > 1000 else (f"SL ${sl:.2f}" if sl else "SL 未設定")
 
         lines.append(f"\n{icon} {pair} {side} {lev:.1f}x")
-        lines.append(f"├ 損益: {pnl:+.2f}% (${pnl_abs:+.2f})")
-        lines.append(f"├ 原因: {reason}")
-        lines.append(f"└ 持倉: {dur_str}")
+        lines.append(f"  {price_str} {pnl_pct:+.2f}%")
+        lines.append(f"  Stake ${stake:.0f} 倉值${pos_val:.0f}")
+        lines.append(f"  {sl_str} | {dur_str}")
+
+    used_pct = (total_used / total_bal * 100) if total_bal > 0 else 0
+    lines.append(f"\n帳戶${total_bal:.0f} 使用${total_used:.0f} ({used_pct:.1f}%)")
+
+    return "\n".join(lines)
+
+
+def cmd_trade_stats() -> str:
+    """交易統計總覽."""
+    result = query_ft("trades?limit=100")
+
+    if not result or not result.get("trades"):
+        return "📊 統計\n━━━━━━━━━━━━━━━━\n尚無交易資料。"
+
+    trades = [t for t in result["trades"] if not t.get("is_open")]
+    if not trades:
+        return "📊 統計\n━━━━━━━━━━━━━━━━\n尚無已關閉交易。"
+
+    wins = [t for t in trades if (t.get("profit_pct") or 0) > 0]
+    losses = [t for t in trades if (t.get("profit_pct") or 0) <= 0]
+    total_gain = sum(t.get("profit_abs", 0) or 0 for t in wins)
+    total_loss = abs(sum(t.get("profit_abs", 0) or 0 for t in losses))
+    net = total_gain - total_loss
+    pf = total_gain / total_loss if total_loss > 0 else float("inf")
+    wr = len(wins) / len(trades) * 100 if trades else 0
+
+    avg_dur = sum(t.get("trade_duration", 0) or 0 for t in trades) / len(trades)
+    avg_dur_str = f"{int(avg_dur // 60)}h{int(avg_dur % 60)}m"
+
+    # Best/worst pair
+    pair_stats: dict[str, dict] = {}
+    for t in trades:
+        p = t.get("pair", "?").replace("/USDT:USDT", "")
+        if p not in pair_stats:
+            pair_stats[p] = {"wins": 0, "losses": 0, "pnl": 0}
+        if (t.get("profit_pct") or 0) > 0:
+            pair_stats[p]["wins"] += 1
+        else:
+            pair_stats[p]["losses"] += 1
+        pair_stats[p]["pnl"] += t.get("profit_abs", 0) or 0
+
+    best = max(pair_stats.items(), key=lambda x: x[1]["pnl"]) if pair_stats else ("?", {"wins": 0, "losses": 0, "pnl": 0})
+    worst = min(pair_stats.items(), key=lambda x: x[1]["pnl"]) if pair_stats else ("?", {"wins": 0, "losses": 0, "pnl": 0})
+
+    # Max single win/loss
+    max_win = max((t.get("profit_abs", 0) or 0 for t in trades), default=0)
+    max_loss = min((t.get("profit_abs", 0) or 0 for t in trades), default=0)
+
+    lines = ["📊 交易統計", "━━━━━━━━━━━━━━━━"]
+    lines.append(f"交易: {len(trades)}筆 | 勝率: {wr:.0f}%")
+    lines.append(f"盈: +${total_gain:.2f} | 虧: -${total_loss:.2f}")
+    lines.append(f"淨利: ${net:+.2f}")
+    lines.append(f"Profit Factor: {pf:.2f}")
+    lines.append(f"平均持倉: {avg_dur_str}")
+    lines.append(f"最大單盈: +${max_win:.2f}")
+    lines.append(f"最大單虧: ${max_loss:.2f}")
+    lines.append(f"最佳: {best[0]} ({best[1]['wins']}W{best[1]['losses']}L)")
+    lines.append(f"最差: {worst[0]} ({worst[1]['wins']}W{worst[1]['losses']}L)")
 
     return "\n".join(lines)
 
@@ -810,7 +955,8 @@ COMMANDS = {
     "status": cmd_status, "start": cmd_help, "help": cmd_help,
     "confidence": cmd_confidence, "crypto": cmd_crypto,
     "regime": cmd_regime, "analysis": cmd_analysis,
-    "trades": cmd_trades, "guards": cmd_guards,
+    "trades": cmd_trades, "positions": cmd_positions,
+    "trade_stats": cmd_trade_stats, "guards": cmd_guards,
     "decisions": cmd_decisions, "macro": cmd_macro,
     "menu": cmd_help, "overview": cmd_overview,
     "digest": cmd_digest,
