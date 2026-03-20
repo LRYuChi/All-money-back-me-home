@@ -1,0 +1,20 @@
+{
+  "version": "1.0",
+  "updated_at": "2026-03-20",
+  "skills": {
+    "core/SAFETY": {"version": "1.0", "token_size": 150, "always_load": true},
+    "core/OUTPUT_FORMAT": {"version": "1.0", "token_size": 80, "always_load": true},
+    "perception/MARKET_READ": {"version": "1.0", "token_size": 200},
+    "perception/PERFORMANCE_READ": {"version": "1.0", "token_size": 180},
+    "perception/REGIME_READ": {"version": "1.0", "token_size": 160},
+    "decision/RISK_DECISION": {"version": "1.0", "token_size": 220},
+    "decision/PARAM_ADJUST": {"version": "1.0", "token_size": 190},
+    "decision/STRATEGY_SWITCH": {"version": "1.0", "token_size": 170},
+    "decision/EMERGENCY": {"version": "1.0", "token_size": 140},
+    "analysis/DAILY_ANALYSIS": {"version": "1.0", "token_size": 300},
+    "analysis/KNOWLEDGE_EXTRACT": {"version": "1.0", "token_size": 280},
+    "analysis/RETROSPECTIVE": {"version": "1.0", "token_size": 250},
+    "meta/SKILL_SELECTOR": {"version": "1.0", "token_size": 200},
+    "meta/HALLUCINATION_GUARD": {"version": "1.0", "token_size": 120}
+  }
+}

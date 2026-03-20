@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import sqlite3
 import time
 import uuid
@@ -18,7 +19,7 @@ from typing import Any
 
 logger = logging.getLogger(__name__)
 
-DB_PATH = Path("/data/agent_memory.db")
+DB_PATH = Path(os.environ.get("DATA_DIR", "/data")) / "agent_memory.db"
 
 
 class AgentMemory:

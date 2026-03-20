@@ -274,6 +274,13 @@ class SMCScalp(IStrategy):
             if _STATE_AVAILABLE:
                 BotStateStore.increment("confidence_fetch_failures")
 
+        # === Agent 旗標讀取 ===
+        if _STATE_AVAILABLE:
+            state = BotStateStore.read()
+            self._agent_pause = state.get("agent_pause_entries", False)
+            self._agent_lev_cap = state.get("agent_leverage_cap")
+            self._agent_risk = state.get("agent_risk_level")
+
         # === Crypto Environment Engine (observation mode) ===
         try:
             import os
@@ -647,6 +654,13 @@ class SMCScalp(IStrategy):
                             rate: float, time_in_force: str, current_time: datetime,
                             entry_tag: str | None, side: str, **kwargs) -> bool:
         """進場確認 — 極端行情熔斷 + Guard Pipeline + Telegram."""
+        # === Agent Pause Check ===
+        if getattr(self, "_agent_pause", False):
+            logger.warning("AGENT PAUSE: 進場已被 Agent 暫停")
+            if _STATE_AVAILABLE:
+                BotStateStore.increment("guard_rejections_today")
+            return False
+
         # === Extreme Market Circuit Breaker ===
         dataframe, _ = self.dp.get_analyzed_dataframe(pair, self.timeframe)
         is_reverse_short = False
@@ -904,6 +918,12 @@ class SMCScalp(IStrategy):
             return min(max(lev, 1.0), max_leverage)
 
         lev = 1.0 + (max_lev - 1.0) * (confidence ** 2)
+
+        # Agent leverage cap
+        agent_cap = getattr(self, "_agent_lev_cap", None)
+        if agent_cap is not None:
+            lev = min(lev, agent_cap)
+
         return min(max(lev, 1.0), max_leverage)
 
     def custom_stake_amount(self, current_time, current_rate: float,
@@ -942,6 +962,13 @@ class SMCScalp(IStrategy):
             scale *= 0.8
 
         adjusted = proposed_stake * scale
+
+        # Agent risk level adjustment
+        agent_risk = getattr(self, "_agent_risk", None)
+        _risk_scale = {"aggressive": 1.2, "normal": 1.0, "conservative": 0.6, "minimal": 0.3}
+        if agent_risk in _risk_scale:
+            adjusted *= _risk_scale[agent_risk]
+
         if min_stake is not None:
             adjusted = max(adjusted, min_stake)
         return min(adjusted, max_stake)

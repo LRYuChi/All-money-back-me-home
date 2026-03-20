@@ -16,6 +16,7 @@ import logging
 import os
 import sys
 import tempfile
+import time
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -128,10 +129,17 @@ class BotStateStore:
     """JSON 檔案式狀態儲存，支援原子讀寫與每日自動重置。"""
 
     _lock = _FileLock(STATE_FILE.parent / ".bot_state.lock")
+    _cache: dict = {}
+    _cache_ts: float = 0
+    _CACHE_TTL: int = 30
 
     @classmethod
     def read(cls) -> dict[str, Any]:
         """讀取目前狀態。若檔案不存在則回傳預設值。"""
+        now = time.time()
+        if now - cls._cache_ts < cls._CACHE_TTL and cls._cache:
+            return cls._cache.copy()
+
         if not STATE_FILE.exists():
             logger.info("狀態檔案不存在，回傳預設狀態: %s", STATE_FILE)
             return _DEFAULT_STATE.copy()
@@ -141,10 +149,17 @@ class BotStateStore:
             # 合併預設值（處理新增欄位的向下相容）
             merged = _DEFAULT_STATE.copy()
             merged.update(data)
+            cls._cache = merged.copy()
+            cls._cache_ts = time.time()
             return merged
         except (json.JSONDecodeError, OSError) as e:
-            logger.error("讀取狀態檔案失敗: %s，回傳預設值", e)
-            return _DEFAULT_STATE.copy()
+            logger.error("讀取狀態檔案失敗: %s，返回安全預設值", e)
+            return {
+                **_DEFAULT_STATE,
+                "agent_pause_entries": False,
+                "agent_leverage_cap": 2.0,
+                "agent_risk_level": "conservative",
+            }
 
     @classmethod
     def _write(cls, state: dict[str, Any]) -> None:
@@ -165,6 +180,8 @@ class BotStateStore:
             if sys.platform == "win32" and STATE_FILE.exists():
                 STATE_FILE.unlink()
             os.rename(tmp_path, str(STATE_FILE))
+            cls._cache = state.copy()
+            cls._cache_ts = time.time()
         except Exception:
             # 清理暫存檔
             try:

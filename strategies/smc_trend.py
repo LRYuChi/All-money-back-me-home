@@ -18,6 +18,7 @@ References:
 from __future__ import annotations
 
 import logging
+import time
 from datetime import datetime
 
 import sys
@@ -205,6 +206,13 @@ class SMCTrend(IStrategy):
                 except Exception:
                     pass
 
+        # === Agent 旗標讀取 ===
+        if _STATE_AVAILABLE:
+            state = BotStateStore.read()
+            self._agent_pause = state.get("agent_pause_entries", False)
+            self._agent_lev_cap = state.get("agent_leverage_cap")
+            self._agent_risk = state.get("agent_risk_level")
+
         # === Crypto Environment Engine (observation mode) ===
         try:
             from market_monitor.crypto_environment import CryptoEnvironmentEngine
@@ -230,6 +238,7 @@ class SMCTrend(IStrategy):
                 self._crypto_env_cache[sym] = {"score": cr["score"], "regime": cr["regime"]}
                 if _STATE_AVAILABLE:
                     BotStateStore.update_crypto_env(sym, cr["score"], cr["regime"])
+            self._crypto_env_ts = time.time()
         except Exception as e:
             logger.warning("Crypto Environment fetch failed: %s", e)
 
@@ -522,16 +531,26 @@ class SMCTrend(IStrategy):
         )
 
         # =============================================
-        # NEW: OTE zone (61.8%-79% retracement)
+        # NEW: OTE zone (Fibonacci 61.8%-79% retracement)
         # =============================================
+        FIB_OTE_HIGH = 0.79
+        FIB_OTE_LOW = 0.618
+        range_size = dataframe["range_high"] - dataframe["range_low"]
+
+        # Long OTE: Discount zone (21%-38.2% from bottom)
         dataframe["in_ote_long"] = (
-            (dataframe["close"] >= dataframe["ote_bottom"])
-            & (dataframe["close"] <= dataframe["ote_top"])
+            (dataframe["close"] >= dataframe["range_low"] + range_size * 0.21)
+            & (dataframe["close"] <= dataframe["range_low"] + range_size * 0.382)
             & (dataframe["in_discount"])
+            & (dataframe["open"] <= dataframe["range_low"] + range_size * 0.382)
         )
+
+        # Short OTE: Premium zone (61.8%-79% retracement from top)
         dataframe["in_ote_short"] = (
-            (dataframe["close"] >= dataframe["range_high"] - (dataframe["range_high"] - dataframe["range_low"]) * 0.382)
+            (dataframe["close"] >= dataframe["range_high"] - range_size * FIB_OTE_HIGH)
+            & (dataframe["close"] <= dataframe["range_high"] - range_size * FIB_OTE_LOW)
             & (dataframe["in_premium"])
+            & (dataframe["open"] >= dataframe["range_high"] - range_size * FIB_OTE_HIGH)
         )
 
         # =============================================
@@ -745,6 +764,7 @@ class SMCTrend(IStrategy):
             n_short = int(dataframe.get("enter_short", 0).sum())
             if n_long + n_short > 0:
                 logger.info("Anti-fragile recovered: %d long, %d short signals", n_long, n_short)
+                self._no_signal_count = 0  # Reset after recovery
 
         return dataframe
 
@@ -798,6 +818,13 @@ class SMCTrend(IStrategy):
                             rate: float, time_in_force: str, current_time: datetime,
                             entry_tag: str | None, side: str, **kwargs) -> bool:
         """進場確認 — 極端行情熔斷 + Guard Pipeline + Telegram."""
+        # === Agent Pause Check ===
+        if getattr(self, "_agent_pause", False):
+            logger.warning("AGENT PAUSE: 進場已被 Agent 暫停")
+            if _STATE_AVAILABLE:
+                BotStateStore.increment("guard_rejections_today")
+            return False
+
         # === Extreme Market Circuit Breaker ===
         # Block ALL entries during market crashes/panics
         dataframe, _ = self.dp.get_analyzed_dataframe(pair, self.timeframe)
@@ -839,6 +866,12 @@ class SMCTrend(IStrategy):
             # Extract base symbol from pair (e.g., "BTC/USDT:USDT" → "BTC")
             base_sym = pair.split("/")[0] if "/" in pair else pair[:3]
             env_score = self._crypto_env.get(base_sym, 0.5)
+
+            # Crypto env staleness check
+            crypto_env_age = time.time() - getattr(self, "_crypto_env_ts", 0)
+            if crypto_env_age > 28800:  # 8 hours
+                env_score = 0.5  # Stale -> neutral, don't block
+                logger.warning("Crypto env data stale (%.1fh), using neutral", crypto_env_age / 3600)
             if env_score < 0.25:
                 logger.warning(
                     "CRYPTO ENV BLOCK: %s env=%.2f (HOSTILE) — blocking %s entry",
@@ -977,10 +1010,10 @@ class SMCTrend(IStrategy):
 
             # Use reverse confidence for leverage calculation if applicable
             if is_reversal:
-                effective_conf = 1.0 - confidence
-                lev = 1.0 + (self.max_leverage.value - 1.0) * (effective_conf ** 2)
-                # Cap reverse short leverage at 80% of max
-                lev = min(lev, self.max_leverage.value * 0.8)
+                if confidence < 0.1:
+                    lev = 1.0
+                else:
+                    lev = 1.5
             else:
                 lev = 1.0 + (self.max_leverage.value - 1.0) * (confidence ** 2)
 
@@ -1143,15 +1176,24 @@ class SMCTrend(IStrategy):
 
         max_lev = self.max_leverage.value
 
-        # Reverse confidence mode: low confidence + short = high short confidence
+        # Reverse confidence mode: step function (conservative)
         if side == "short" and confidence < 0.20:
-            short_conf = 1.0 - confidence
-            lev = 1.0 + (max_lev - 1.0) * (short_conf ** 2)
-            # Cap at 80% of max leverage for reverse shorts (more conservative)
-            return min(max(lev, 1.0), max_lev * 0.8, max_leverage)
+            if confidence < 0.1:
+                lev = 1.0      # Ultra-low confidence: flat
+            elif confidence < 0.2:
+                lev = 1.5      # Low confidence: conservative
+            else:
+                lev = 1.5      # Fallback
+            return min(lev, max_leverage)
 
         # Normal mode: quadratic scaling
         lev = 1.0 + (max_lev - 1.0) * (confidence ** 2)
+
+        # Agent leverage cap
+        agent_cap = getattr(self, "_agent_lev_cap", None)
+        if agent_cap is not None:
+            lev = min(lev, agent_cap)
+
         return min(max(lev, 1.0), max_leverage)
 
     def custom_stoploss(self, pair: str, trade: Trade, current_time: datetime,
@@ -1227,9 +1269,9 @@ class SMCTrend(IStrategy):
         confidence = last.get("confidence", 0.5)
         activity = last.get("activity_mult", 0.5)
 
-        # Reverse confidence for shorts in HIBERNATE
+        # Reverse confidence shorts: max 30% of account
         if side == "short" and confidence < 0.20:
-            confidence = 1.0 - confidence
+            confidence = 0.5  # Use neutral sizing, not inverted
 
         # Base scaling by confidence (widened range for stronger conviction trades)
         scale = 0.2 + 1.3 * confidence  # range 0.2x-1.5x
@@ -1256,6 +1298,16 @@ class SMCTrend(IStrategy):
             scale *= 0.8
 
         adjusted = proposed_stake * scale
+
+        # Reverse confidence shorts: cap at 30% of max stake
+        if side == "short" and last.get("confidence", 0.5) < 0.20:
+            adjusted = min(adjusted, max_stake * 0.3)
+
+        # Agent risk level adjustment
+        agent_risk = getattr(self, "_agent_risk", None)
+        _risk_scale = {"aggressive": 1.2, "normal": 1.0, "conservative": 0.6, "minimal": 0.3}
+        if agent_risk in _risk_scale:
+            adjusted *= _risk_scale[agent_risk]
 
         # Anti-fragile risk cap: max 2% of account at risk per trade
         # This is the absolute ceiling regardless of confidence/anti-martingale
