@@ -629,17 +629,20 @@ class SMCTrend(IStrategy):
         # EQH sweep bonus for shorts
         eqh_swept_recently = dataframe["eqh_swept"].rolling(8, min_periods=1).max().fillna(0).astype(bool)
 
+        # OTE bonus: in OTE zone → Grade B gets lower confidence requirement
+        ote_bonus_long = dataframe["in_ote_long"].fillna(False)
+        ote_bonus_short = dataframe["in_ote_short"].fillna(False)
+
         dataframe.loc[
             (
                 (dataframe["htf_trend"] > 0)                    # 4H bullish
-                & (dataframe["in_ote_long"])             # OTE zone (discount)
                 & (
                     (zone_long_a & confidence_ok_a)               # Grade A: conf > 0.1
-                    | (zone_long_b & (htf_zone | eql_swept_recently) & confidence_ok_b)  # Grade B: 4H zone OR EQL sweep
+                    | (zone_long_b & confidence_ok_b)             # Grade B: conf > 0.35
+                    | (zone_long_b & (ote_bonus_long | eql_swept_recently) & confidence_ok_a)  # Grade B + OTE/sweep: conf > 0.1
                 )
                 & adam_long_filter                                # Adam projection up
                 & vwap_long                                      # Above VWAP
-                & retrace_ok                                     # Valid Fib retracement
                 & (dataframe["fr_ok_long"])              # Funding rate OK
                 & (dataframe["vol_regime_ok"])           # Volatility normal
                 & killzone_filter
@@ -657,14 +660,13 @@ class SMCTrend(IStrategy):
         dataframe.loc[
             (
                 (dataframe["htf_trend"] < 0)                    # 4H bearish
-                & (dataframe["in_ote_short"])            # Premium zone OTE
                 & (
                     (zone_short_a & confidence_ok_a)              # Grade A: conf > 0.1
-                    | (zone_short_b & (htf_zone | eqh_swept_recently) & confidence_ok_b) # Grade B: 4H zone OR EQH sweep
+                    | (zone_short_b & confidence_ok_b)            # Grade B: conf > 0.35
+                    | (zone_short_b & (ote_bonus_short | eqh_swept_recently) & confidence_ok_a) # Grade B + OTE/sweep: conf > 0.1
                 )
                 & adam_short_filter                               # Adam projection down
                 & vwap_short                                     # Below VWAP
-                & retrace_ok                                     # Valid Fib retracement
                 & (dataframe["fr_ok_short"])             # Funding rate OK
                 & (dataframe["vol_regime_ok"])           # Volatility normal
                 & killzone_filter
@@ -745,14 +747,13 @@ class SMCTrend(IStrategy):
 
         if self._no_signal_count >= 24 and len(dataframe) > 0:
             logger.warning(
-                "Anti-fragile: %d empty cycles — relaxing VWAP/retrace/killzone filters",
+                "Anti-fragile: %d empty cycles — relaxing VWAP/adam filters",
                 self._no_signal_count
             )
-            # Re-evaluate with relaxed filters (core: HTF + OTE + OB/FVG + confidence only)
+            # Re-evaluate: drop VWAP and Adam, keep HTF + OB/FVG + confidence + FR + vol
             dataframe.loc[
                 (
                     (dataframe["htf_trend"] > 0)
-                    & (dataframe["in_ote_long"])
                     & (zone_long_a | zone_long_b)
                     & confidence_ok_a
                     & (dataframe["fr_ok_long"])
@@ -764,7 +765,6 @@ class SMCTrend(IStrategy):
             dataframe.loc[
                 (
                     (dataframe["htf_trend"] < 0)
-                    & (dataframe["in_ote_short"])
                     & (zone_short_a | zone_short_b)
                     & confidence_ok_a
                     & (dataframe["fr_ok_short"])
