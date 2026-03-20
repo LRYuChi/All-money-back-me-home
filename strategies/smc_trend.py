@@ -832,15 +832,17 @@ class SMCTrend(IStrategy):
         if atr > 0:
             atr_sl_pct = (atr * self.atr_sl_mult.value) / trade.open_rate
             if atr_sl_pct > 0:
-                r_multiple = current_profit / atr_sl_pct
+                # Normalize by leverage: current_profit is account-level (includes leverage)
+                position_profit = current_profit / max(trade.leverage, 1.0)
+                r_multiple = position_profit / atr_sl_pct
                 # Full take-profit at 3.5R — exceptional trade, lock in gains
                 if r_multiple >= 3.5:
                     return "take_profit_3R"
 
-        # CHoCH exit: structure break after hold time
-        if trade.is_short and last.get("choch") == 1:
+        # CHoCH exit: 4H structure break after hold time (use HTF, not 15m noise)
+        if trade.is_short and last.get("htf_choch") == 1:
             return "choch_bullish_reversal"
-        elif not trade.is_short and last.get("choch") == -1:
+        elif not trade.is_short and last.get("htf_choch") == -1:
             return "choch_bearish_reversal"
 
         return None
@@ -1117,6 +1119,10 @@ class SMCTrend(IStrategy):
                 expected_rr=_expected_rr,
                 is_reversal=is_reversal,
             )
+
+        # Clear dedup on successful entry so same pair can re-enter next candle
+        if hasattr(self, "_last_reject"):
+            self._last_reject.pop(_reject_key, None)
         return True
 
     def confirm_trade_exit(self, pair: str, trade: Trade, order_type: str,
@@ -1329,8 +1335,10 @@ class SMCTrend(IStrategy):
         atr_sl_pct = max(atr_sl_dist / trade.open_rate, 0.003)  # Min 0.3% stop distance
 
         # Calculate profit in R-multiples (1R = initial risk)
+        # Normalize by leverage: current_profit is account-level (includes leverage effect)
+        position_profit = current_profit / max(trade.leverage, 1.0)
         if atr_sl_pct > 0:
-            r_multiple = current_profit / atr_sl_pct
+            r_multiple = position_profit / atr_sl_pct
         else:
             r_multiple = 0
 
@@ -1486,7 +1494,9 @@ class SMCTrend(IStrategy):
         if atr > 0 and trade.stake_amount > 0:
             atr_sl_pct = (atr * self.atr_sl_mult.value) / trade.open_rate
             if atr_sl_pct > 0:
-                r_multiple = current_profit / atr_sl_pct
+                # Normalize by leverage: current_profit is account-level
+                position_profit = current_profit / max(trade.leverage, 1.0)
+                r_multiple = position_profit / atr_sl_pct
 
                 # Track partials via trade custom_info (survives restarts)
                 trade_info = trade.get_custom_data("partials") if hasattr(trade, "get_custom_data") else None
