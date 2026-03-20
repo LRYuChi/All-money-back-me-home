@@ -13,6 +13,7 @@ Designed for USDT perpetual futures on OKX via Freqtrade.
 from __future__ import annotations
 
 import logging
+import time
 from datetime import datetime
 
 import sys
@@ -297,6 +298,7 @@ class SMCScalp(IStrategy):
                     cr["sandboxes"]["onchain"],
                     cr["sandboxes"]["sentiment"],
                 )
+            self._crypto_env_ts = time.time()
         except Exception as e:
             logger.warning("[Scalp] Crypto Environment fetch failed: %s", e)
 
@@ -484,9 +486,11 @@ class SMCScalp(IStrategy):
             & (dataframe["close"] <= dataframe["ote_top"])
             & (dataframe["in_discount"])
         )
+        # Short OTE: Premium zone (Fibonacci 61.8%-79% retracement from top)
+        range_size = dataframe["range_high"] - dataframe["range_low"]
         dataframe["in_ote_short"] = (
-            (dataframe["close"] >= dataframe["range_high"]
-             - (dataframe["range_high"] - dataframe["range_low"]) * 0.382)
+            (dataframe["close"] >= dataframe["range_high"] - range_size * 0.79)
+            & (dataframe["close"] <= dataframe["range_high"] - range_size * 0.618)
             & (dataframe["in_premium"])
         )
 
@@ -591,6 +595,51 @@ class SMCScalp(IStrategy):
             reverse_conf_short & (dataframe["enter_short"] != 1),
             "enter_short",
         ] = 1
+
+        # === Anti-fragile degradation counter ===
+        n_long = int(dataframe.get("enter_long", 0).sum())
+        n_short = int(dataframe.get("enter_short", 0).sum())
+        self._no_signal_count = getattr(self, "_no_signal_count", 0)
+        if n_long + n_short == 0:
+            self._no_signal_count += 1
+        else:
+            self._no_signal_count = 0
+
+        if self._no_signal_count >= 24 and len(dataframe) > 0:
+            logger.warning(
+                "[Scalp] Anti-fragile: %d empty cycles — relaxing non-core filters",
+                self._no_signal_count
+            )
+            # Re-evaluate with relaxed filters (core: HTF + OTE + OB/FVG + confidence only)
+            dataframe.loc[
+                (
+                    (dataframe["htf_trend"] > 0)
+                    & (dataframe["in_ote_long"])
+                    & (zone_long_a | zone_long_b)
+                    & confidence_ok
+                    & (dataframe["fr_ok_long"])
+                    & (dataframe["vol_regime_ok"])
+                    & (dataframe["volume"] > 0)
+                ),
+                "enter_long",
+            ] = 1
+            dataframe.loc[
+                (
+                    (dataframe["htf_trend"] < 0)
+                    & (dataframe["in_ote_short"])
+                    & (zone_short_a | zone_short_b)
+                    & confidence_ok
+                    & (dataframe["fr_ok_short"])
+                    & (dataframe["vol_regime_ok"])
+                    & (dataframe["volume"] > 0)
+                ),
+                "enter_short",
+            ] = 1
+            n_long = int(dataframe.get("enter_long", 0).sum())
+            n_short = int(dataframe.get("enter_short", 0).sum())
+            if n_long + n_short > 0:
+                logger.info("[Scalp] Anti-fragile recovered: %d long, %d short signals", n_long, n_short)
+                self._no_signal_count = 0
 
         return dataframe
 
@@ -738,10 +787,13 @@ class SMCScalp(IStrategy):
                 # Determine if this is a reverse confidence short
                 is_reversal = (side == "short" and confidence < 0.20)
 
-                # Crypto environment data
+                # Crypto environment data (with TTL check)
                 crypto_env = {}
+                crypto_env_age = time.time() - getattr(self, "_crypto_env_ts", 0)
                 base_symbol = pair.split("/")[0] if "/" in pair else pair[:3]
-                if base_symbol in self._crypto_env_cache:
+                if crypto_env_age > 28800:  # 8 hours stale
+                    logger.warning("[Scalp] Crypto env data stale (%.1fh), using empty", crypto_env_age / 3600)
+                elif base_symbol in self._crypto_env_cache:
                     ce = self._crypto_env_cache[base_symbol]
                     crypto_env = {
                         "score": ce.get("score", 0),
@@ -912,10 +964,13 @@ class SMCScalp(IStrategy):
 
         max_lev = self.max_leverage.value
 
-        # Reverse confidence short: low confidence = moderate leverage (capped at 80%)
+        # Reverse confidence mode: step function (conservative)
         if side == "short" and confidence < 0.20:
-            lev = 1.0 + (max_lev * 0.8 - 1.0) * 0.5  # Fixed moderate leverage
-            return min(max(lev, 1.0), max_leverage)
+            if confidence < 0.1:
+                lev = 1.0      # Ultra-low confidence: flat
+            else:
+                lev = 1.5      # Low confidence: conservative
+            return min(lev, max_leverage)
 
         lev = 1.0 + (max_lev - 1.0) * (confidence ** 2)
 
@@ -943,9 +998,10 @@ class SMCScalp(IStrategy):
         activity = last.get("activity_mult", 0.5)
         style = self._get_trade_style(confidence)
 
-        # Reverse confidence short: conservative sizing (50% of proposed)
+        # Reverse confidence short: conservative sizing, cap at 30% of max
         if side == "short" and confidence < 0.20:
             adjusted = proposed_stake * 0.5
+            adjusted = min(adjusted, max_stake * 0.3)
             if min_stake is not None:
                 adjusted = max(adjusted, min_stake)
             return min(adjusted, max_stake)
