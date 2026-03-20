@@ -207,8 +207,25 @@ def _get_macro() -> dict:
 def _ft_api(path: str) -> dict | list | None:
     """Query Freqtrade REST API (shared helper)."""
     import base64
-    creds = f"{os.environ.get('FT_USER', 'freqtrade')}:{os.environ.get('FT_PASS', 'freqtrade')}"
-    auth = base64.b64encode(creds.encode()).decode()
+    # Try env vars first, then read from config_secrets.json
+    ft_user = os.environ.get("FT_USER", "freqtrade")
+    ft_pass = os.environ.get("FT_PASS", "")
+    if not ft_pass:
+        # Read from config file (Docker volume or local)
+        for cfg_path in ["/app/config/config_secrets.json", "/freqtrade/config/config_secrets.json", "/opt/ambmh/config/freqtrade/config_secrets.json"]:
+            try:
+                with open(cfg_path) as f:
+                    cfg = json.load(f)
+                ft_pass = cfg.get("api_server", {}).get("password", "")
+                ft_user = cfg.get("api_server", {}).get("username", ft_user)
+                if ft_pass:
+                    break
+            except Exception:
+                continue
+    if not ft_pass:
+        ft_pass = "freqtrade"
+
+    auth = base64.b64encode(f"{ft_user}:{ft_pass}".encode()).decode()
     headers = {"Authorization": f"Basic {auth}"}
     for host in ["freqtrade:8080", "localhost:8080"]:
         try:

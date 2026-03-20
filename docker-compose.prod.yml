@@ -45,13 +45,16 @@ services:
       - FRED_API_KEY=${FRED_API_KEY}
       - COINGLASS_API_KEY=${COINGLASS_API_KEY}
       - CORS_ORIGINS=${CORS_ORIGINS:-http://localhost:3000}
-      - INITIAL_CAPITAL=${INITIAL_CAPITAL:-300}
+      - INITIAL_CAPITAL=${INITIAL_CAPITAL:-1000}
       - LOG_LEVEL=${LOG_LEVEL:-INFO}
+      - FT_USER=${FT_USER:-freqtrade}
+      - FT_PASS=${FT_PASS:-freqtrade}
     volumes:
       - trade-data:/app/data
       - ./market_monitor:/app/market_monitor
       - ./agent:/app/agent
       - ./guards:/app/guards
+      - ./config/freqtrade:/app/config
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health', timeout=3)"]
       interval: 30s
