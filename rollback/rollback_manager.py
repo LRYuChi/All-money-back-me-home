@@ -1,6 +1,5 @@
 """回滾管理器 — 監控系統健康，自動回滾失敗的變更。"""
 
-import json
 import logging
 import os
 import sqlite3

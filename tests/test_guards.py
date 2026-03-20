@@ -41,6 +41,32 @@ def test_max_position_reject():
     assert "exceeds" in result
 
 
+def test_max_position_high_confidence_pass():
+    """High confidence (0.85) raises effective limit to ~37.5%, allowing $375."""
+    guard = MaxPositionGuard(max_pct=30, confident_pct=45, confidence_threshold=0.7)
+    # position_value = 120 * 3 = 360, needs > 30% ($300) but < 37.5% ($375)
+    ctx = make_ctx(amount=120, leverage=3, confidence=0.85)
+    assert guard.check(ctx) is None
+
+
+def test_max_position_low_confidence_reject():
+    """Low confidence keeps strict 30% limit — same position is rejected."""
+    guard = MaxPositionGuard(max_pct=30, confident_pct=45, confidence_threshold=0.7)
+    # position_value = 120 * 3 = 360 > 300 (30%)
+    ctx = make_ctx(amount=120, leverage=3, confidence=0.5)
+    result = guard.check(ctx)
+    assert result is not None
+    assert "exceeds" in result
+
+
+def test_max_position_max_confidence():
+    """Confidence 1.0 reaches full confident_pct (45%)."""
+    guard = MaxPositionGuard(max_pct=30, confident_pct=45, confidence_threshold=0.7)
+    # position_value = 140 * 3 = 420 < 450 (45%)
+    ctx = make_ctx(amount=140, leverage=3, confidence=1.0)
+    assert guard.check(ctx) is None
+
+
 def test_max_leverage_pass():
     guard = MaxLeverageGuard(max_leverage=5)
     ctx = make_ctx(leverage=3)  # $1000 account → dynamic_max=5.0, 3 < 5

@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """記憶系統 Schema 遷移 v2 — 安全升級舊數據。"""
 
-import json, logging, os, shutil, sys
+import logging, os, shutil, sys
 from datetime import datetime
 from pathlib import Path
 

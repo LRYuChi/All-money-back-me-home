@@ -13,18 +13,35 @@ from guards.base import Guard, GuardContext
 
 
 class MaxPositionGuard(Guard):
-    """Reject if a single position would exceed max % of account."""
+    """Reject if a single position would exceed max % of account.
 
-    def __init__(self, max_pct: float = 30.0):
+    Confidence-aware: when confidence >= threshold, the effective limit
+    scales linearly from max_pct up to confident_pct.  This lets the
+    confidence engine's high-conviction trades through while keeping a
+    strict cap for low-confidence entries.
+    """
+
+    def __init__(self, max_pct: float = 30.0, confident_pct: float = 45.0,
+                 confidence_threshold: float = 0.7):
         self.max_pct = max_pct
+        self.confident_pct = confident_pct
+        self.confidence_threshold = confidence_threshold
 
     def check(self, ctx: GuardContext) -> Optional[str]:
+        # Dynamically raise the cap when confidence engine is highly confident
+        if ctx.confidence >= self.confidence_threshold:
+            denom = 1.0 - self.confidence_threshold
+            t = min((ctx.confidence - self.confidence_threshold) / denom, 1.0) if denom > 0 else 1.0
+            effective_pct = self.max_pct + (self.confident_pct - self.max_pct) * t
+        else:
+            effective_pct = self.max_pct
+
         position_value = ctx.amount * ctx.leverage
-        max_allowed = ctx.account_balance * (self.max_pct / 100)
+        max_allowed = ctx.account_balance * (effective_pct / 100)
         if position_value > max_allowed:
             return (
                 f"Position value {position_value:.2f} exceeds "
-                f"{self.max_pct}% of account ({max_allowed:.2f})"
+                f"{effective_pct:.0f}% of account ({max_allowed:.2f})"
             )
         return None
 
@@ -194,9 +211,15 @@ class LiquidationGuard(Guard):
 
     Ensures liquidation distance is at least `min_distance_mult` times
     the stop-loss distance, providing a safety buffer against flash crashes.
+
+    OKX isolated margin maintenance rates by tier:
+    - Tier 1 (≤$10k): ~1.0%
+    - Tier 2 (≤$50k): ~1.5%
+    - Tier 3 (≤$200k): ~2.0%
+    Default 1.0% is conservative for small accounts.
     """
 
-    def __init__(self, min_distance_mult: float = 2.0, maintenance_margin_rate: float = 0.004):
+    def __init__(self, min_distance_mult: float = 2.0, maintenance_margin_rate: float = 0.01):
         self.min_distance_mult = min_distance_mult
         self.maintenance_margin_rate = maintenance_margin_rate
 

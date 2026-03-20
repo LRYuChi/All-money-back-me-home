@@ -56,6 +56,11 @@ _DEFAULT_STATE: dict[str, Any] = {
     "last_signal_change_time": None,
     "stale_data_alerts": 0,
     "crypto_env_cache": {},
+    # Agent control fields
+    "agent_pause_entries": False,
+    "agent_resume_at": None,
+    "agent_leverage_cap": None,
+    "agent_risk_level": "normal",
     "api_health": {
         "binance_funding": True,
         "binance_ls": True,

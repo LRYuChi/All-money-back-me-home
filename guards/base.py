@@ -25,6 +25,7 @@ class GuardContext:
     account_balance: float
     open_positions: dict = field(default_factory=dict)  # symbol -> position info
     trade_history: list = field(default_factory=list)  # recent trades
+    confidence: float = 0.5  # confidence engine score (0.0-1.0)
 
 
 class Guard(ABC):

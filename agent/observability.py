@@ -4,7 +4,6 @@ import json
 import logging
 import os
 import sqlite3
-import time
 from datetime import datetime, timezone
 from pathlib import Path
 

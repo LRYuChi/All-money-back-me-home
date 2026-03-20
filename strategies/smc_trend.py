@@ -209,7 +209,14 @@ class SMCTrend(IStrategy):
         # === Agent 旗標讀取 ===
         if _STATE_AVAILABLE:
             state = BotStateStore.read()
-            self._agent_pause = state.get("agent_pause_entries", False)
+            # 檢查暫停是否已到期 — 修復 agent_resume_at 從未被讀取的 bug
+            pause = state.get("agent_pause_entries", False)
+            resume_at = state.get("agent_resume_at")
+            if pause and resume_at and time.time() >= resume_at:
+                logger.info("Agent pause expired — resuming entries")
+                BotStateStore.update(agent_pause_entries=False, agent_resume_at=None)
+                pause = False
+            self._agent_pause = pause
             self._agent_lev_cap = state.get("agent_leverage_cap")
             self._agent_risk = state.get("agent_risk_level")
 
@@ -621,9 +628,6 @@ class SMCTrend(IStrategy):
         vwap_long = dataframe["above_vwap"].fillna(True)
         vwap_short = (~dataframe["above_vwap"]).fillna(True)
 
-        # Retracement validation: 38.2%-78.6% Fibonacci zone
-        retrace_ok = dataframe["valid_retrace"].fillna(True)
-
         # EQL sweep bonus: recent liquidity sweep below equal lows = smart money accumulation
         eql_swept_recently = dataframe["eql_swept"].rolling(8, min_periods=1).max().fillna(0).astype(bool)
         # EQH sweep bonus for shorts
@@ -841,6 +845,25 @@ class SMCTrend(IStrategy):
         # === Extreme Market Circuit Breaker ===
         # Block ALL entries during market crashes/panics
         dataframe, _ = self.dp.get_analyzed_dataframe(pair, self.timeframe)
+
+        # Dataframe freshness check: block entry if data is stale (>2 candles old)
+        if len(dataframe) > 0:
+            _tf_seconds = {"1h": 3600, "15m": 900, "5m": 300}.get(self.timeframe, 900)
+            last_candle_ts = dataframe.iloc[-1].get("date", None)
+            if last_candle_ts is not None:
+                try:
+                    from pandas import Timestamp
+                    if isinstance(last_candle_ts, Timestamp):
+                        candle_age = (current_time - last_candle_ts.to_pydatetime().replace(
+                            tzinfo=current_time.tzinfo)).total_seconds()
+                    else:
+                        candle_age = 0
+                    if candle_age > _tf_seconds * 3:
+                        logger.warning("STALE DATA: %s candle is %.0fs old — blocking entry", pair, candle_age)
+                        return False
+                except Exception:
+                    pass
+
         # Candles per 24h depends on timeframe
         _candles_24h = {"1h": 24, "15m": 96, "5m": 288}.get(self.timeframe, 24)
         if len(dataframe) > _candles_24h:
@@ -927,6 +950,7 @@ class SMCTrend(IStrategy):
                     leverage=actual_leverage,
                     account_balance=self.wallets.get_total("USDT") if self.wallets else 1000,
                     open_positions=open_pos,
+                    confidence=confidence,
                 )
                 pipeline = create_default_pipeline()
 
@@ -1243,9 +1267,9 @@ class SMCTrend(IStrategy):
 
         sl_mult = self.atr_sl_mult.value  # Default 1.5
 
-        # ATR-based risk distance
+        # ATR-based risk distance (floor: 0.3% prevents noise-triggered stops in consolidation)
         atr_sl_dist = atr * sl_mult
-        atr_sl_pct = atr_sl_dist / trade.open_rate  # As fraction of entry price
+        atr_sl_pct = max(atr_sl_dist / trade.open_rate, 0.003)  # Min 0.3% stop distance
 
         # Calculate profit in R-multiples (1R = initial risk)
         if atr_sl_pct > 0:
@@ -1337,14 +1361,20 @@ class SMCTrend(IStrategy):
         try:
             if self.wallets:
                 account_balance = self.wallets.get_total("USDT")
+                if account_balance <= 0:
+                    logger.error("Account balance is %.2f — blocking trade", account_balance)
+                    return 0
                 atr = last.get("atr", 0)
                 if atr > 0 and current_rate > 0:
                     atr_sl_pct = (atr * self.atr_sl_mult.value) / current_rate
-                    if atr_sl_pct > 0:
-                        max_risk_stake = (account_balance * 0.02) / atr_sl_pct
-                        adjusted = min(adjusted, max_risk_stake)
-        except Exception:
-            pass
+                    # ATR floor: if stop is too tight (<0.3%), use 0.3% minimum
+                    atr_sl_pct = max(atr_sl_pct, 0.003)
+                    max_risk_stake = (account_balance * 0.02) / atr_sl_pct
+                    adjusted = min(adjusted, max_risk_stake)
+        except Exception as e:
+            logger.error("Risk cap calculation failed — using conservative 1%% of balance: %s", e)
+            if self.wallets:
+                adjusted = min(adjusted, self.wallets.get_total("USDT") * 0.01)
 
         if min_stake is not None:
             adjusted = max(adjusted, min_stake)

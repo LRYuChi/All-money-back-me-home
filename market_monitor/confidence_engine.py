@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import time
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -99,7 +100,6 @@ def fetch_fred_series(series_id: str, days: int = 365) -> pd.Series:
     """Fetch data from FRED (requires FRED_API_KEY in env or fallback to yfinance)."""
     try:
         # Try fredapi first
-        import os
         api_key = os.environ.get("FRED_API_KEY")
         if api_key:
             from fredapi import Fred
@@ -220,8 +220,14 @@ def z_to_score(z: float, bullish_direction: str = "negative") -> float:
 class MacroSandbox:
     """Macro Economy Sandbox (35%): NFCI, M2, 10Y, DXY, Oil."""
 
+    _fred_warned: bool = False
+
     def calculate(self) -> dict[str, float]:
         scores = {}
+
+        if not os.environ.get("FRED_API_KEY") and not MacroSandbox._fred_warned:
+            logger.warning("FRED_API_KEY not set — NFCI/M2 will default to 0.5 (40%% of Macro sandbox)")
+            MacroSandbox._fred_warned = True
 
         # NFCI (lower = looser = bullish)
         nfci = fetch_fred_series("NFCI")
