@@ -2,7 +2,6 @@
 
 import numpy as np
 import pandas as pd
-import pytest
 
 
 def make_dataframe(n=100, squeeze_at=50):

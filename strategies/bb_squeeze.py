@@ -41,14 +41,14 @@ logger = logging.getLogger(__name__)
 
 # Optional Telegram
 try:
-    from market_monitor.telegram_zh import send_message as _tg_send
+    from market_monitor.telegram_zh import send_message as _tg_send  # noqa: F401
     _TG = True
 except ImportError:
     _TG = False
 
 # Optional state store
 try:
-    from market_monitor.state_store import BotStateStore
+    from market_monitor.state_store import BotStateStore  # noqa: F401
     _STATE = True
 except ImportError:
     _STATE = False
