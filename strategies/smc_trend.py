@@ -59,6 +59,41 @@ except ImportError:
 logger = logging.getLogger(__name__)
 
 
+# === Trade Journal (JSONL append-only log for full traceability) ===
+import json as _json
+import os as _os
+
+_JOURNAL_PATH = Path(_os.environ.get("DATA_DIR", "/data")) / "trade_journal.jsonl"
+
+
+def _write_journal(record: dict) -> None:
+    """Append a structured trade record to the journal."""
+    try:
+        _JOURNAL_PATH.parent.mkdir(parents=True, exist_ok=True)
+        with open(_JOURNAL_PATH, "a") as f:
+            f.write(_json.dumps(record, default=str) + "\n")
+    except Exception as e:
+        logger.warning("Journal write failed: %s", e)
+
+
+def read_journal(limit: int = 50) -> list[dict]:
+    """Read recent journal entries (newest first)."""
+    try:
+        if not _JOURNAL_PATH.exists():
+            return []
+        with open(_JOURNAL_PATH) as f:
+            lines = f.readlines()
+        entries = []
+        for line in reversed(lines[-limit * 2:]):  # Read extra to ensure enough
+            try:
+                entries.append(_json.loads(line.strip()))
+            except Exception:
+                continue
+        return entries[:limit]
+    except Exception:
+        return []
+
+
 class SMCTrend(IStrategy):
     """Smart Money Concepts + Trend Following strategy."""
 
@@ -1120,6 +1155,39 @@ class SMCTrend(IStrategy):
                 is_reversal=is_reversal,
             )
 
+        # === Trade Journal: ENTRY record ===
+        try:
+            dataframe_j, _ = self.dp.get_analyzed_dataframe(pair, self.timeframe)
+            if len(dataframe_j) > 0:
+                _last = dataframe_j.iloc[-1]
+                _conf = _last.get("confidence", 0.5)
+                _is_confluence = bool(_last.get("ob_fvg_confluence_bull") or _last.get("ob_fvg_confluence_bear"))
+                _is_ob = bool(_last.get("in_bullish_ob") or _last.get("in_bearish_ob"))
+                _is_fvg = bool(_last.get("in_bullish_fvg") or _last.get("in_bearish_fvg"))
+                _is_ote = bool(_last.get("in_ote_long") or _last.get("in_ote_short"))
+                _strong = _is_confluence or (_is_ob and _is_ote) or (_is_fvg and _is_ote)
+                _grade = "A" if _is_confluence else ("B+" if _strong else "B")
+                _macro = ""
+                if _STATE_AVAILABLE:
+                    _macro = BotStateStore.read().get("last_confidence_regime", "")
+                _write_journal({
+                    "event": "ENTRY", "ts": current_time.isoformat(),
+                    "pair": pair, "side": side, "entry_price": rate,
+                    "stake": amount * rate, "leverage": round(1.0 + (self.max_leverage.value - 1.0) * (_conf ** 2), 2),
+                    "confidence": round(_conf, 3), "macro_regime": _macro, "grade": _grade,
+                    "conditions": {
+                        "htf_trend": int(_last.get("htf_trend", 0)),
+                        "in_ob": _is_ob, "in_fvg": _is_fvg, "confluence": _is_confluence,
+                        "in_ote": _is_ote, "vwap": bool(_last.get("above_vwap")),
+                        "strong_structure": _strong,
+                    },
+                    "atr": round(float(_last.get("atr", 0)), 4),
+                    "atr_pct": round(float(_last.get("atr_pct", 0)), 5),
+                    "funding_rate": float(_last.get("funding_rate", 0) or 0),
+                })
+        except Exception as e:
+            logger.debug("Journal ENTRY write failed: %s", e)
+
         # Clear dedup on successful entry so same pair can re-enter next candle
         if hasattr(self, "_last_reject"):
             self._last_reject.pop(_reject_key, None)
@@ -1244,6 +1312,34 @@ class SMCTrend(IStrategy):
             pair, side, exit_reason, trade.open_rate, rate,
             profit_pct, profit_usdt, duration, exit_reason, confidence
         )
+
+        # === Trade Journal: EXIT record ===
+        try:
+            _r_mult = 0.0
+            _slippage = 0.0
+            if len(dataframe) > 0:
+                _atr = dataframe.iloc[-1].get("atr", 0)
+                if _atr > 0 and trade.open_rate > 0:
+                    _atr_sl_pct = (_atr * self.atr_sl_mult.value) / trade.open_rate
+                    _pos_profit = (profit_pct / 100) / max(trade.leverage, 1.0)
+                    _r_mult = round(_pos_profit / _atr_sl_pct, 2) if _atr_sl_pct > 0 else 0
+                _market = dataframe.iloc[-1]["close"]
+                if _market > 0:
+                    _slippage = round(abs(rate - _market) / _market * 100, 3)
+            _dur_min = (current_time - trade.open_date_utc).total_seconds() / 60
+            _write_journal({
+                "event": "EXIT", "ts": current_time.isoformat(),
+                "id": trade.id, "pair": pair,
+                "exit_price": rate, "exit_reason": exit_reason,
+                "r_multiple": _r_mult,
+                "pnl_pct": round(profit_pct, 2), "pnl_usd": round(profit_usdt, 2),
+                "duration_min": round(_dur_min, 1),
+                "confidence_at_exit": round(confidence, 3),
+                "slippage_pct": _slippage,
+            })
+        except Exception as e:
+            logger.debug("Journal EXIT write failed: %s", e)
+
         return True
 
     def leverage(self, pair: str, current_time, current_rate: float,

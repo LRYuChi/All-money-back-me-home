@@ -43,8 +43,8 @@ PERSISTENT_MENU = {
     "keyboard": [
         ["📊 全覽", "📋 持倉", "📋 分析"],
         ["🎯 信心", "🔗 加密環境", "📈 機制"],
-        ["💰 交易", "📊 統計", "🛡 風控"],
-        ["🌍 宏觀", "🧠 決策"],
+        ["💰 交易", "📊 統計", "📓 日誌"],
+        ["🛡 風控", "🌍 宏觀", "🧠 決策"],
     ],
     "resize_keyboard": True,
     "is_persistent": True,
@@ -60,6 +60,7 @@ BUTTON_MAP: dict[str, str] = {
     "📈 機制": "regime",
     "💰 交易": "trades",
     "📊 統計": "trade_stats",
+    "📓 日誌": "journal",
     "🛡 風控": "guards",
     "🌍 宏觀": "macro",
     "🧠 決策": "decisions",
@@ -825,6 +826,85 @@ def cmd_guards() -> str:
     return "\n".join(lines)
 
 
+def cmd_journal() -> str:
+    """交易日誌 — 結構化交易紀錄含進場條件."""
+    try:
+        from strategies.smc_trend import read_journal
+        entries = read_journal(limit=20)
+    except Exception:
+        return "📓 交易日誌\n━━━━━━━━━━━━━━━━\n無法讀取日誌。"
+
+    if not entries:
+        return "📓 交易日誌\n━━━━━━━━━━━━━━━━\n尚無記錄。"
+
+    # Pair ENTRY and EXIT by trade pair+ts proximity
+    exits = [e for e in entries if e.get("event") == "EXIT"]
+    entry_map = {}
+    for e in entries:
+        if e.get("event") == "ENTRY":
+            entry_map[e.get("pair", "")] = e
+
+    lines = ["📓 交易日誌", "━━━━━━━━━━━━━━━━"]
+
+    # Grade statistics
+    grade_stats = {"A": {"w": 0, "l": 0}, "B+": {"w": 0, "l": 0}, "B": {"w": 0, "l": 0}}
+
+    for ex in exits[:10]:
+        pair = ex.get("pair", "?").replace("/USDT:USDT", "")
+        pnl = ex.get("pnl_pct", 0)
+        pnl_usd = ex.get("pnl_usd", 0)
+        r_mult = ex.get("r_multiple", 0)
+        reason = ex.get("exit_reason", "?")
+        dur = ex.get("duration_min", 0)
+        icon = "🟢" if pnl > 0 else "🔴"
+
+        # Find matching entry
+        en = entry_map.get(ex.get("pair", ""))
+        grade = en.get("grade", "?") if en else "?"
+        conf_entry = en.get("confidence", 0) if en else 0
+        conds = en.get("conditions", {}) if en else {}
+
+        # Grade stats
+        if grade in grade_stats:
+            if pnl > 0:
+                grade_stats[grade]["w"] += 1
+            else:
+                grade_stats[grade]["l"] += 1
+
+        # Conditions summary
+        cond_parts = []
+        if conds.get("htf_trend"):
+            cond_parts.append(f"htf={'+'  if conds['htf_trend'] > 0 else '-'}")
+        if conds.get("in_ob"):
+            cond_parts.append("OB")
+        if conds.get("in_fvg"):
+            cond_parts.append("FVG")
+        if conds.get("confluence"):
+            cond_parts.append("Confluence")
+        if conds.get("in_ote"):
+            cond_parts.append("OTE")
+        if conds.get("strong_structure"):
+            cond_parts.append("Strong")
+        cond_str = " ".join(cond_parts) if cond_parts else "?"
+
+        dur_str = f"{int(dur // 60)}h{int(dur % 60)}m" if dur >= 60 else f"{int(dur)}m"
+
+        lines.append(f"\n{icon} {pair} Grade {grade} conf={conf_entry:.2f}")
+        lines.append(f"  {pnl:+.2f}% ${pnl_usd:+.2f} | {r_mult:+.1f}R | {dur_str}")
+        lines.append(f"  觸發: {cond_str}")
+        lines.append(f"  出場: {reason}")
+
+    # Grade summary
+    lines.append("\n━━━━━━━━━━━━━━━━")
+    for g, s in grade_stats.items():
+        total = s["w"] + s["l"]
+        if total > 0:
+            wr = s["w"] / total * 100
+            lines.append(f"Grade {g}: {total}筆 {wr:.0f}%W")
+
+    return "\n".join(lines)
+
+
 def cmd_decisions() -> str:
     try:
         from agent.memory import AgentMemory
@@ -956,7 +1036,8 @@ COMMANDS = {
     "confidence": cmd_confidence, "crypto": cmd_crypto,
     "regime": cmd_regime, "analysis": cmd_analysis,
     "trades": cmd_trades, "positions": cmd_positions,
-    "trade_stats": cmd_trade_stats, "guards": cmd_guards,
+    "trade_stats": cmd_trade_stats, "journal": cmd_journal,
+    "guards": cmd_guards,
     "decisions": cmd_decisions, "macro": cmd_macro,
     "menu": cmd_help, "overview": cmd_overview,
     "digest": cmd_digest,
