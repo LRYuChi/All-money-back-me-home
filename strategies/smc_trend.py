@@ -835,6 +835,16 @@ class SMCTrend(IStrategy):
                             rate: float, time_in_force: str, current_time: datetime,
                             entry_tag: str | None, side: str, **kwargs) -> bool:
         """進場確認 — 極端行情熔斷 + Guard Pipeline + Telegram."""
+        # === Rejection dedup: don't retry same pair on same candle ===
+        if not hasattr(self, "_last_reject"):
+            self._last_reject = {}
+        _reject_key = f"{pair}_{side}"
+        _now_ts = current_time.timestamp() if hasattr(current_time, 'timestamp') else 0
+        _tf_sec = {"1h": 3600, "15m": 900, "5m": 300}.get(self.timeframe, 900)
+        _last_ts = self._last_reject.get(_reject_key, 0)
+        if _now_ts - _last_ts < _tf_sec:
+            return False  # Already rejected this candle, don't spam logs
+
         # === Agent Pause Check ===
         if getattr(self, "_agent_pause", False):
             logger.warning("AGENT PAUSE: 進場已被 Agent 暫停")
@@ -946,12 +956,29 @@ class SMCTrend(IStrategy):
                             "side": t.trade_direction if hasattr(t, "trade_direction") else "long",
                         }
 
+                # Fallback: shrink amount to fit MaxPositionGuard limit
+                # (in case custom_stake_amount pre-limit failed)
+                stake_usd = amount * rate
+                acct_bal = self.wallets.get_total("USDT") if self.wallets else 1000
+                if confidence >= 0.7:
+                    _t = min((confidence - 0.7) / 0.3, 1.0)
+                    eff_pct = 30.0 + (45.0 - 30.0) * _t
+                else:
+                    eff_pct = 30.0
+                max_pos = acct_bal * (eff_pct / 100)
+                if stake_usd * actual_leverage > max_pos and actual_leverage > 0:
+                    old_stake = stake_usd
+                    stake_usd = max_pos / actual_leverage
+                    amount = stake_usd / rate if rate > 0 else amount
+                    logger.info("Entry shrunk: $%.1f → $%.1f (%.0f%% guard, lev=%.2fx)",
+                                old_stake, stake_usd, eff_pct, actual_leverage)
+
                 ctx = GuardContext(
                     symbol=pair,
                     side="short" if side == "short" else "long",
-                    amount=amount * rate,
+                    amount=stake_usd,
                     leverage=actual_leverage,
-                    account_balance=self.wallets.get_total("USDT") if self.wallets else 1000,
+                    account_balance=acct_bal,
                     open_positions=open_pos,
                     confidence=confidence,
                 )
@@ -967,6 +994,8 @@ class SMCTrend(IStrategy):
                 rejection = pipeline.run(ctx)  # Synchronous — no async fragility
                 if rejection:
                     logger.warning("Guard rejected %s %s: %s", pair, side, rejection)
+                    # Record rejection to prevent retry spam on same candle
+                    self._last_reject[_reject_key] = _now_ts
                     if _TG_AVAILABLE:
                         from market_monitor.telegram_zh import send_message
                         send_message(f"🛡️ *Guard 攔截*\n{pair} {side}\n原因: {rejection}")
@@ -976,6 +1005,7 @@ class SMCTrend(IStrategy):
             except Exception as e:
                 # FAIL-SAFE: Guard error = REJECT trade (never trade unguarded)
                 logger.error("Guard Pipeline CRITICAL error — BLOCKING trade: %s", e)
+                self._last_reject[_reject_key] = _now_ts
                 return False
 
         if _TG_AVAILABLE:
@@ -1415,8 +1445,8 @@ class SMCTrend(IStrategy):
                     logger.info("Stake %.1f → %.1f (pre-limit for %.0f%% guard, lev=%.2fx)",
                                 adjusted, max_stake_guard, eff_pct, est_lev)
                     adjusted = max_stake_guard
-        except Exception:
-            pass
+        except Exception as e:
+            logger.error("Pre-limit calculation failed (stake may be oversized): %s", e)
 
         if min_stake is not None:
             adjusted = max(adjusted, min_stake)
