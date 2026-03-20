@@ -564,6 +564,14 @@ class SMCTrend(IStrategy):
                 dataframe["recent_liq_sweep"] = dataframe["recent_liq_sweep"] | (swept == 1)
 
         # =============================================
+        # NEW: Equal Highs/Lows (EQH/EQL) — Liquidity Pool Detection
+        # Inspired by LuxAlgo SMC: detects liquidity pools where
+        # stop losses cluster. Price tends to sweep these levels
+        # before reversing — a key SMC entry signal.
+        # =============================================
+        dataframe = _detect_equal_highs_lows(dataframe)
+
+        # =============================================
         # CONFIDENCE ENGINE (backtest-compatible)
         # =============================================
         # Builds a 0.0-1.0 confidence score from data available in the dataframe.
@@ -616,13 +624,18 @@ class SMCTrend(IStrategy):
         # Retracement validation: 38.2%-78.6% Fibonacci zone
         retrace_ok = dataframe["valid_retrace"].fillna(True)
 
+        # EQL sweep bonus: recent liquidity sweep below equal lows = smart money accumulation
+        eql_swept_recently = dataframe["eql_swept"].rolling(8, min_periods=1).max().fillna(0).astype(bool)
+        # EQH sweep bonus for shorts
+        eqh_swept_recently = dataframe["eqh_swept"].rolling(8, min_periods=1).max().fillna(0).astype(bool)
+
         dataframe.loc[
             (
                 (dataframe["htf_trend"] > 0)                    # 4H bullish
                 & (dataframe["in_ote_long"])             # OTE zone (discount)
                 & (
                     (zone_long_a & confidence_ok_a)               # Grade A: conf > 0.1
-                    | (zone_long_b & htf_zone & confidence_ok_b)  # Grade B: conf > 0.35 + 4H zone
+                    | (zone_long_b & (htf_zone | eql_swept_recently) & confidence_ok_b)  # Grade B: 4H zone OR EQL sweep
                 )
                 & adam_long_filter                                # Adam projection up
                 & vwap_long                                      # Above VWAP
@@ -647,7 +660,7 @@ class SMCTrend(IStrategy):
                 & (dataframe["in_ote_short"])            # Premium zone OTE
                 & (
                     (zone_short_a & confidence_ok_a)              # Grade A: conf > 0.1
-                    | (zone_short_b & htf_zone & confidence_ok_b) # Grade B: conf > 0.35 + 4H zone
+                    | (zone_short_b & (htf_zone | eqh_swept_recently) & confidence_ok_b) # Grade B: 4H zone OR EQH sweep
                 )
                 & adam_short_filter                               # Adam projection down
                 & vwap_short                                     # Below VWAP
@@ -679,7 +692,7 @@ class SMCTrend(IStrategy):
                 & (dataframe["in_ote_short"])                         # Premium zone
                 & (
                     zone_rev_short_a                                  # Grade A
-                    | (zone_rev_short_b & htf_zone)                  # Grade B + 4H zone
+                    | (zone_rev_short_b & (htf_zone | eqh_swept_recently))  # Grade B: 4H zone OR EQH sweep
                 )
                 & adam_short_filter                                   # Adam projection down
                 & (dataframe["fr_ok_short"])                          # Funding rate OK
@@ -1520,6 +1533,17 @@ def _detect_active_zones(df: DataFrame) -> DataFrame:
     df["ob_fvg_confluence_bull"] = False  # Grade A: OB+FVG overlap
     df["ob_fvg_confluence_bear"] = False
 
+    # LuxAlgo high-volatility filter: extreme candles have unreliable OB boundaries
+    # For high-vol bars, use inverted values (low for top, high for bottom)
+    atr_200 = df["close"].rolling(200).std() * 1.5  # Proxy for ATR
+    if "atr" in df.columns:
+        atr_200 = df["atr"].rolling(200).mean().fillna(df["atr"])
+    high_vol_bar = (df["high"] - df["low"]) >= (2 * atr_200)
+
+    # Parsed values: normal bars use high/low, high-vol bars use inverted
+    parsed_high = np.where(high_vol_bar, df["low"], df["high"])
+    parsed_low = np.where(high_vol_bar, df["high"], df["low"])
+
     # Track active (unmitigated) order blocks
     active_obs = []  # list of (type, top, bottom, index)
 
@@ -1532,11 +1556,18 @@ def _detect_active_zones(df: DataFrame) -> DataFrame:
             top = df["ob_top"].iloc[i]
             bottom = df["ob_bottom"].iloc[i]
             if not pd.isna(top) and not pd.isna(bottom):
+                # Use parsed values for high-vol bars (LuxAlgo filter)
+                p_top = parsed_high[i] if i < len(parsed_high) else top
+                p_bottom = parsed_low[i] if i < len(parsed_low) else bottom
+                # Ensure top > bottom after parsing
+                actual_top = max(p_top, p_bottom, top)
+                actual_bottom = min(p_top, p_bottom, bottom)
                 active_obs.append({
                     "type": int(ob_val),  # 1=bullish, -1=bearish
-                    "top": top,
-                    "bottom": bottom,
+                    "top": actual_top,
+                    "bottom": actual_bottom,
                     "created": i,
+                    "high_vol": bool(high_vol_bar.iloc[i]) if i < len(high_vol_bar) else False,
                 })
 
         # Check if price is in any active OB
@@ -1607,6 +1638,127 @@ def _detect_active_zones(df: DataFrame) -> DataFrame:
     # Price is in both OB and FVG simultaneously = strongest entry zone
     df["ob_fvg_confluence_bull"] = df["in_bullish_ob"] & df["in_bullish_fvg"]
     df["ob_fvg_confluence_bear"] = df["in_bearish_ob"] & df["in_bearish_fvg"]
+
+    return df
+
+
+def _detect_equal_highs_lows(df: DataFrame, threshold_atr_mult: float = 0.1, lookback: int = 3) -> DataFrame:
+    """Detect Equal Highs (EQH) and Equal Lows (EQL) — liquidity pools.
+
+    Two swing points at nearly the same price = stop loss cluster.
+    When price sweeps past these levels and reverses, it's a high-probability entry.
+
+    Logic (from LuxAlgo):
+    - Find swing highs/lows using `lookback` bars confirmation
+    - If |current_swing - prev_swing| < threshold × ATR → Equal High/Low
+    - Track if the EQH/EQL has been swept (price exceeded it)
+    - Swept EQH + bearish structure = short signal
+    - Swept EQL + bullish structure = long signal
+    """
+    atr = df.get("atr", pd.Series(dtype=float))
+
+    df["eqh_level"] = np.nan       # Price level of equal highs
+    df["eql_level"] = np.nan       # Price level of equal lows
+    df["eqh_swept"] = False        # True when price swept above EQH
+    df["eql_swept"] = False        # True when price swept below EQL
+    df["near_eqh"] = False         # Price is approaching EQH from below
+    df["near_eql"] = False         # Price is approaching EQL from above
+
+    # Use swing_hl from SMC library (already computed)
+    swing_hl = df.get("swing_hl", pd.Series(dtype=float))
+    swing_level = df.get("swing_level", pd.Series(dtype=float))
+
+    # Track recent swing highs and lows for EQH/EQL detection
+    recent_swing_highs = []  # list of (index, price)
+    recent_swing_lows = []
+
+    # Active EQH/EQL zones
+    active_eqh = []  # list of {"level": price, "created": index, "swept": False}
+    active_eql = []
+
+    for i in range(len(df)):
+        sh = swing_hl.iloc[i] if i < len(swing_hl) else np.nan
+        sl_val = swing_level.iloc[i] if i < len(swing_level) else np.nan
+        close = df["close"].iloc[i]
+        high_val = df["high"].iloc[i]
+        low_val = df["low"].iloc[i]
+        current_atr = atr.iloc[i] if i < len(atr) and not pd.isna(atr.iloc[i]) else 0
+        threshold = current_atr * threshold_atr_mult
+
+        # Register new swing highs/lows
+        if not pd.isna(sh) and not pd.isna(sl_val):
+            if sh == -1:  # Swing high
+                # Check against recent swing highs for EQH
+                for prev_idx, prev_price in recent_swing_highs:
+                    if threshold > 0 and abs(sl_val - prev_price) < threshold:
+                        # Equal High detected! Average the two levels
+                        eq_level = (sl_val + prev_price) / 2
+                        active_eqh.append({"level": eq_level, "created": i, "swept": False})
+                        break
+                recent_swing_highs.append((i, sl_val))
+                # Keep only last 10
+                if len(recent_swing_highs) > 10:
+                    recent_swing_highs.pop(0)
+
+            elif sh == 1:  # Swing low
+                for prev_idx, prev_price in recent_swing_lows:
+                    if threshold > 0 and abs(sl_val - prev_price) < threshold:
+                        eq_level = (sl_val + prev_price) / 2
+                        active_eql.append({"level": eq_level, "created": i, "swept": False})
+                        break
+                recent_swing_lows.append((i, sl_val))
+                if len(recent_swing_lows) > 10:
+                    recent_swing_lows.pop(0)
+
+        # Check active EQH zones
+        remaining_eqh = []
+        for eqh in active_eqh:
+            # Expire after 96 candles (24h on 15m)
+            if i - eqh["created"] > 96:
+                continue
+
+            # Check if swept (price went above EQH level)
+            if high_val > eqh["level"] and not eqh["swept"]:
+                eqh["swept"] = True
+                df.at[df.index[i], "eqh_swept"] = True
+                df.at[df.index[i], "eqh_level"] = eqh["level"]
+
+            # Check if price is near EQH (within 0.5 ATR from below)
+            if not eqh["swept"] and current_atr > 0:
+                dist = eqh["level"] - close
+                if 0 < dist < current_atr * 0.5:
+                    df.at[df.index[i], "near_eqh"] = True
+                    df.at[df.index[i], "eqh_level"] = eqh["level"]
+
+            # Remove if swept and price moved 1 ATR past
+            if eqh["swept"] and current_atr > 0 and close < eqh["level"] - current_atr:
+                continue  # Consumed
+
+            remaining_eqh.append(eqh)
+        active_eqh = remaining_eqh
+
+        # Check active EQL zones
+        remaining_eql = []
+        for eql in active_eql:
+            if i - eql["created"] > 96:
+                continue
+
+            if low_val < eql["level"] and not eql["swept"]:
+                eql["swept"] = True
+                df.at[df.index[i], "eql_swept"] = True
+                df.at[df.index[i], "eql_level"] = eql["level"]
+
+            if not eql["swept"] and current_atr > 0:
+                dist = close - eql["level"]
+                if 0 < dist < current_atr * 0.5:
+                    df.at[df.index[i], "near_eql"] = True
+                    df.at[df.index[i], "eql_level"] = eql["level"]
+
+            if eql["swept"] and current_atr > 0 and close > eql["level"] + current_atr:
+                continue
+
+            remaining_eql.append(eql)
+        active_eql = remaining_eql
 
     return df
 
