@@ -46,12 +46,6 @@ try:
 except ImportError:
     _TG = False
 
-try:
-    from market_monitor.trade_journal import get_journal
-    _JOURNAL = True
-except ImportError:
-    _JOURNAL = False
-
 logger = logging.getLogger(__name__)
 
 
@@ -119,35 +113,15 @@ class SupertrendStrategy(IStrategy):
 
     stoploss = -0.05
     trailing_stop = False
-    use_custom_stoploss = True  # Enable smart trailing stoploss
+    use_custom_stoploss = False
 
     can_short = True
     trading_mode = "futures"
     margin_mode = "isolated"
 
-    # --- Protections ---
-    @property
-    def protections(self):
-        return [
-            {
-                "method": "MaxDrawdown",
-                "lookback_period_candles": 192,  # 48h on 15m
-                "trade_limit": 10,
-                "stop_duration_candles": 48,      # 12h pause
-                "max_allowed_drawdown": 0.15,
-            },
-            {
-                "method": "StoplossGuard",
-                "lookback_period_candles": 96,   # 24h on 15m
-                "trade_limit": 4,
-                "stop_duration_candles": 24,      # 6h pause
-                "only_per_pair": False,
-            },
-        ]
-
     st_period = 10
     st_multiplier = 3.0
-    adx_threshold = 20  # Lowered from 25 — too strict in ranging markets
+    adx_threshold = 25
 
     def informative_pairs(self):
         pairs = self.dp.current_whitelist()
@@ -238,68 +212,24 @@ class SupertrendStrategy(IStrategy):
         return dataframe
 
     def populate_entry_trend(self, dataframe: DataFrame, metadata: dict) -> DataFrame:
-        # Grade A quality: strict (full confluence)
-        quality_a = (
+        quality = (
             (dataframe["adx"] > self.adx_threshold)
+            & (dataframe["volume"] > dataframe["volume_ma_20"] * 1.2)
             & dataframe["atr_rising"]
-            & (dataframe["trend_quality"] > 0.5)
+            & (dataframe["trend_quality"] > 0.5)  # Trend quality gate
         )
 
-        # Grade B quality: relaxed (basic trend confirmation)
-        quality_b = (
-            (dataframe["adx"] > 15)  # Minimal trend presence
-            & (dataframe["trend_quality"] > 0.3)
-        )
-
-        # Partial alignment: 3 of 4 layers agree (not all 4 required)
-        dir_4h = dataframe.get("dir_4h", pd.Series(0, index=dataframe.index))
-        mostly_bullish = (
-            ((dataframe.get("st_1d", 0) == 1).astype(int)
-             + (dir_4h > 0.1).astype(int)
-             + (dataframe.get("st_1h", 0) == 1).astype(int))
-            >= 2  # At least 2 of 3 HTF layers bullish
-        )
-        mostly_bearish = (
-            ((dataframe.get("st_1d", 0) == -1).astype(int)
-             + (dir_4h < -0.1).astype(int)
-             + (dataframe.get("st_1h", 0) == -1).astype(int))
-            >= 2
-        )
-
-        # Long: Grade A (all aligned) OR Grade B (mostly aligned)
+        # Long: all bullish + 15m flip + quality
         dataframe.loc[
-            dataframe["st_buy"] & (
-                (dataframe["all_bullish"] & quality_a)   # Grade A: full confluence
-                | (mostly_bullish & quality_b)            # Grade B: 3/4 layers + basic quality
-            ),
+            dataframe["st_buy"] & dataframe["all_bullish"] & quality,
             "enter_long",
         ] = 1
 
-        # Short: Grade A OR Grade B
+        # Short: all bearish + 15m flip + quality
         dataframe.loc[
-            dataframe["st_sell"] & (
-                (dataframe["all_bearish"] & quality_a)
-                | (mostly_bearish & quality_b)
-            ),
+            dataframe["st_sell"] & dataframe["all_bearish"] & quality,
             "enter_short",
         ] = 1
-
-        # Signal diagnostics
-        n_long = int(dataframe.get("enter_long", 0).sum())
-        n_short = int(dataframe.get("enter_short", 0).sum())
-        last = dataframe.iloc[-1] if len(dataframe) > 0 else {}
-        logger.info(
-            "ST Signals %s: %d long, %d short | quality=%.2f adx=%.0f | "
-            "1d=%s 4h=%.2f 1h=%s 15m=%s | volume_ok=%s",
-            metadata.get("pair", "?"), n_long, n_short,
-            float(last.get("trend_quality", 0)),
-            float(last.get("adx", 0)),
-            int(last.get("st_1d", 0)),
-            float(last.get("dir_4h", 0) if "dir_4h" in dataframe.columns else 0),
-            int(last.get("st_1h", 0)),
-            int(last.get("st_trend", 0)),
-            bool(last.get("volume", 0) > last.get("volume_ma_20", 1) * 1.2),
-        )
 
         return dataframe
 
@@ -462,37 +392,6 @@ class SupertrendStrategy(IStrategy):
                 f"方向分數: `{ds:+.2f}` | 品質: `{tq:.2f}`\n"
                 f"策略: Supertrend 4L MTF"
             )
-        # === Trade Journal ===
-        if _JOURNAL:
-            try:
-                dataframe, _ = self.dp.get_analyzed_dataframe(pair, self.timeframe)
-                last = dataframe.iloc[-1] if len(dataframe) > 0 else {}
-                get_journal().log_entry(
-                    strategy="SupertrendStrategy",
-                    pair=pair, side=side, rate=rate,
-                    stake=amount * rate,
-                    leverage=kwargs.get("leverage", 1.0),
-                    confidence=float(last.get("trend_quality", 0)),
-                    regime=None,  # Supertrend doesn't use regime detector
-                    entry_reasons={
-                        "st_1d": int(last.get("st_1d", 0)),
-                        "dir_4h": round(float(last.get("dir_4h", 0)), 2) if "dir_4h" in dataframe.columns else 0,
-                        "st_1h": int(last.get("st_1h", 0)),
-                        "st_15m": int(last.get("st_trend", 0)),
-                        "trend_quality": round(float(last.get("trend_quality", 0)), 2),
-                        "adx": round(float(last.get("adx", 0)), 1),
-                        "all_bullish": bool(last.get("all_bullish", False)),
-                        "all_bearish": bool(last.get("all_bearish", False)),
-                        "grade": "A" if (side == "long" and last.get("all_bullish")) or (side == "short" and last.get("all_bearish")) else "B",
-                    },
-                    indicators={
-                        "atr": round(float(last.get("atr", 0)), 4),
-                        "direction_score": round(float(last.get("direction_score", 0)), 2) if "direction_score" in dataframe.columns else 0,
-                        "volume_ratio": round(float(last.get("volume", 0)) / max(float(last.get("volume_ma_20", 1)), 1), 2),
-                    },
-                )
-            except Exception as e:
-                logger.warning("Journal entry failed: %s", e)
         return True
 
     def confirm_trade_exit(self, pair: str, trade: Trade, order_type: str,
@@ -510,33 +409,6 @@ class SupertrendStrategy(IStrategy):
                 f"P&L: `{pnl_pct:+.2f}%` (`{pnl_usd:+.2f}$`)\n"
                 f"持倉: `{dur:.1f}h` | 原因: `{exit_reason}`"
             )
-        # === Trade Journal ===
-        if _JOURNAL:
-            try:
-                profit_pct = trade.calc_profit_ratio(rate) * 100
-                profit_usd = trade.calc_profit(rate)
-                duration = (current_time - trade.open_date_utc).total_seconds() / 60
-                side = "short" if trade.is_short else "long"
-                # R-multiple
-                r_mult = None
-                dataframe, _ = self.dp.get_analyzed_dataframe(pair, self.timeframe)
-                if len(dataframe) > 0:
-                    atr = dataframe.iloc[-1].get("atr", 0)
-                    if atr > 0:
-                        atr_sl_pct = (atr * self.st_multiplier) / trade.open_rate
-                        if atr_sl_pct > 0:
-                            r_mult = (trade.calc_profit_ratio(rate)) / atr_sl_pct
-                get_journal().log_exit(
-                    strategy="SupertrendStrategy",
-                    pair=pair, side=side, rate=rate,
-                    exit_reason=exit_reason,
-                    pnl_pct=profit_pct,
-                    pnl_usd=profit_usd,
-                    duration_min=duration,
-                    r_multiple=r_mult,
-                )
-            except Exception as e:
-                logger.warning("Journal exit failed: %s", e)
         return True
 
     def leverage(self, pair: str, current_time: datetime, current_rate: float,
