@@ -88,6 +88,8 @@ services:
       - COINGLASS_API_KEY=${COINGLASS_API_KEY}
       - TELEGRAM_TOKEN=${TELEGRAM_TOKEN}
       - TELEGRAM_CHAT_ID=${TELEGRAM_CHAT_ID}
+      - SUPABASE_URL=${SUPABASE_URL}
+      - SUPABASE_KEY=${SUPABASE_SERVICE_ROLE_KEY}
     ports:
       - "127.0.0.1:8080:8080"  # Localhost only — not exposed to internet
     healthcheck:

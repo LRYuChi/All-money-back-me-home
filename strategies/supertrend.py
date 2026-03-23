@@ -46,6 +46,12 @@ try:
 except ImportError:
     _TG = False
 
+try:
+    from market_monitor.trade_journal import get_journal
+    _JOURNAL = True
+except ImportError:
+    _JOURNAL = False
+
 logger = logging.getLogger(__name__)
 
 
@@ -456,6 +462,37 @@ class SupertrendStrategy(IStrategy):
                 f"方向分數: `{ds:+.2f}` | 品質: `{tq:.2f}`\n"
                 f"策略: Supertrend 4L MTF"
             )
+        # === Trade Journal ===
+        if _JOURNAL:
+            try:
+                dataframe, _ = self.dp.get_analyzed_dataframe(pair, self.timeframe)
+                last = dataframe.iloc[-1] if len(dataframe) > 0 else {}
+                get_journal().log_entry(
+                    strategy="SupertrendStrategy",
+                    pair=pair, side=side, rate=rate,
+                    stake=amount * rate,
+                    leverage=kwargs.get("leverage", 1.0),
+                    confidence=float(last.get("trend_quality", 0)),
+                    regime=None,  # Supertrend doesn't use regime detector
+                    entry_reasons={
+                        "st_1d": int(last.get("st_1d", 0)),
+                        "dir_4h": round(float(last.get("dir_4h", 0)), 2) if "dir_4h" in dataframe.columns else 0,
+                        "st_1h": int(last.get("st_1h", 0)),
+                        "st_15m": int(last.get("st_trend", 0)),
+                        "trend_quality": round(float(last.get("trend_quality", 0)), 2),
+                        "adx": round(float(last.get("adx", 0)), 1),
+                        "all_bullish": bool(last.get("all_bullish", False)),
+                        "all_bearish": bool(last.get("all_bearish", False)),
+                        "grade": "A" if (side == "long" and last.get("all_bullish")) or (side == "short" and last.get("all_bearish")) else "B",
+                    },
+                    indicators={
+                        "atr": round(float(last.get("atr", 0)), 4),
+                        "direction_score": round(float(last.get("direction_score", 0)), 2) if "direction_score" in dataframe.columns else 0,
+                        "volume_ratio": round(float(last.get("volume", 0)) / max(float(last.get("volume_ma_20", 1)), 1), 2),
+                    },
+                )
+            except Exception as e:
+                logger.warning("Journal entry failed: %s", e)
         return True
 
     def confirm_trade_exit(self, pair: str, trade: Trade, order_type: str,
@@ -473,6 +510,33 @@ class SupertrendStrategy(IStrategy):
                 f"P&L: `{pnl_pct:+.2f}%` (`{pnl_usd:+.2f}$`)\n"
                 f"持倉: `{dur:.1f}h` | 原因: `{exit_reason}`"
             )
+        # === Trade Journal ===
+        if _JOURNAL:
+            try:
+                profit_pct = trade.calc_profit_ratio(rate) * 100
+                profit_usd = trade.calc_profit(rate)
+                duration = (current_time - trade.open_date_utc).total_seconds() / 60
+                side = "short" if trade.is_short else "long"
+                # R-multiple
+                r_mult = None
+                dataframe, _ = self.dp.get_analyzed_dataframe(pair, self.timeframe)
+                if len(dataframe) > 0:
+                    atr = dataframe.iloc[-1].get("atr", 0)
+                    if atr > 0:
+                        atr_sl_pct = (atr * self.st_multiplier) / trade.open_rate
+                        if atr_sl_pct > 0:
+                            r_mult = (trade.calc_profit_ratio(rate)) / atr_sl_pct
+                get_journal().log_exit(
+                    strategy="SupertrendStrategy",
+                    pair=pair, side=side, rate=rate,
+                    exit_reason=exit_reason,
+                    pnl_pct=profit_pct,
+                    pnl_usd=profit_usd,
+                    duration_min=duration,
+                    r_multiple=r_mult,
+                )
+            except Exception as e:
+                logger.warning("Journal exit failed: %s", e)
         return True
 
     def leverage(self, pair: str, current_time: datetime, current_rate: float,

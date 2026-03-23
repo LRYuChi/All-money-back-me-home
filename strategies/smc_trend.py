@@ -56,6 +56,12 @@ try:
 except ImportError:
     _STATE_AVAILABLE = False
 
+try:
+    from market_monitor.trade_journal import get_journal
+    _JOURNAL = True
+except ImportError:
+    _JOURNAL = False
+
 logger = logging.getLogger(__name__)
 
 
@@ -1442,6 +1448,36 @@ class SMCTrend(IStrategy):
         except Exception as e:
             logger.debug("Journal ENTRY write failed: %s", e)
 
+        if _JOURNAL:
+            try:
+                get_journal().log_entry(
+                    strategy="SMCTrend",
+                    pair=pair, side=side, rate=rate,
+                    stake=amount * rate,
+                    leverage=round(lev, 2),
+                    confidence=confidence,
+                    regime=str(last.get("conf_regime", "")),
+                    entry_reasons={
+                        "htf_trend": int(last.get("htf_trend", 0)),
+                        "in_ob": bool(last.get("in_bullish_ob") or last.get("in_bearish_ob")),
+                        "in_fvg": bool(last.get("in_bullish_fvg") or last.get("in_bearish_fvg")),
+                        "confluence": bool(last.get("ob_fvg_confluence_bull") or last.get("ob_fvg_confluence_bear")),
+                        "in_ote": bool(last.get("in_ote_long") or last.get("in_ote_short")),
+                        "eql_swept": bool(last.get("eql_swept", False)),
+                        "eqh_swept": bool(last.get("eqh_swept", False)),
+                        "grade": details.get("grade", "B") if details else "B",
+                        "is_reversal": is_reversal,
+                    },
+                    indicators={
+                        "atr": round(float(last.get("atr", 0)), 4),
+                        "atr_pct": round(float(last.get("atr_pct", 0)), 4),
+                        "funding_rate": round(float(last.get("funding_rate", 0)), 6) if "funding_rate" in dataframe.columns else None,
+                        "adam_slope": round(float(last.get("adam_slope", 0)), 4),
+                    },
+                )
+            except Exception as e:
+                logger.warning("Journal entry failed: %s", e)
+
         # Clear dedup on successful entry so same pair can re-enter next candle
         if hasattr(self, "_last_reject"):
             self._last_reject.pop(_reject_key, None)
@@ -1593,6 +1629,21 @@ class SMCTrend(IStrategy):
             })
         except Exception as e:
             logger.debug("Journal EXIT write failed: %s", e)
+
+        if _JOURNAL:
+            try:
+                get_journal().log_exit(
+                    strategy="SMCTrend",
+                    pair=pair, side=side, rate=rate,
+                    exit_reason=exit_reason,
+                    pnl_pct=profit_pct,
+                    pnl_usd=profit_usdt,
+                    duration_min=float(duration.split(":")[0]) * 60 + float(duration.split(":")[1]) if ":" in str(duration) else 0,
+                    r_multiple=_r_mult,
+                    confidence=confidence,
+                )
+            except Exception as e:
+                logger.warning("Journal exit failed: %s", e)
 
         return True
 
