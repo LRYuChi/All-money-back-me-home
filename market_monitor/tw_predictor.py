@@ -21,6 +21,52 @@ logger = logging.getLogger(__name__)
 # Taiwan timezone
 TW_TZ = timezone(timedelta(hours=8))
 
+
+# ============================================================
+# PURE NUMPY TA FUNCTIONS (no talib dependency)
+# ============================================================
+
+def _atr(high: np.ndarray, low: np.ndarray, close: np.ndarray, period: int = 14) -> np.ndarray:
+    tr = np.maximum(high - low, np.maximum(np.abs(high - np.roll(close, 1)), np.abs(low - np.roll(close, 1))))
+    tr[0] = high[0] - low[0]
+    atr = pd.Series(tr).rolling(period).mean().values
+    return atr
+
+def _rsi(close: np.ndarray, period: int = 14) -> np.ndarray:
+    delta = np.diff(close, prepend=close[0])
+    gain = np.where(delta > 0, delta, 0)
+    loss = np.where(delta < 0, -delta, 0)
+    avg_gain = pd.Series(gain).rolling(period).mean().values
+    avg_loss = pd.Series(loss).rolling(period).mean().values
+    rs = avg_gain / np.where(avg_loss == 0, 1e-10, avg_loss)
+    return 100 - (100 / (1 + rs))
+
+def _macd(close: np.ndarray, fast: int = 12, slow: int = 26, signal: int = 9):
+    ema_fast = pd.Series(close).ewm(span=fast).mean().values
+    ema_slow = pd.Series(close).ewm(span=slow).mean().values
+    macd_line = ema_fast - ema_slow
+    signal_line = pd.Series(macd_line).ewm(span=signal).mean().values
+    hist = macd_line - signal_line
+    return macd_line, signal_line, hist
+
+def _adx(high: np.ndarray, low: np.ndarray, close: np.ndarray, period: int = 14) -> np.ndarray:
+    up_move = high - np.roll(high, 1)
+    down_move = np.roll(low, 1) - low
+    plus_dm = np.where((up_move > down_move) & (up_move > 0), up_move, 0)
+    minus_dm = np.where((down_move > up_move) & (down_move > 0), down_move, 0)
+    atr_vals = _atr(high, low, close, period)
+    plus_di = 100 * pd.Series(plus_dm).rolling(period).mean().values / np.where(atr_vals == 0, 1e-10, atr_vals)
+    minus_di = 100 * pd.Series(minus_dm).rolling(period).mean().values / np.where(atr_vals == 0, 1e-10, atr_vals)
+    dx = 100 * np.abs(plus_di - minus_di) / np.where((plus_di + minus_di) == 0, 1e-10, plus_di + minus_di)
+    return pd.Series(dx).rolling(period).mean().values
+
+def _bbands(close: np.ndarray, period: int = 20, nbdev: float = 2.0):
+    middle = pd.Series(close).rolling(period).mean().values
+    std = pd.Series(close).rolling(period).std().values
+    upper = middle + nbdev * std
+    lower = middle - nbdev * std
+    return upper, middle, lower
+
 # Default watchlist
 TW_WATCHLIST = ["2330", "2317", "2454", "2382", "2881", "2891", "3711", "6547"]
 
@@ -98,7 +144,7 @@ def _fetch_twse_margin() -> dict:
 
 def calc_direction_score() -> dict:
     """Calculate TAIEX direction score [-100, +100]."""
-    import talib
+    # Using built-in TA functions (no talib dependency)
 
     taiex = _fetch_yf("^TWII", period="1y")
     if taiex is None or len(taiex) < 60:
@@ -118,7 +164,7 @@ def calc_direction_score() -> dict:
 
     # 2. Supertrend direction (15%)
     try:
-        atr = talib.ATR(taiex["high"].values.flatten(), taiex["low"].values.flatten(), close, timeperiod=10)
+        atr = _atr(taiex["high"].values.flatten(), taiex["low"].values.flatten(), close, period=10)
         src = (taiex["high"].values.flatten() + taiex["low"].values.flatten()) / 2
         # Simple Supertrend direction check
         up = src[-1] - 3.0 * atr[-1] if not np.isnan(atr[-1]) else 0
@@ -248,7 +294,7 @@ def calc_institutional_score() -> dict:
 
 def calc_technical_score(ticker: str = "^TWII") -> dict:
     """Calculate technical analysis score for a ticker."""
-    import talib
+    # Using built-in TA functions (no talib dependency)
 
     df = _fetch_yf(ticker, period="6mo")
     if df is None or len(df) < 30:
@@ -262,7 +308,7 @@ def calc_technical_score(ticker: str = "^TWII") -> dict:
     score = 0
 
     # RSI
-    rsi = talib.RSI(close, timeperiod=14)
+    rsi = _rsi(close, period=14)
     rsi_val = float(rsi[-1]) if not np.isnan(rsi[-1]) else 50
     if rsi_val < 30:
         rsi_score = 50  # Oversold = bullish
@@ -278,7 +324,7 @@ def calc_technical_score(ticker: str = "^TWII") -> dict:
     factors["rsi"] = {"value": round(rsi_val, 1), "signal": "超賣" if rsi_val < 30 else ("超買" if rsi_val > 70 else "中性")}
 
     # MACD
-    macd, signal, hist = talib.MACD(close)
+    macd, signal, hist = _macd(close)
     if not np.isnan(hist[-1]):
         macd_bull = float(hist[-1]) > 0 and float(hist[-1]) > float(hist[-2]) if not np.isnan(hist[-2]) else False
         macd_score = 50 if macd_bull else -50
@@ -288,12 +334,12 @@ def calc_technical_score(ticker: str = "^TWII") -> dict:
     factors["macd"] = {"signal": "多頭" if macd_score > 0 else "空頭", "histogram": round(float(hist[-1]), 2) if not np.isnan(hist[-1]) else 0}
 
     # ADX
-    adx = talib.ADX(high, low, close, timeperiod=14)
+    adx = _adx(high, low, close, period=14)
     adx_val = float(adx[-1]) if not np.isnan(adx[-1]) else 20
     factors["adx"] = {"value": round(adx_val, 1), "trend": "強" if adx_val > 25 else "弱"}
 
     # Bollinger Bands position
-    upper, middle, lower = talib.BBANDS(close, timeperiod=20)
+    upper, middle, lower = _bbands(close, period=20)
     if not np.isnan(upper[-1]) and not np.isnan(lower[-1]):
         bb_pos = (close[-1] - float(lower[-1])) / (float(upper[-1]) - float(lower[-1])) if float(upper[-1]) != float(lower[-1]) else 0.5
         bb_score = -30 if bb_pos > 0.9 else (30 if bb_pos < 0.1 else 0)
@@ -320,7 +366,7 @@ def calc_technical_score(ticker: str = "^TWII") -> dict:
 
 def scan_stock(symbol: str) -> dict:
     """Scan a single TW stock with entry/SL/TP levels."""
-    import talib
+    # Using built-in TA functions (no talib dependency)
 
     ticker = f"{symbol}.TW"
     df = _fetch_yf(ticker, period="6mo")
@@ -335,7 +381,7 @@ def scan_stock(symbol: str) -> dict:
     tech = calc_technical_score(ticker)
 
     # ATR for SL/TP
-    atr = talib.ATR(high, low, close, timeperiod=14)
+    atr = _atr(high, low, close, period=14)
     atr_val = float(atr[-1]) if not np.isnan(atr[-1]) else float(close[-1]) * 0.02
 
     price = float(close[-1])
