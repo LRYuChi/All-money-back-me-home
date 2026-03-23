@@ -113,15 +113,35 @@ class SupertrendStrategy(IStrategy):
 
     stoploss = -0.05
     trailing_stop = False
-    use_custom_stoploss = False
+    use_custom_stoploss = True  # Enable smart trailing stoploss
 
     can_short = True
     trading_mode = "futures"
     margin_mode = "isolated"
 
+    # --- Protections ---
+    @property
+    def protections(self):
+        return [
+            {
+                "method": "MaxDrawdown",
+                "lookback_period_candles": 192,  # 48h on 15m
+                "trade_limit": 10,
+                "stop_duration_candles": 48,      # 12h pause
+                "max_allowed_drawdown": 0.15,
+            },
+            {
+                "method": "StoplossGuard",
+                "lookback_period_candles": 96,   # 24h on 15m
+                "trade_limit": 4,
+                "stop_duration_candles": 24,      # 6h pause
+                "only_per_pair": False,
+            },
+        ]
+
     st_period = 10
     st_multiplier = 3.0
-    adx_threshold = 25
+    adx_threshold = 20  # Lowered from 25 — too strict in ranging markets
 
     def informative_pairs(self):
         pairs = self.dp.current_whitelist()
@@ -212,24 +232,68 @@ class SupertrendStrategy(IStrategy):
         return dataframe
 
     def populate_entry_trend(self, dataframe: DataFrame, metadata: dict) -> DataFrame:
-        quality = (
+        # Grade A quality: strict (full confluence)
+        quality_a = (
             (dataframe["adx"] > self.adx_threshold)
-            & (dataframe["volume"] > dataframe["volume_ma_20"] * 1.2)
             & dataframe["atr_rising"]
-            & (dataframe["trend_quality"] > 0.5)  # Trend quality gate
+            & (dataframe["trend_quality"] > 0.5)
         )
 
-        # Long: all bullish + 15m flip + quality
+        # Grade B quality: relaxed (basic trend confirmation)
+        quality_b = (
+            (dataframe["adx"] > 15)  # Minimal trend presence
+            & (dataframe["trend_quality"] > 0.3)
+        )
+
+        # Partial alignment: 3 of 4 layers agree (not all 4 required)
+        dir_4h = dataframe.get("dir_4h", pd.Series(0, index=dataframe.index))
+        mostly_bullish = (
+            ((dataframe.get("st_1d", 0) == 1).astype(int)
+             + (dir_4h > 0.1).astype(int)
+             + (dataframe.get("st_1h", 0) == 1).astype(int))
+            >= 2  # At least 2 of 3 HTF layers bullish
+        )
+        mostly_bearish = (
+            ((dataframe.get("st_1d", 0) == -1).astype(int)
+             + (dir_4h < -0.1).astype(int)
+             + (dataframe.get("st_1h", 0) == -1).astype(int))
+            >= 2
+        )
+
+        # Long: Grade A (all aligned) OR Grade B (mostly aligned)
         dataframe.loc[
-            dataframe["st_buy"] & dataframe["all_bullish"] & quality,
+            dataframe["st_buy"] & (
+                (dataframe["all_bullish"] & quality_a)   # Grade A: full confluence
+                | (mostly_bullish & quality_b)            # Grade B: 3/4 layers + basic quality
+            ),
             "enter_long",
         ] = 1
 
-        # Short: all bearish + 15m flip + quality
+        # Short: Grade A OR Grade B
         dataframe.loc[
-            dataframe["st_sell"] & dataframe["all_bearish"] & quality,
+            dataframe["st_sell"] & (
+                (dataframe["all_bearish"] & quality_a)
+                | (mostly_bearish & quality_b)
+            ),
             "enter_short",
         ] = 1
+
+        # Signal diagnostics
+        n_long = int(dataframe.get("enter_long", 0).sum())
+        n_short = int(dataframe.get("enter_short", 0).sum())
+        last = dataframe.iloc[-1] if len(dataframe) > 0 else {}
+        logger.info(
+            "ST Signals %s: %d long, %d short | quality=%.2f adx=%.0f | "
+            "1d=%s 4h=%.2f 1h=%s 15m=%s | volume_ok=%s",
+            metadata.get("pair", "?"), n_long, n_short,
+            float(last.get("trend_quality", 0)),
+            float(last.get("adx", 0)),
+            int(last.get("st_1d", 0)),
+            float(last.get("dir_4h", 0) if "dir_4h" in dataframe.columns else 0),
+            int(last.get("st_1h", 0)),
+            int(last.get("st_trend", 0)),
+            bool(last.get("volume", 0) > last.get("volume_ma_20", 1) * 1.2),
+        )
 
         return dataframe
 
