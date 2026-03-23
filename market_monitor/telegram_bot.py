@@ -46,6 +46,7 @@ PERSISTENT_MENU = {
         ["💰 交易", "📊 統計", "📓 日誌"],
         ["🛡 風控", "🌍 宏觀", "🧠 決策"],
         ["🤖 AI回顧", "🔮 AI預測", "⚠️ AI風控"],
+        ["📰 投顧報告"],
     ],
     "resize_keyboard": True,
     "is_persistent": True,
@@ -68,6 +69,7 @@ BUTTON_MAP: dict[str, str] = {
     "🤖 AI回顧": "ai_review",
     "🔮 AI預測": "ai_forecast",
     "⚠️ AI風控": "ai_risk",
+    "📰 投顧報告": "advisor_report",
 }
 
 # =============================================
@@ -1124,6 +1126,21 @@ def cmd_ai_risk() -> str:
     )
 
 
+def cmd_advisor_report() -> str:
+    """投顧報告上傳入口。"""
+    return (
+        "📰 *投顧報告分析*\n\n"
+        "請傳送投顧報告內容：\n"
+        "• 直接貼上報告文字\n"
+        "• 傳送報告截圖/照片\n"
+        "• 傳送 PDF 檔案\n\n"
+        "系統將自動：\n"
+        "1. 解析報告重點\n"
+        "2. 與系統信號交叉比對\n"
+        "3. 生成結構化摘要"
+    )
+
+
 COMMANDS = {
     "status": cmd_status, "start": cmd_help, "help": cmd_help,
     "confidence": cmd_confidence, "crypto": cmd_crypto,
@@ -1137,6 +1154,7 @@ COMMANDS = {
     "ai_review": cmd_ai_review,
     "ai_forecast": cmd_ai_forecast,
     "ai_risk": cmd_ai_risk,
+    "advisor_report": cmd_advisor_report,
 }
 
 
@@ -1254,8 +1272,50 @@ def process_message(chat_id: int, text: str) -> str:
                 return f"指令失敗: {e}"
         return f"未知指令: /{cmd}"
 
+    # Detect advisor report text (long message with TW stock keywords)
+    ADVISOR_KEYWORDS = ["投顧", "買進", "目標價", "建議", "看好", "看多", "看空", "持有", "個股", "產業", "營收", "獲利", "EPS"]
+    if len(text) > 100 and any(kw in text for kw in ADVISOR_KEYWORDS):
+        try:
+            from market_monitor.tw_advisor import TWAdvisorProcessor
+            processor = TWAdvisorProcessor()
+            result = processor.process_text(text)
+            return result["telegram_message"]
+        except Exception as e:
+            logger.warning("投顧報告處理失敗: %s", e)
+            return f"報告處理失敗: {e}"
+
     # 自由文字 → AI
     return handle_ai_query(text)
+
+
+def _download_telegram_file(file_id: str) -> bytes | None:
+    """下載 Telegram 檔案。"""
+    try:
+        token = os.environ.get("TG_AI_BOT_TOKEN", "")
+        # Get file path
+        url = f"https://api.telegram.org/bot{token}/getFile?file_id={file_id}"
+        with urllib.request.urlopen(url, timeout=10) as resp:
+            data = json.loads(resp.read())
+            file_path = data["result"]["file_path"]
+        # Download file
+        url = f"https://api.telegram.org/file/bot{token}/{file_path}"
+        with urllib.request.urlopen(url, timeout=30) as resp:
+            return resp.read()
+    except Exception as e:
+        logger.warning("Telegram 檔案下載失敗: %s", e)
+        return None
+
+
+def handle_photo(photo_data: bytes, chat_id: int) -> str:
+    """處理圖片上傳（投顧報告截圖）。"""
+    try:
+        from market_monitor.tw_advisor import TWAdvisorProcessor
+        processor = TWAdvisorProcessor()
+        result = processor.process_image(photo_data)
+        return result["telegram_message"]
+    except Exception as e:
+        logger.warning("圖片報告處理失敗: %s", e)
+        return f"圖片處理失敗: {e}"
 
 
 def run_polling():
@@ -1297,11 +1357,26 @@ def run_polling():
 
                 msg = update.get("message", {})
                 chat_id = msg.get("chat", {}).get("id")
-                text = msg.get("text", "")
 
-                if not chat_id or not text:
+                if not chat_id:
                     continue
                 if chat_id not in AUTHORIZED_CHAT_IDS:
+                    continue
+
+                # Check for photo messages
+                if "photo" in msg:
+                    photos = msg["photo"]
+                    # Get largest photo
+                    file_id = photos[-1]["file_id"]
+                    # Download photo
+                    photo_data = _download_telegram_file(file_id)
+                    if photo_data:
+                        reply = handle_photo(photo_data, chat_id)
+                        send_reply(chat_id, reply)
+                        continue
+
+                text = msg.get("text", "")
+                if not text:
                     continue
 
                 logger.info("Msg from %s: %s", chat_id, text[:40])

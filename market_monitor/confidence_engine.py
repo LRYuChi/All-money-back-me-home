@@ -533,37 +533,55 @@ class GlobalConfidenceEngine:
 
         Returns 0.0-1.0 (bearish-bullish) or None if no digest available.
         """
+        _DATA_DIR = Path(os.environ.get("DATA_DIR", "data"))
+        scores: list[float] = []
+
         try:
-            digest_path = Path(os.environ.get("DATA_DIR", "data")) / "reports" / "institutional_digest.json"
+            digest_path = _DATA_DIR / "reports" / "institutional_digest.json"
             if not digest_path.exists():
-                return None
+                pass  # No institutional digest, continue to check other sources
+            else:
+                # Check freshness (skip if >8 hours old)
+                age_hours = (time.time() - digest_path.stat().st_mtime) / 3600
+                if age_hours <= 8:
+                    with open(digest_path) as f:
+                        data = json.load(f)
 
-            # Check freshness (skip if >8 hours old)
-            age_hours = (time.time() - digest_path.stat().st_mtime) / 3600
-            if age_hours > 8:
-                return None
+                    reports = data.get("reports", [])
+                    if reports:
+                        bullish = sum(1 for r in reports if r.get("sentiment") == "bullish")
+                        bearish = sum(1 for r in reports if r.get("sentiment") == "bearish")
+                        total = len(reports)
 
-            with open(digest_path) as f:
-                data = json.load(f)
+                        # Multi-空比 → 0-1 分數 (0.5 = neutral)
+                        score = (bullish - bearish) / total * 0.5 + 0.5
+                        score = max(0.0, min(1.0, score))
 
-            reports = data.get("reports", [])
-            if not reports:
-                return None
-
-            bullish = sum(1 for r in reports if r.get("sentiment") == "bullish")
-            bearish = sum(1 for r in reports if r.get("sentiment") == "bearish")
-            total = len(reports)
-
-            # Multi-空比 → 0-1 分數 (0.5 = neutral)
-            score = (bullish - bearish) / total * 0.5 + 0.5
-            score = max(0.0, min(1.0, score))
-
-            logger.info("News sentiment: %.2f (bull=%d bear=%d total=%d)", score, bullish, bearish, total)
-            return score
-
+                        logger.info("News sentiment: %.2f (bull=%d bear=%d total=%d)", score, bullish, bearish, total)
+                        scores.append(score)
         except Exception as e:
             logger.debug("News sentiment unavailable: %s", e)
+
+        # Read Taiwan advisor report sentiment
+        try:
+            tw_advisor_path = _DATA_DIR / "reports" / "tw_advisor_latest.json"
+            if tw_advisor_path.exists():
+                age = time.time() - tw_advisor_path.stat().st_mtime
+                if age < 86400:  # 24 hours
+                    with open(tw_advisor_path, "r", encoding="utf-8") as f:
+                        tw_report = json.load(f)
+                    tw_score = tw_report.get("sentiment_score")
+                    if tw_score is not None:
+                        scores.append(float(tw_score))
+                        logger.info("投顧報告情緒已納入: %.2f", tw_score)
+                else:
+                    logger.debug("投顧報告已過期 (%.1f 小時)", age / 3600)
+        except Exception as e:
+            logger.debug("投顧報告讀取失敗: %s", e)
+
+        if not scores:
             return None
+        return sum(scores) / len(scores)
 
     def calculate(self, dt: datetime | None = None) -> dict[str, Any]:
         """Calculate the global confidence score.
