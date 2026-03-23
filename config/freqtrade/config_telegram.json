@@ -1,0 +1,20 @@
+{
+    "telegram": {
+        "enabled": true,
+        "token": "",
+        "chat_id": "",
+        "notification_settings": {
+            "status": "on",
+            "warning": "on",
+            "startup": "on",
+            "entry": "on",
+            "exit": "on",
+            "entry_fill": "off",
+            "exit_fill": "off",
+            "protection_trigger": "on",
+            "strategy_msg": "on"
+        },
+        "reload": true,
+        "balance_dust_level": 0.01
+    }
+}
