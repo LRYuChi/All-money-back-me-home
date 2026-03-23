@@ -25,9 +25,7 @@
       "use_adam_filter": 0,
       "use_killzone": 0
     },
-    "sell": {
-      "atr_tp_mult": 4.507
-    }
+    "sell": {}
   },
   "ft_stratparam_v": 1,
   "export_time": "2026-03-17 16:04:57.294078+00:00"

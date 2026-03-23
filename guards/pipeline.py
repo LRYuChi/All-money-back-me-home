@@ -2,6 +2,11 @@
 
 The pipeline is a singleton so stateful guards retain tracking data.
 State is persisted to JSON so it survives bot restarts.
+
+Guard layers (checked in order, early termination on rejection):
+  Layer 1 "account"  (critical): DrawdownGuard, DailyLossGuard, ConsecutiveLossGuard
+  Layer 2 "strategy" (warning):  TotalExposureGuard, DirectionalExposureGuard, MaxLeverageGuard
+  Layer 3 "trade"    (info):     MaxPositionGuard, LiquidationGuard, CooldownGuard
 """
 
 import json
@@ -9,7 +14,7 @@ import logging
 import os
 from pathlib import Path
 
-from guards.base import GuardPipeline
+from guards.base import GuardLayer, GuardPipeline
 from guards.guards import (
     ConsecutiveLossGuard,
     CooldownGuard,
@@ -39,16 +44,34 @@ def create_default_pipeline() -> GuardPipeline:
     """
     global _default_pipeline
     if _default_pipeline is None:
-        _default_pipeline = GuardPipeline([
-            MaxPositionGuard(max_pct=30),
-            MaxLeverageGuard(max_leverage=5),
-            LiquidationGuard(min_distance_mult=2.0),
-            TotalExposureGuard(max_pct=80),
-            DirectionalExposureGuard(max_same_dir=2, reduced_pct=60),
-            DrawdownGuard(max_drawdown_pct=10),
-            CooldownGuard(minutes=60),
-            DailyLossGuard(max_pct=5),
-            ConsecutiveLossGuard(max_streak=5, pause_hours=24),
+        _default_pipeline = GuardPipeline(layers=[
+            GuardLayer(
+                name="account",
+                alert_level="critical",
+                guards=[
+                    DrawdownGuard(max_drawdown_pct=10),
+                    DailyLossGuard(max_pct=5),
+                    ConsecutiveLossGuard(max_streak=5, pause_hours=24),
+                ],
+            ),
+            GuardLayer(
+                name="strategy",
+                alert_level="warning",
+                guards=[
+                    TotalExposureGuard(max_pct=80),
+                    DirectionalExposureGuard(max_same_dir=2, reduced_pct=60),
+                    MaxLeverageGuard(max_leverage=5),
+                ],
+            ),
+            GuardLayer(
+                name="trade",
+                alert_level="info",
+                guards=[
+                    MaxPositionGuard(max_pct=30),
+                    LiquidationGuard(min_distance_mult=2.0),
+                    CooldownGuard(minutes=60),
+                ],
+            ),
         ])
         _load_state()
     return _default_pipeline

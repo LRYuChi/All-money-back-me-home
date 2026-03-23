@@ -40,23 +40,79 @@ class Guard(ABC):
         """
 
 
-class GuardPipeline:
-    """Chains multiple guards and runs them sequentially.
+@dataclass
+class GuardLayer:
+    """A named group of guards with an alert severity level.
 
-    Any single rejection aborts the order.
+    Layers enable early termination: if an account-level guard rejects,
+    strategy-level and trade-level guards are skipped entirely.
     """
 
-    def __init__(self, guards: list[Guard] | None = None):
-        self.guards = guards or []
+    name: str           # "account", "strategy", "trade"
+    guards: list[Guard] = field(default_factory=list)
+    alert_level: str = "info"  # "critical", "warning", "info"
+
+
+class GuardPipeline:
+    """Chains multiple guards (optionally grouped into layers) and runs them sequentially.
+
+    Any single rejection aborts the order.
+    Supports both flat guard lists (backward-compatible) and layered architecture.
+    """
+
+    def __init__(
+        self,
+        guards: list[Guard] | None = None,
+        layers: list[GuardLayer] | None = None,
+    ):
+        self._layers = layers or []
+        self._flat_guards = guards or []
+
+    @property
+    def guards(self) -> list[Guard]:
+        """Flat list of all guards (backward-compatible for state persistence)."""
+        if self._layers:
+            return [g for layer in self._layers for g in layer.guards]
+        return self._flat_guards
+
+    @guards.setter
+    def guards(self, value: list[Guard]) -> None:
+        self._flat_guards = value
+        self._layers = []
 
     def add(self, guard: Guard) -> None:
-        self.guards.append(guard)
+        self._flat_guards.append(guard)
 
     def run(self, ctx: GuardContext) -> Optional[str]:
-        """Run all guards. Returns None if all pass, or the first rejection reason."""
-        for guard in self.guards:
+        """Run all guards. Returns None if all pass, or the first rejection reason.
+
+        When using layers, rejection at a higher layer skips all lower layers.
+        The rejection message includes the layer name for alert routing.
+        """
+        if self._layers:
+            return self._run_layered(ctx)
+        return self._run_flat(ctx)
+
+    def _run_flat(self, ctx: GuardContext) -> Optional[str]:
+        for guard in self._flat_guards:
             reason = guard.check(ctx)
             if reason is not None:
                 logger.warning("Guard %s rejected: %s", guard.__class__.__name__, reason)
                 return f"[{guard.__class__.__name__}] {reason}"
         return None
+
+    def _run_layered(self, ctx: GuardContext) -> Optional[str]:
+        for layer in self._layers:
+            for guard in layer.guards:
+                reason = guard.check(ctx)
+                if reason is not None:
+                    logger.warning(
+                        "Guard %s (layer=%s, alert=%s) rejected: %s",
+                        guard.__class__.__name__, layer.name, layer.alert_level, reason,
+                    )
+                    return f"[L:{layer.name}] [{guard.__class__.__name__}] {reason}"
+        return None
+
+    @property
+    def layers(self) -> list[GuardLayer]:
+        return self._layers

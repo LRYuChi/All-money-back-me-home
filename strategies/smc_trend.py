@@ -59,6 +59,47 @@ except ImportError:
 logger = logging.getLogger(__name__)
 
 
+# === ATR stop-loss multiplier: continuous interpolation ===
+# Replaces discrete if/elif bands with smooth transition between calibration points.
+# Calibrated to match original midpoint values at each ATR% range.
+_ATR_MULT_XP = [0.001, 0.003, 0.006, 0.0115, 0.020]  # ATR as fraction of price
+_ATR_MULT_FP = [2.0,   1.3,   1.0,   0.85,   0.7]     # multiplier (high→low as vol rises)
+
+
+def _atr_multiplier(atr_pct: float) -> float:
+    """Continuous ATR stop-loss multiplier via linear interpolation.
+
+    Maps ATR% (as decimal, e.g. 0.005 = 0.5%) to multiplier range [0.7, 2.0].
+    Widens stops in consolidation, tightens in high volatility.
+    """
+    return float(np.interp(atr_pct, _ATR_MULT_XP, _ATR_MULT_FP))
+
+
+# === Funding rate continuous scoring ===
+def _funding_rate_score(fr: pd.Series) -> pd.Series:
+    """Continuous funding rate scoring [-0.6, +0.3].
+
+    Positive FR penalises longs (crowd overleveraged long).
+    Negative FR penalises shorts (crowd overleveraged short).
+    Near-zero FR gives a slight bonus (healthy equilibrium).
+    Scale: 0.0005 (current hard threshold) maps to -0.3.
+    """
+    return np.clip(-fr * 600, -0.6, 0.3)
+
+
+# === Regime-aware partial take-profit schedules ===
+# Each entry: (r_multiple_threshold, fraction_to_sell)
+# CRITICAL: last R threshold in each schedule MUST be strictly < Phase 2 minimum
+# Phase 2 = max(0.8, tp_r * 0.55), so at lowest conf Phase 2 = 0.80R
+_PARTIAL_SCHEDULES: dict[str, list[tuple[float, float]]] = {
+    "AGGRESSIVE": [(0.5, 0.15), (0.9, 0.25)],   # 60% rides, 0.9 < ph2 1.01
+    "NORMAL":     [(0.4, 0.20), (0.8, 0.25)],    # 55% rides, 0.8 < ph2 0.92
+    "CAUTIOUS":   [(0.3, 0.25), (0.6, 0.25)],    # 50% rides, 0.6 < ph2 0.84
+    "DEFENSIVE":  [(0.3, 0.30), (0.5, 0.30)],    # 40% rides, 0.5 < ph2 0.80
+    "HIBERNATE":  [(0.2, 0.35), (0.4, 0.35)],    # 30% rides, 0.4 < ph2 0.80
+}
+
+
 # === Trade Journal (JSONL append-only log for full traceability) ===
 import json as _json
 import os as _os
@@ -150,6 +191,8 @@ class SMCTrend(IStrategy):
                                 optimize=True)
     htf_swing_length = IntParameter(10, 30, default=14, space="buy",
                                     optimize=True)
+    mtf_swing_length = IntParameter(8, 20, default=12, space="buy",
+                                    optimize=True)
     use_killzone = IntParameter(0, 1, default=1, space="buy",
                                 optimize=True)
     ob_strength_min = DecimalParameter(0.1, 0.8, default=0.3, space="buy",
@@ -159,8 +202,6 @@ class SMCTrend(IStrategy):
     atr_period = IntParameter(10, 20, default=14, space="buy", optimize=True)
     # Wider stop for 15m: reduce whipsaw; let profits run further
     atr_sl_mult = DecimalParameter(1.0, 3.0, default=2.2, space="buy",
-                                   optimize=True)
-    atr_tp_mult = DecimalParameter(2.0, 5.0, default=3.5, space="sell",
                                    optimize=True)
 
     # Adam Theory projection
@@ -277,7 +318,8 @@ class SMCTrend(IStrategy):
                         if f.get("signal") and f["signal"] not in ("neutral", "stable", "no data")
                     ),
                 )
-                self._crypto_env_cache[sym] = {"score": cr["score"], "regime": cr["regime"]}
+                oi_score = cr.get("factors", {}).get("open_interest", {}).get("score", 0.5)
+                self._crypto_env_cache[sym] = {"score": cr["score"], "regime": cr["regime"], "oi_score": oi_score}
                 if _STATE_AVAILABLE:
                     BotStateStore.update_crypto_env(sym, cr["score"], cr["regime"])
             self._crypto_env_ts = time.time()
@@ -331,9 +373,9 @@ class SMCTrend(IStrategy):
         self._signal_audit[pair] = audit_keys
 
     def informative_pairs(self):
-        """Pull 4H data for HTF trend bias."""
+        """Pull 4H (HTF trend) and 1H (MTF structure) data."""
         pairs = self.dp.current_whitelist()
-        return [(pair, "4h") for pair in pairs]
+        return [(pair, "4h") for pair in pairs] + [(pair, "1h") for pair in pairs]
 
     def populate_indicators(self, dataframe: DataFrame, metadata: dict) -> DataFrame:
         """Calculate all SMC indicators."""
@@ -500,6 +542,98 @@ class SMCTrend(IStrategy):
             dataframe["htf_zone_aligned"] = True  # Default: don't filter
 
         # =============================================
+        # 1H (MTF) structure: OB/FVG zones for entry gating
+        # =============================================
+        mtf_df = self.dp.get_pair_dataframe(pair=pair, timeframe="1h")
+        if len(mtf_df) > 0:
+            mtf_sl = self.mtf_swing_length.value
+            mtf_swing = smc.swing_highs_lows(mtf_df, swing_length=mtf_sl)
+            mtf_bos_data = smc.bos_choch(mtf_df, mtf_swing, close_break=True)
+
+            mtf_df["mtf_bos"] = mtf_bos_data["BOS"]
+            mtf_df["mtf_choch"] = mtf_bos_data["CHOCH"]
+
+            # 1H Order Blocks
+            mtf_ob = smc.ob(mtf_df, mtf_swing, close_mitigation=True)
+            mtf_df["mtf_ob"] = mtf_ob["OB"]
+            mtf_df["mtf_ob_top"] = mtf_ob["Top"]
+            mtf_df["mtf_ob_bottom"] = mtf_ob["Bottom"]
+
+            # 1H FVG
+            mtf_fvg = smc.fvg(mtf_df)
+            mtf_df["mtf_fvg"] = mtf_fvg["FVG"]
+            mtf_df["mtf_fvg_top"] = mtf_fvg["Top"]
+            mtf_df["mtf_fvg_bottom"] = mtf_fvg["Bottom"]
+
+            # 1H ATR for stop/target calculations
+            mtf_df["mtf_atr"] = ta.ATR(mtf_df, timeperiod=14)
+            mtf_df["mtf_atr_pct"] = mtf_df["mtf_atr"] / mtf_df["close"]
+
+            # Forward-fill zone boundaries and signals
+            for col in ["mtf_ob_top", "mtf_ob_bottom", "mtf_ob",
+                        "mtf_fvg_top", "mtf_fvg_bottom",
+                        "mtf_bos", "mtf_choch", "mtf_atr", "mtf_atr_pct"]:
+                mtf_df[col] = mtf_df[col].ffill()
+
+            # Merge into 15m dataframe
+            mtf_merge_cols = [
+                "date", "mtf_bos", "mtf_choch",
+                "mtf_ob_top", "mtf_ob_bottom", "mtf_ob",
+                "mtf_fvg_top", "mtf_fvg_bottom",
+                "mtf_atr", "mtf_atr_pct",
+            ]
+            mtf_merge = mtf_df[mtf_merge_cols].copy()
+            mtf_merge["date"] = pd.to_datetime(mtf_merge["date"])
+
+            dataframe = pd.merge_asof(
+                dataframe.sort_values("date"),
+                mtf_merge.sort_values("date"),
+                on="date",
+                direction="backward",
+            )
+
+            # 1H trend from BOS
+            dataframe["mtf_trend"] = _compute_trend(dataframe, "mtf_bos", "mtf_choch")
+
+            # 1H zone detection: is 15m close within 1H OB or FVG boundaries?
+            # Direction is determined by 4H htf_trend, not OB direction code (ffill makes codes unreliable).
+            # We just check if price is in the zone; 4H trend gates long vs short.
+            in_mtf_ob = (
+                dataframe["mtf_ob_top"].notna()
+                & (dataframe["close"] >= dataframe["mtf_ob_bottom"])
+                & (dataframe["close"] <= dataframe["mtf_ob_top"])
+            ).fillna(False)
+            # Both bull and bear share the same zone flag (4H trend decides direction)
+            dataframe["in_mtf_ob_bull"] = in_mtf_ob
+            dataframe["in_mtf_ob_bear"] = in_mtf_ob
+
+            in_mtf_fvg = (
+                dataframe["mtf_fvg_top"].notna()
+                & (dataframe["close"] >= dataframe["mtf_fvg_bottom"])
+                & (dataframe["close"] <= dataframe["mtf_fvg_top"])
+            ).fillna(False)
+            dataframe["in_mtf_fvg_bull"] = in_mtf_fvg
+            dataframe["in_mtf_fvg_bear"] = in_mtf_fvg
+
+            dataframe["in_mtf_zone_bull"] = dataframe["in_mtf_ob_bull"] | dataframe["in_mtf_fvg_bull"]
+            dataframe["in_mtf_zone_bear"] = dataframe["in_mtf_ob_bear"] | dataframe["in_mtf_fvg_bear"]
+            dataframe["mtf_confluence_bull"] = dataframe["in_mtf_ob_bull"] & dataframe["in_mtf_fvg_bull"]
+            dataframe["mtf_confluence_bear"] = dataframe["in_mtf_ob_bear"] & dataframe["in_mtf_fvg_bear"]
+
+            logger.info("MTF %s: 1h=%d candles, trend=%d, ob_bull=%.1f%%, fvg_bull=%.1f%%",
+                        pair, len(mtf_df), dataframe["mtf_trend"].iloc[-1] if len(dataframe) > 0 else 0,
+                        dataframe["in_mtf_ob_bull"].mean() * 100,
+                        dataframe["in_mtf_fvg_bull"].mean() * 100)
+        else:
+            dataframe["mtf_trend"] = 0
+            dataframe["mtf_choch"] = np.nan
+            dataframe["mtf_atr_pct"] = 0.012
+            for col in ["in_mtf_ob_bull", "in_mtf_ob_bear", "in_mtf_fvg_bull",
+                        "in_mtf_fvg_bear", "in_mtf_zone_bull", "in_mtf_zone_bear",
+                        "mtf_confluence_bull", "mtf_confluence_bear"]:
+                dataframe[col] = False
+
+        # =============================================
         # Premium / Discount zones
         # =============================================
         dataframe = _add_premium_discount(dataframe)
@@ -510,11 +644,24 @@ class SMCTrend(IStrategy):
         dataframe["atr"] = ta.ATR(dataframe, timeperiod=self.atr_period.value)
         dataframe["atr_pct"] = dataframe["atr"] / dataframe["close"] * 100
 
-        # ATR-based stop and target levels (stored for custom_stoploss)
+        # ATR-based stop level (stored for custom_stoploss)
         sl_mult = self.atr_sl_mult.value
-        tp_mult = self.atr_tp_mult.value
         dataframe["atr_sl_dist"] = dataframe["atr"] * sl_mult  # Distance in price
-        dataframe["atr_tp_dist"] = dataframe["atr"] * tp_mult
+
+        # =============================================
+        # Mean Reversion indicators (RSI, BB, MFI, Volume MA)
+        # =============================================
+        dataframe["rsi_14"] = ta.RSI(dataframe, timeperiod=14)
+        bollinger = ta.BBANDS(dataframe, timeperiod=20, nbdevup=2.0, nbdevdn=2.0)
+        dataframe["bb_lowerband"] = bollinger["lowerband"]
+        dataframe["bb_upperband"] = bollinger["upperband"]
+        dataframe["bb_middleband"] = bollinger["middleband"]
+        dataframe["bb_width"] = (
+            (dataframe["bb_upperband"] - dataframe["bb_lowerband"])
+            / dataframe["bb_middleband"].replace(0, np.nan)
+        ).fillna(0)
+        dataframe["volume_ma_20"] = ta.SMA(dataframe["volume"], timeperiod=20)
+        dataframe["mfi"] = ta.MFI(dataframe, timeperiod=14)
 
         # =============================================
         # Adam Theory double reflection projection
@@ -555,13 +702,15 @@ class SMCTrend(IStrategy):
         # =============================================
         if "funding_rate" in dataframe.columns:
             fr = dataframe["funding_rate"].fillna(0)
-            # Extreme positive funding → avoid longs (crowd overleveraged long)
-            # Extreme negative funding → avoid shorts
+            # Hard gates: block entries at extreme funding (unchanged)
             dataframe["fr_ok_long"] = fr < 0.0005   # < 0.05%/8h
             dataframe["fr_ok_short"] = fr > -0.0005  # > -0.05%/8h
+            # Continuous scoring for confidence modulation
+            dataframe["fr_score"] = _funding_rate_score(fr)
         else:
             dataframe["fr_ok_long"] = True
             dataframe["fr_ok_short"] = True
+            dataframe["fr_score"] = 0.0
 
         # =============================================
         # NEW: ATR volatility regime
@@ -642,83 +791,121 @@ class SMCTrend(IStrategy):
             & (dataframe["adam_slope"] < -0.005)
         ) | (self.use_adam_filter.value == 0)
 
-        # Confidence gates: Grade A (strong confluence) has lower threshold
-        # Grade A: confidence > 0.1 — strong SMC structure, trade even in DEFENSIVE
-        # Grade B: confidence > 0.35 — weaker structure needs more macro confirmation
-        confidence_ok_a = dataframe["confidence"] > 0.1
-        confidence_ok_b = dataframe["confidence"] > 0.35
+        # =====================================================
+        # 1H-GATED ENTRIES: 4H direction → 1H structure → 15m confirmation
+        # =====================================================
 
-        # ===== LONG ENTRY =====
-        # Grade A: OB+FVG confluence (strongest structure signal)
-        # Grade B: OB or FVG alone (requires higher confidence)
-        zone_long_a = dataframe["ob_fvg_confluence_bull"].fillna(False)
-        zone_long_b = (
-            (dataframe["in_bullish_ob"] | dataframe["in_bullish_fvg"])
-        )
-
-        # 4H zone alignment: Grade A always, Grade B requires 4H zone
-        htf_zone = dataframe.get("htf_zone_aligned", True)
-
-        # VWAP direction filter: long above VWAP, short below (reduces ~30% false signals)
-        vwap_long = dataframe["above_vwap"].fillna(True)
-        vwap_short = (~dataframe["above_vwap"]).fillna(True)
-
-        # EQL sweep bonus: recent liquidity sweep below equal lows = smart money accumulation
+        # 15m confirmation signals (trigger within 1H zones)
+        ltf_bos_bull = dataframe["bos"].fillna(0) > 0 if "bos" in dataframe.columns else False
+        ltf_bos_bear = dataframe["bos"].fillna(0) < 0 if "bos" in dataframe.columns else False
         eql_swept_recently = dataframe["eql_swept"].rolling(8, min_periods=1).max().fillna(0).astype(bool)
-        # EQH sweep bonus for shorts
         eqh_swept_recently = dataframe["eqh_swept"].rolling(8, min_periods=1).max().fillna(0).astype(bool)
-
-        # OTE bonus: in OTE zone → Grade B gets lower confidence requirement
         ote_bonus_long = dataframe["in_ote_long"].fillna(False)
         ote_bonus_short = dataframe["in_ote_short"].fillna(False)
 
-        # Strong structure: Grade A or Grade B with OTE/sweep — can bypass VWAP
-        strong_long = zone_long_a | (zone_long_b & (ote_bonus_long | eql_swept_recently))
-
-        dataframe.loc[
-            (
-                (dataframe["htf_trend"] > 0)                    # 4H bullish
-                & (
-                    (zone_long_a & confidence_ok_a)               # Grade A: conf > 0.1
-                    | (zone_long_b & confidence_ok_b)             # Grade B: conf > 0.35
-                    | (zone_long_b & (ote_bonus_long | eql_swept_recently) & confidence_ok_a)  # Grade B + OTE/sweep: conf > 0.1
-                )
-                & adam_long_filter                                # Adam projection up
-                & (vwap_long | strong_long)                      # VWAP or strong SMC structure
-                & (dataframe["fr_ok_long"])              # Funding rate OK
-                & (dataframe["vol_regime_ok"])           # Volatility normal
-                & killzone_filter
-                & (dataframe["volume"] > 0)
-            ),
-            "enter_long",
-        ] = 1
-
-        # ===== SHORT ENTRY =====
-        zone_short_a = dataframe["ob_fvg_confluence_bear"].fillna(False)
-        zone_short_b = (
-            (dataframe["in_bearish_ob"] | dataframe["in_bearish_fvg"])
+        # Common filters
+        common_long = (
+            (dataframe["htf_trend"] > 0)          # 4H bullish
+            & adam_long_filter
+            & (dataframe["fr_ok_long"])
+            & (dataframe["vol_regime_ok"])
+            & killzone_filter
+            & (dataframe["volume"] > 0)
+        )
+        common_short = (
+            (dataframe["htf_trend"] < 0)          # 4H bearish
+            & adam_short_filter
+            & (dataframe["fr_ok_short"])
+            & (dataframe["vol_regime_ok"])
+            & killzone_filter
+            & (dataframe["volume"] > 0)
         )
 
-        # Strong structure for shorts
-        strong_short = zone_short_a | (zone_short_b & (ote_bonus_short | eqh_swept_recently))
+        # 15m confirmation = BOS or liquidity sweep
+        ltf_confirm_long = ltf_bos_bull | eql_swept_recently
+        ltf_confirm_short = ltf_bos_bear | eqh_swept_recently
 
-        dataframe.loc[
-            (
-                (dataframe["htf_trend"] < 0)                    # 4H bearish
-                & (
-                    (zone_short_a & confidence_ok_a)              # Grade A: conf > 0.1
-                    | (zone_short_b & confidence_ok_b)            # Grade B: conf > 0.35
-                    | (zone_short_b & (ote_bonus_short | eqh_swept_recently) & confidence_ok_a) # Grade B + OTE/sweep: conf > 0.1
-                )
-                & adam_short_filter                               # Adam projection down
-                & (vwap_short | strong_short)                    # VWAP or strong SMC structure
-                & (dataframe["fr_ok_short"])             # Funding rate OK
-                & (dataframe["vol_regime_ok"])           # Volatility normal
-                & killzone_filter
-                & (dataframe["volume"] > 0)
-            ),
-            "enter_short",
-        ] = 1
+        # ===== LONG ENTRY =====
+        # Grade A: 1H OB+FVG confluence + 4H bull + 15m confirm
+        mask_a_long = (
+            common_long
+            & dataframe["mtf_confluence_bull"]
+            & ltf_confirm_long
+            & (dataframe["confidence"] > 0.15)
+        )
+        dataframe.loc[mask_a_long, "enter_long"] = 1
+        dataframe.loc[mask_a_long, "enter_tag"] = "1h_grade_a_long"
+
+        # Grade B+: 1H zone (OB or FVG) + 15m confirm + bonus (OTE/sweep)
+        mask_b_long = (
+            common_long
+            & dataframe["in_mtf_zone_bull"]
+            & ~mask_a_long
+            & ltf_confirm_long
+            & (ote_bonus_long | eql_swept_recently)
+            & (dataframe["confidence"] > 0.35)
+        )
+        dataframe.loc[mask_b_long, "enter_long"] = 1
+        dataframe.loc[mask_b_long, "enter_tag"] = "1h_grade_b_long"
+
+        # ===== SHORT ENTRY =====
+        mask_a_short = (
+            common_short
+            & dataframe["mtf_confluence_bear"]
+            & ltf_confirm_short
+            & (dataframe["confidence"] > 0.15)
+        )
+        dataframe.loc[mask_a_short, "enter_short"] = 1
+        dataframe.loc[mask_a_short, "enter_tag"] = "1h_grade_a_short"
+
+        mask_b_short = (
+            common_short
+            & dataframe["in_mtf_zone_bear"]
+            & ~mask_a_short
+            & ltf_confirm_short
+            & (ote_bonus_short | eqh_swept_recently)
+            & (dataframe["confidence"] > 0.35)
+        )
+        dataframe.loc[mask_b_short, "enter_short"] = 1
+        dataframe.loc[mask_b_short, "enter_tag"] = "1h_grade_b_short"
+
+        # ===== MEAN REVERSION ENTRIES (均值回歸引擎) =====
+        # SMC zones as area filter + RSI/BB/MFI for timing
+        mr_signal_long = (
+            (dataframe["rsi_14"] < 30).astype(int)
+            + (dataframe["close"] < dataframe["bb_lowerband"]).astype(int)
+            + (dataframe["mfi"] < 25).astype(int)
+        )
+        mr_long = (
+            (dataframe["htf_trend"] >= 0)                                 # 4H not strongly bearish
+            & dataframe["in_mtf_zone_bull"]                                # In 1H OB/FVG zone
+            & (mr_signal_long >= 2)                                        # 2 of 3 MR signals
+            & (dataframe["volume"] > dataframe["volume_ma_20"] * 1.2)      # Volume confirmation
+            & (dataframe["bb_width"] > 0.02)                               # BB not too narrow
+            & (dataframe["confidence"] > 0.15)
+            & (dataframe["volume"] > 0)
+        )
+        mask_mr_long = mr_long & ~(mask_a_long | mask_b_long)  # Don't override SMC entries
+        dataframe.loc[mask_mr_long, "enter_long"] = 1
+        dataframe.loc[mask_mr_long, "enter_tag"] = "mean_rev_long"
+
+        mr_signal_short = (
+            (dataframe["rsi_14"] > 70).astype(int)
+            + (dataframe["close"] > dataframe["bb_upperband"]).astype(int)
+            + (dataframe["mfi"] > 75).astype(int)
+        )
+        mr_short = (
+            (dataframe["htf_trend"] <= 0)                                  # 4H not strongly bullish
+            & dataframe["in_mtf_zone_bear"]                                # In 1H OB/FVG zone
+            & (mr_signal_short >= 2)                                       # 2 of 3 MR signals
+            & (dataframe["volume"] > dataframe["volume_ma_20"] * 1.2)
+            & (dataframe["bb_width"] > 0.02)
+            & (dataframe["confidence"] > 0.15)
+            & (dataframe["volume"] > 0)
+        )
+        mask_mr_short = mr_short & ~(mask_a_short | mask_b_short)
+        dataframe.loc[mask_mr_short, "enter_short"] = 1
+        dataframe.loc[mask_mr_short, "enter_tag"] = "mean_rev_short"
 
         # ===== REVERSE CONFIDENCE SHORT (低信心反轉做空) =====
         # When confidence < 0.2 (HIBERNATE), treat as shorting opportunity
@@ -739,7 +926,7 @@ class SMCTrend(IStrategy):
                 & (dataframe["in_ote_short"])                         # Premium zone
                 & (
                     zone_rev_short_a                                  # Grade A
-                    | (zone_rev_short_b & (htf_zone | eqh_swept_recently))  # Grade B: 4H zone OR EQH sweep
+                    | (zone_rev_short_b & (dataframe.get("htf_zone_aligned", True) | eqh_swept_recently))  # Grade B: 4H zone OR EQH sweep
                 )
                 & adam_short_filter                                   # Adam projection down
                 & (dataframe["fr_ok_short"])                          # Funding rate OK
@@ -863,29 +1050,80 @@ class SMCTrend(IStrategy):
             return None
 
         last = dataframe.iloc[-1]
-        atr = last.get("atr", 0)
-        if atr > 0:
-            atr_sl_pct = (atr * self.atr_sl_mult.value) / trade.open_rate
-            if atr_sl_pct > 0:
-                # Normalize by leverage: current_profit is account-level (includes leverage)
-                position_profit = current_profit / max(trade.leverage, 1.0)
-                r_multiple = position_profit / atr_sl_pct
-                # Full take-profit at 2.5R — optimal expectancy for 15m SMC
-                if r_multiple >= 2.5:
-                    return "take_profit_2.5R"
+        trade_duration_bars = (current_time - trade.open_date_utc).total_seconds() / 900  # 15m bars
 
-        # CHoCH exit: 4H structure break after hold time (use HTF, not 15m noise)
+        # === Mean Reversion exit: fast in, fast out ===
+        if trade.enter_tag and "mean_rev" in trade.enter_tag:
+            if current_profit > 0.015:
+                return "mr_tp_1.5pct"
+            if current_profit > 0.010 and trade_duration_bars > 8:
+                return "mr_tp_1.0pct"
+            if trade_duration_bars > 15 and current_profit > 0.003:
+                return "mr_time_tp"
+            if trade_duration_bars > 25:
+                return "mr_time_exit"
+            return None
+
+        # R-multiple based on 1H ATR (same as custom_stoploss)
+        mtf_atr_pct = float(last.get("mtf_atr_pct", 0.012))
+        atr_sl_pct = max(mtf_atr_pct * 1.0, 0.005)
+        position_profit = current_profit / max(trade.leverage, 1.0)
+        r_multiple = position_profit / atr_sl_pct if atr_sl_pct > 0 else 0
+
+        # Dynamic TP target: confidence-driven [1.2R, 2.0R]
+        tp_r = last.get("tp_r_target", 1.5)
+
+        # Phase 2 threshold (for time decay reference)
+        phase2_r = max(0.8, tp_r * 0.55)
+
+        # Take-profit at dynamic R target
+        if r_multiple >= tp_r:
+            return f"take_profit_{tp_r:.1f}R"
+
+        # 1H CHoCH exit: more sensitive than 4H, catches trend reversals earlier
+        mtf_choch = last.get("mtf_choch", 0)
+        if trade_duration_bars > 8:
+            if not trade.is_short and mtf_choch == -1:
+                return "1h_choch_bearish_exit"
+            if trade.is_short and mtf_choch == 1:
+                return "1h_choch_bullish_exit"
+
+        # 4H CHoCH exit: stronger signal, always respect
         if trade.is_short and last.get("htf_choch") == 1:
             return "choch_bullish_reversal"
         elif not trade.is_short and last.get("htf_choch") == -1:
             return "choch_bearish_reversal"
 
+        # Time decay exits: momentum has faded
+        if trade_duration_bars > 40 and 0 < r_multiple < 0.5:
+            return "time_decay_exit"
+        if trade_duration_bars > 80 and r_multiple < phase2_r:
+            return "time_decay_cut"
+
         return None
+
+    # Pair quality tiers: Tier 1 = always, Tier 2 = CAUTIOUS+, Tier 3 = disabled during optimization
+    _PAIR_TIERS = {
+        "BTC/USDT:USDT": 1, "ETH/USDT:USDT": 1,
+        "SOL/USDT:USDT": 2, "BNB/USDT:USDT": 2,
+        "XRP/USDT:USDT": 3, "DOGE/USDT:USDT": 3,
+    }
 
     def confirm_trade_entry(self, pair: str, order_type: str, amount: float,
                             rate: float, time_in_force: str, current_time: datetime,
                             entry_tag: str | None, side: str, **kwargs) -> bool:
-        """進場確認 — 極端行情熔斷 + Guard Pipeline + Telegram."""
+        """進場確認 — 幣種分級 + 極端行情熔斷 + Guard Pipeline + Telegram."""
+        # === Pair tier filter ===
+        tier = self._PAIR_TIERS.get(pair, 3)
+        if tier == 3:
+            return False  # Disabled during optimization phase
+        if tier == 2:
+            dataframe, _ = self.dp.get_analyzed_dataframe(pair, self.timeframe)
+            if len(dataframe) > 0:
+                conf = dataframe.iloc[-1].get("confidence", 0.5)
+                if conf < 0.4:  # DEFENSIVE or HIBERNATE
+                    logger.info("Pair tier filter: %s tier=%d conf=%.2f — blocked", pair, tier, conf)
+                    return False
         # === Rejection dedup: don't retry same pair on same candle ===
         if not hasattr(self, "_last_reject"):
             self._last_reject = {}
@@ -981,6 +1219,22 @@ class SMCTrend(IStrategy):
                 if _TG_AVAILABLE:
                     from market_monitor.telegram_zh import send_message
                     send_message(f"🔗 *Crypto Env 攔截*\n{pair} {side}\n{base_sym} 環境: {env_score:.2f} (不利)")
+                return False
+
+        # === OI Momentum Filter (live/dry_run only) ===
+        # Block entries when OI trend contradicts trade direction
+        if self._crypto_env_cache and self.config.get("runmode", {}).value in ("live", "dry_run"):
+            base_sym = pair.split("/")[0] if "/" in pair else pair[:3]
+            oi_score = self._crypto_env_cache.get(base_sym, {}).get("oi_score", 0.5)
+            if side == "long" and oi_score < 0.3:
+                logger.warning("OI FILTER: %s oi=%.2f — weak conviction for long (unwinding)", base_sym, oi_score)
+                if _STATE_AVAILABLE:
+                    BotStateStore.increment("signals_filtered_today")
+                return False
+            if side == "short" and oi_score > 0.7:
+                logger.warning("OI FILTER: %s oi=%.2f — risky to short into rising OI", base_sym, oi_score)
+                if _STATE_AVAILABLE:
+                    BotStateStore.increment("signals_filtered_today")
                 return False
 
         # === Guard Pipeline check (live/dry_run only) ===
@@ -1401,72 +1655,52 @@ class SMCTrend(IStrategy):
         if len(dataframe) == 0:
             return None  # Keep default stoploss
 
+        # Mean reversion: tight fixed stop (must be < TP target of 1.0-1.5%)
+        if trade.enter_tag and "mean_rev" in trade.enter_tag:
+            return -0.008  # Fixed 0.8% stop loss (R:R ≈ 1.5:1 with 1.2% avg TP)
+
         last = dataframe.iloc[-1]
-        atr = last.get("atr", 0)
-        if atr <= 0:
-            return None
 
-        base_sl_mult = self.atr_sl_mult.value  # Default 1.315 (hyperopt)
+        # Use 1H ATR as the risk basis (wider than 15m → more room for winners)
+        mtf_atr_pct = last.get("mtf_atr_pct", 0.012)
+        atr_sl_pct = max(float(mtf_atr_pct) * 1.0, 0.005)  # 1H ATR, floor 0.5%
 
-        # Dynamic ATR multiplier: widen stops in consolidation, tighten in high vol
-        atr_pct = atr / trade.open_rate
-        if atr_pct < 0.002:
-            # Very tight consolidation → widen to 2x base (avoid noise sweeps)
-            sl_mult = base_sl_mult * 2.0
-        elif atr_pct < 0.004:
-            # Normal-low vol → slight widen 1.3x
-            sl_mult = base_sl_mult * 1.3
-        elif atr_pct > 0.015:
-            # Extreme volatility → tighten to 0.7x (protect capital)
-            sl_mult = base_sl_mult * 0.7
-        elif atr_pct > 0.008:
-            # High vol → slight tighten 0.85x
-            sl_mult = base_sl_mult * 0.85
-        else:
-            # Normal range (0.4%-0.8%) → use base
-            sl_mult = base_sl_mult
-
-        # ATR-based risk distance (floor: 0.3% prevents noise-triggered stops in consolidation)
-        atr_sl_dist = atr * sl_mult
-        atr_sl_pct = max(atr_sl_dist / trade.open_rate, 0.003)  # Min 0.3% stop distance
-
-        # Calculate profit in R-multiples (1R = initial risk)
-        # Normalize by leverage: current_profit is account-level (includes leverage effect)
+        # Calculate profit in R-multiples (1R = 1H ATR)
         position_profit = current_profit / max(trade.leverage, 1.0)
-        if atr_sl_pct > 0:
-            r_multiple = position_profit / atr_sl_pct
-        else:
-            r_multiple = 0
+        r_multiple = position_profit / atr_sl_pct if atr_sl_pct > 0 else 0
 
-        if r_multiple >= 2.0:
-            # Phase 3: Trail at 0.7R below — tighter trail to capture more profit
-            trail_dist = atr_sl_pct * 0.7
-            sl = max(-(trail_dist), -0.008)  # Never tighter than 0.8%
-            logger.info("SL %s: Phase3 trail r=%.2f sl=%.4f", pair, r_multiple, sl)
+        # Dynamic TP target for phase thresholds (shared with custom_exit)
+        tp_r = last.get("tp_r_target", 1.5)
+
+        # Phase thresholds — MUST be strictly ordered: Phase2 < Phase3 < tp_r
+        phase2_r = max(0.8, tp_r * 0.55)
+        phase3_r = max(phase2_r + 0.3, tp_r * 0.80)
+
+        if r_multiple >= phase3_r:
+            # Phase 3: Trailing stop — 0.8× 1H ATR below high
+            trail_dist = max(float(mtf_atr_pct) * 0.8, 0.012)  # At least 1.2%
+            sl = min(-(trail_dist), -0.015)  # Floor 1.5%
+            logger.info("SL %s: Phase3 trail r=%.2f sl=%.4f (ph3=%.2f)", pair, r_multiple, sl, phase3_r)
             return sl
 
-        elif r_multiple >= 1.0:
-            # Phase 2: Breakeven — stop at entry price + small buffer
-            # Calculate distance from current rate to entry price
+        elif r_multiple >= phase2_r:
+            # Phase 2: Breakeven — entry price + 0.3× 1H ATR buffer
             if current_rate > 0 and trade.open_rate > 0:
-                # Distance from current to entry (positive when in profit)
                 entry_gap = (current_rate - trade.open_rate) / current_rate
-                # Stop at entry + 0.2% buffer (breakeven with small profit)
-                sl = -(entry_gap - 0.002)
-                sl = min(sl, -0.003)  # At least 0.3% from current
+                breakeven_buffer = max(0.005, float(mtf_atr_pct) * 0.3)
+                sl = -(entry_gap - breakeven_buffer)
+                sl = min(sl, -max(0.005, float(mtf_atr_pct) * 0.2))
             else:
                 sl = -atr_sl_pct
-            logger.info("SL %s: Phase2 BE r=%.2f sl=%.4f pos_p=%.4f", pair, r_multiple, sl, position_profit)
+            logger.info("SL %s: Phase2 BE r=%.2f sl=%.4f pos_p=%.4f (ph2=%.2f)",
+                        pair, r_multiple, sl, position_profit, phase2_r)
             return sl
 
         else:
-            # Phase 1: ATR-based initial stop, anchored to ENTRY price
-            # Critical: use entry price as anchor, not current_rate, to prevent
-            # stoploss_on_exchange from ratcheting up during small price fluctuations
-            entry_distance = (trade.open_rate - (trade.open_rate - atr_sl_dist)) / current_rate
-            sl = min(-entry_distance, -0.008)  # Floor 0.8% from current rate
-            logger.info("SL %s: Phase1 r=%.2f sl=%.4f entry_dist=%.4f atr_sl=%.4f",
-                        pair, r_multiple, sl, entry_distance, atr_sl_pct)
+            # Phase 1: Initial stop = 1H ATR distance from entry
+            sl = min(-atr_sl_pct, -0.008)  # Floor 0.8%
+            logger.info("SL %s: Phase1 r=%.2f sl=%.4f atr_1h=%.4f",
+                        pair, r_multiple, sl, atr_sl_pct)
             return sl
 
     def custom_stake_amount(self, current_time, current_rate: float,
@@ -1569,6 +1803,22 @@ class SMCTrend(IStrategy):
                     logger.info("Stake %.1f → %.1f (pre-limit for %.0f%% guard, lev=%.2fx)",
                                 adjusted, max_stake_guard, eff_pct, est_lev)
                     adjusted = max_stake_guard
+
+                # Pre-limit for TotalExposureGuard (80% max portfolio exposure)
+                existing_exposure = sum(
+                    t.stake_amount * t.leverage
+                    for t in Trade.get_trades_proxy(is_open=True)
+                )
+                remaining_exposure = acct * 0.80 - existing_exposure
+                if remaining_exposure <= 0:
+                    logger.warning("TotalExposure pre-check: no room (existing=%.1f, limit=%.1f)",
+                                   existing_exposure, acct * 0.80)
+                    adjusted = 0
+                elif adjusted * est_lev > remaining_exposure:
+                    capped = remaining_exposure / est_lev if est_lev > 0 else remaining_exposure
+                    logger.info("Stake %.1f → %.1f (pre-limit for 80%% exposure, remaining=%.1f)",
+                                adjusted, capped, remaining_exposure)
+                    adjusted = capped
         except Exception as e:
             logger.error("Pre-limit calculation failed (stake may be oversized): %s", e)
 
@@ -1600,7 +1850,11 @@ class SMCTrend(IStrategy):
         last = dataframe.iloc[-1]
         atr = last.get("atr", 0)
 
-        # === PARTIAL PROFIT-TAKING (before pyramid logic) ===
+        # Mean reversion trades: no partial exits (fast in/out, handled by custom_exit)
+        if trade.enter_tag and "mean_rev" in trade.enter_tag:
+            return None
+
+        # === PARTIAL PROFIT-TAKING (regime-aware schedule) ===
         if atr > 0 and trade.stake_amount > 0:
             atr_sl_pct = (atr * self.atr_sl_mult.value) / trade.open_rate
             if atr_sl_pct > 0:
@@ -1612,25 +1866,20 @@ class SMCTrend(IStrategy):
                 trade_info = trade.get_custom_data("partials") if hasattr(trade, "get_custom_data") else None
                 partials_done = int(trade_info) if trade_info else 0
 
-                # 1.0R → sell 33% (research: 70%+ trades reach 1R, lock early profit)
-                if r_multiple >= 1.0 and partials_done < 1:
-                    if hasattr(trade, "set_custom_data"):
-                        trade.set_custom_data("partials", 1)
-                    partial_amount = trade.stake_amount * 0.33
-                    if min_stake and partial_amount < min_stake:
-                        return None
-                    logger.info("Partial exit 1R for %s: -%.2f USDT (R=%.1f)", pair, partial_amount, r_multiple)
-                    return -partial_amount
+                # Look up regime-aware schedule (fallback to CAUTIOUS = original behaviour)
+                regime = str(last.get("conf_regime", "CAUTIOUS"))
+                schedule = _PARTIAL_SCHEDULES.get(regime, _PARTIAL_SCHEDULES["CAUTIOUS"])
 
-                # 2.0R → sell another 33% (research: optimal expectancy at 2-2.5R)
-                if r_multiple >= 2.0 and partials_done < 2:
-                    if hasattr(trade, "set_custom_data"):
-                        trade.set_custom_data("partials", 2)
-                    partial_amount = trade.stake_amount * 0.33
-                    if min_stake and partial_amount < min_stake:
-                        return None
-                    logger.info("Partial exit 2R for %s: -%.2f USDT (R=%.1f)", pair, partial_amount, r_multiple)
-                    return -partial_amount
+                for idx, (r_thresh, fraction) in enumerate(schedule):
+                    if r_multiple >= r_thresh and partials_done < (idx + 1):
+                        if hasattr(trade, "set_custom_data"):
+                            trade.set_custom_data("partials", idx + 1)
+                        partial_amount = trade.stake_amount * fraction
+                        if min_stake and partial_amount < min_stake:
+                            return None
+                        logger.info("Partial exit %.1fR (%s) for %s: -%.2f USDT (R=%.1f, frac=%.0f%%)",
+                                    r_thresh, regime, pair, partial_amount, r_multiple, fraction * 100)
+                        return -partial_amount
 
         # === PYRAMID ADDS ===
         if current_profit < 0.05:
@@ -2121,12 +2370,13 @@ def _calculate_confidence(df: DataFrame) -> DataFrame:
         )
     )
 
-    # Funding rate overlay (if available)
-    if "funding_rate" in df.columns:
+    # Funding rate overlay: continuous scoring (replaces binary penalty)
+    if "fr_score" in df.columns:
+        fr_adj = df["fr_score"].fillna(0).values
+        health_score = np.clip(health_score + fr_adj, 0, 1)
+    elif "funding_rate" in df.columns:
         fr = df["funding_rate"].fillna(0).values
-        # Extreme funding warns of overleverage
-        fr_penalty = np.where(np.abs(fr) > 0.0003, -0.15, 0.0)  # > 0.03%/8h
-        health_score = np.clip(health_score + fr_penalty, 0, 1)
+        health_score = np.clip(health_score + np.clip(-fr * 600, -0.6, 0.3), 0, 1)
 
     # ==========================================================
     # 6. ACTIVITY REGIME (12%) — MiroFish-inspired participation model
@@ -2140,15 +2390,42 @@ def _calculate_confidence(df: DataFrame) -> DataFrame:
         activity_score = np.full(n, 0.5)
 
     # ==========================================================
-    # COMBINE — weighted sum (6 factors)
+    # 7. MACRO PROXY (15%) — backtest-compatible macro approximation
+    # ==========================================================
+    # Dimension 1: Trend persistence — ratio of bars above EMA200 in last 200 bars
+    above_ema200_ratio = (close_s > ema200).rolling(200, min_periods=50).mean().fillna(0.5).values
+    trend_stability = np.where(above_ema200_ratio > 0.7, 0.8,
+                      np.where(above_ema200_ratio > 0.5, 0.5,
+                      np.where(above_ema200_ratio > 0.3, 0.3, 0.15)))
+
+    # Dimension 2: Volatility regime — ATR vs 100-bar MA of ATR
+    atr_vals = df["atr"].values if "atr" in df.columns else np.full(n, 0.005)
+    atr_ma100 = pd.Series(atr_vals).rolling(100, min_periods=20).mean().bfill().ffill().values
+    atr_regime = np.where(atr_ma100 > 0, atr_vals / atr_ma100, 1.0)
+    vol_macro_score = np.where(atr_regime > 2.0, 0.15,
+                     np.where(atr_regime > 1.5, 0.3,
+                     np.where(atr_regime > 1.0, 0.5,
+                     np.where(atr_regime > 0.7, 0.7, 0.8))))
+
+    # Dimension 3: Multi-TF momentum alignment (close > EMA50)
+    ma_aligned = np.where(close_s > ema50, 0.7, 0.35)
+
+    # Combined macro proxy
+    macro_proxy = trend_stability * 0.40 + vol_macro_score * 0.35 + ma_aligned * 0.25
+
+    # ==========================================================
+    # COMBINE — weighted sum (6 original factors 85% + macro proxy 15%)
     # ==========================================================
     raw_confidence = (
-        0.25 * momentum_score
-        + 0.25 * trend_score
-        + 0.12 * volume_score
-        + 0.13 * volatility_score
-        + 0.13 * health_score
-        + 0.12 * activity_score
+        0.85 * (
+            0.25 * momentum_score
+            + 0.25 * trend_score
+            + 0.12 * volume_score
+            + 0.13 * volatility_score
+            + 0.13 * health_score
+            + 0.12 * activity_score
+        )
+        + 0.15 * macro_proxy
     )
 
     # Liquidity sweep bonus: recent sweep = momentum confirmation
@@ -2166,5 +2443,8 @@ def _calculate_confidence(df: DataFrame) -> DataFrame:
         bins=[0, 0.2, 0.4, 0.6, 0.8, 1.01],
         labels=["HIBERNATE", "DEFENSIVE", "CAUTIOUS", "NORMAL", "AGGRESSIVE"],
     )
+
+    # Dynamic TP target: confidence-driven R-multiple [1.2, 2.0]
+    df["tp_r_target"] = 1.2 + 0.8 * df["confidence"].clip(0, 1)
 
     return df
