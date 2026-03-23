@@ -46,6 +46,7 @@ PERSISTENT_MENU = {
         ["💰 交易", "📊 統計", "📓 日誌"],
         ["🛡 風控", "🌍 宏觀", "🧠 決策"],
         ["🤖 AI回顧", "🔮 AI預測", "⚠️ AI風控"],
+        ["🇹🇼 台股預測", "🏦 台股籌碼", "📉 台股技術"],
         ["📰 投顧報告"],
     ],
     "resize_keyboard": True,
@@ -70,6 +71,9 @@ BUTTON_MAP: dict[str, str] = {
     "🔮 AI預測": "ai_forecast",
     "⚠️ AI風控": "ai_risk",
     "📰 投顧報告": "advisor_report",
+    "🇹🇼 台股預測": "tw_predict",
+    "🏦 台股籌碼": "tw_chips",
+    "📉 台股技術": "tw_tech",
 }
 
 # =============================================
@@ -1141,6 +1145,38 @@ def cmd_advisor_report() -> str:
     )
 
 
+def cmd_tw_predict() -> str:
+    """台股完整大盤預測。"""
+    try:
+        from market_monitor.tw_predictor import predict, format_predict_report
+        result = predict()
+        return format_predict_report(result)
+    except Exception as e:
+        logger.error("TW predict failed: %s", e)
+        return f"台股預測失敗: {e}"
+
+
+def cmd_tw_chips() -> str:
+    """台股籌碼快報。"""
+    try:
+        from market_monitor.tw_predictor import calc_institutional_score, format_chips_report
+        result = calc_institutional_score()
+        return format_chips_report(result)
+    except Exception as e:
+        logger.error("TW chips failed: %s", e)
+        return f"台股籌碼查詢失敗: {e}"
+
+
+def cmd_tw_tech() -> str:
+    """台股技術分析掃描。"""
+    try:
+        from market_monitor.tw_predictor import format_tech_report
+        return format_tech_report()
+    except Exception as e:
+        logger.error("TW tech failed: %s", e)
+        return f"台股技術分析失敗: {e}"
+
+
 COMMANDS = {
     "status": cmd_status, "start": cmd_help, "help": cmd_help,
     "confidence": cmd_confidence, "crypto": cmd_crypto,
@@ -1155,6 +1191,9 @@ COMMANDS = {
     "ai_forecast": cmd_ai_forecast,
     "ai_risk": cmd_ai_risk,
     "advisor_report": cmd_advisor_report,
+    "tw_predict": cmd_tw_predict,
+    "tw_chips": cmd_tw_chips,
+    "tw_tech": cmd_tw_tech,
 }
 
 
