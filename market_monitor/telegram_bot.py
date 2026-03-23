@@ -45,6 +45,7 @@ PERSISTENT_MENU = {
         ["🎯 信心", "🔗 加密環境", "📈 機制"],
         ["💰 交易", "📊 統計", "📓 日誌"],
         ["🛡 風控", "🌍 宏觀", "🧠 決策"],
+        ["🤖 AI回顧", "🔮 AI預測", "⚠️ AI風控"],
     ],
     "resize_keyboard": True,
     "is_persistent": True,
@@ -64,6 +65,9 @@ BUTTON_MAP: dict[str, str] = {
     "🛡 風控": "guards",
     "🌍 宏觀": "macro",
     "🧠 決策": "decisions",
+    "🤖 AI回顧": "ai_review",
+    "🔮 AI預測": "ai_forecast",
+    "⚠️ AI風控": "ai_risk",
 }
 
 # =============================================
@@ -1031,6 +1035,95 @@ def cmd_digest() -> str:
         return f"機構報告摘要生成失敗: {e}"
 
 
+def _ai_call(system_prompt: str, user_content: str, max_tokens: int = 1000) -> str:
+    """Shared Claude AI call with cooldown."""
+    global _last_ai_call
+    if not ANTHROPIC_API_KEY:
+        return "AI 功能未啟用 (缺少 ANTHROPIC_API_KEY)"
+    elapsed = time.time() - _last_ai_call
+    if elapsed < AI_COOLDOWN:
+        return f"AI 冷卻中，請等 {int(AI_COOLDOWN - elapsed)} 秒。"
+    _last_ai_call = time.time()
+    try:
+        import anthropic
+        client = anthropic.Anthropic()
+        response = client.messages.create(
+            model="claude-sonnet-4-6",
+            max_tokens=max_tokens,
+            system=system_prompt,
+            messages=[{"role": "user", "content": user_content}],
+        )
+        text = response.content[0].text if response.content else "無法生成回答"
+        tokens = f"({response.usage.input_tokens}in/{response.usage.output_tokens}out)"
+        return f"🤖 AI 分析\n━━━━━━━━━━━━━━━━\n{text}\n\n{tokens}"
+    except Exception as e:
+        logger.error("AI call failed: %s", e)
+        return f"AI 查詢失敗: {str(e)[:100]}"
+
+
+def cmd_ai_review() -> str:
+    """AI 回顧最近交易，分析贏虧原因。"""
+    trades_data = _ft_api("/api/v1/trades?limit=10") or []
+    if not trades_data:
+        return "無最近交易數據"
+    trades_summary = "\n".join(
+        f"- {t.get('pair','')} {'SHORT' if t.get('is_short') else 'LONG'} "
+        f"PnL:{t.get('profit_pct',0):.2f}% 持倉:{t.get('trade_duration_s',0)//3600:.0f}h "
+        f"出場:{t.get('exit_reason','')}"
+        for t in trades_data[:10]
+    )
+    return _ai_call(
+        "你是加密貨幣合約交易策略分析師。用繁體中文回答。"
+        "分析最近交易的贏虧原因，識別模式，給出具體可執行的改善建議。"
+        "策略是 Supertrend 4 層 MTF（1D→4H→1H→15m），趨勢跟蹤型。",
+        f"最近 10 筆交易:\n{trades_summary}\n\n"
+        "請分析：1. 贏家共同特徵 2. 虧損原因 3. 改善建議（具體可執行）"
+    )
+
+
+def cmd_ai_forecast() -> str:
+    """AI 基於當前市場狀態預測交易機會。"""
+    summary = read_summary()
+    snapshot_path = DATA_DIR / "market_snapshot.json"
+    snapshot = {}
+    if snapshot_path.exists():
+        try:
+            with open(snapshot_path) as f:
+                snapshot = json.load(f)
+        except Exception:
+            pass
+    return _ai_call(
+        "你是加密貨幣合約交易 AI。用繁體中文回答。"
+        "基於 Supertrend 4 層 MTF 策略（1D/4H/1H/15m 方向一致性 + ADX>25 + 成交量確認）。"
+        "預測未來 4-24 小時內各幣種（BTC/ETH/AVAX/NEAR/ATOM/ADA）的交易機會。"
+        "標注方向、信心度、關鍵價位。如果沒有明確機會就說「觀望」。",
+        f"市場數據:\n{summary}\n\n快照:\n{json.dumps(snapshot, default=str)[:2000]}\n\n"
+        "請預測各幣種未來 4-24h 的交易機會。"
+    )
+
+
+def cmd_ai_risk() -> str:
+    """AI 評估當前持倉風險。"""
+    positions = _ft_api("/api/v1/status") or []
+    balance = _ft_api("/api/v1/balance") or {}
+    if not positions:
+        return "目前無持倉，無需風險評估。"
+    pos_summary = "\n".join(
+        f"- {p.get('pair','')} {'SHORT' if p.get('is_short') else 'LONG'} "
+        f"利潤:{p.get('profit_pct',0):.2f}% 槓桿:{p.get('leverage',1):.1f}x "
+        f"倉位:{p.get('stake_amount',0):.0f}$"
+        for p in positions
+    )
+    total_bal = balance.get("total", 0)
+    return _ai_call(
+        "你是加密貨幣合約交易風控專家。用繁體中文回答。"
+        "評估當前持倉的風險水平，考慮：槓桿、方向集中度、市場波動率、相關性。"
+        "給出明確的風險等級（低/中/高/極高）和具體建議（持有/減倉/對沖/平倉）。",
+        f"帳戶餘額: {total_bal:.0f} USDT\n\n當前持倉:\n{pos_summary}\n\n"
+        "請評估風險並給出具體建議。"
+    )
+
+
 COMMANDS = {
     "status": cmd_status, "start": cmd_help, "help": cmd_help,
     "confidence": cmd_confidence, "crypto": cmd_crypto,
@@ -1041,6 +1134,9 @@ COMMANDS = {
     "decisions": cmd_decisions, "macro": cmd_macro,
     "menu": cmd_help, "overview": cmd_overview,
     "digest": cmd_digest,
+    "ai_review": cmd_ai_review,
+    "ai_forecast": cmd_ai_forecast,
+    "ai_risk": cmd_ai_risk,
 }
 
 
@@ -1075,7 +1171,7 @@ def handle_ai_query(question: str) -> str:
         response = client.messages.create(
             model="claude-sonnet-4-6",
             max_tokens=800,
-            system="你是加密貨幣合約交易AI助手。用繁體中文簡潔回答，300字以內。基於數據客觀分析。",
+            system="你是加密貨幣合約交易AI助手。策略是 Supertrend 4 層 MTF（1D→4H→1H→15m 方向一致+ADX>25+成交量確認）。用繁體中文簡潔回答，300字以內。基於數據客觀分析。",
             messages=[{"role": "user", "content": f"{data_warning}市場數據:\n{summary}\n\n問題: {question}"}],
         )
         text = response.content[0].text if response.content else "無法生成回答"
@@ -1120,6 +1216,9 @@ def setup_bot_commands() -> None:
         {"command": "regime", "description": "市場機制 + 建議"},
         {"command": "macro", "description": "宏觀指標"},
         {"command": "guards", "description": "風控狀態"},
+        {"command": "ai_review", "description": "AI 交易回顧"},
+        {"command": "ai_forecast", "description": "AI 市場預測"},
+        {"command": "ai_risk", "description": "AI 風險評估"},
     ]
     try:
         url = f"https://api.telegram.org/bot{BOT_TOKEN}/setMyCommands"

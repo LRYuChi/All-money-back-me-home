@@ -24,13 +24,27 @@ Designed for USDT perpetual futures on OKX via Freqtrade.
 from __future__ import annotations
 
 import logging
+import os
+import sys
 import numpy as np
 import pandas as pd
 import talib.abstract as ta
 from datetime import datetime
+from pathlib import Path
 from freqtrade.persistence import Trade
 from freqtrade.strategy import IStrategy, stoploss_from_open
 from pandas import DataFrame
+
+# Add project root for imports
+_proj_root = str(Path(__file__).resolve().parent.parent)
+if _proj_root not in sys.path:
+    sys.path.insert(0, _proj_root)
+
+try:
+    from market_monitor.telegram_zh import send_message as _tg_send
+    _TG = True
+except ImportError:
+    _TG = False
 
 logger = logging.getLogger(__name__)
 
@@ -358,6 +372,44 @@ class SupertrendStrategy(IStrategy):
             return -(trade.stake_amount * 0.30)
 
         return None
+
+    def confirm_trade_entry(self, pair: str, order_type: str, amount: float,
+                            rate: float, time_in_force: str, current_time: datetime,
+                            entry_tag: str | None, side: str, **kwargs) -> bool:
+        """Send Telegram notification on entry."""
+        if _TG:
+            dataframe, _ = self.dp.get_analyzed_dataframe(pair, self.timeframe)
+            ds = tq = 0.0
+            if len(dataframe) > 0:
+                last = dataframe.iloc[-1]
+                ds = float(last.get("direction_score", 0))
+                tq = float(last.get("trend_quality", 0))
+            emoji = "🟢" if side == "long" else "🔴"
+            _tg_send(
+                f"{emoji} *進場 {side.upper()}*\n"
+                f"幣種: `{pair}`\n"
+                f"價格: `{rate:.2f}`\n"
+                f"方向分數: `{ds:+.2f}` | 品質: `{tq:.2f}`\n"
+                f"策略: Supertrend 4L MTF"
+            )
+        return True
+
+    def confirm_trade_exit(self, pair: str, trade: Trade, order_type: str,
+                           amount: float, rate: float, time_in_force: str,
+                           exit_reason: str, current_time: datetime, **kwargs) -> bool:
+        """Send Telegram notification on exit."""
+        if _TG:
+            pnl_pct = trade.calc_profit_ratio(rate) * 100
+            pnl_usd = trade.calc_profit(rate)
+            dur = (current_time - trade.open_date_utc).total_seconds() / 3600
+            emoji = "💰" if pnl_pct > 0 else "💸"
+            _tg_send(
+                f"{emoji} *出場 {'SHORT' if trade.is_short else 'LONG'}*\n"
+                f"幣種: `{pair}`\n"
+                f"P&L: `{pnl_pct:+.2f}%` (`{pnl_usd:+.2f}$`)\n"
+                f"持倉: `{dur:.1f}h` | 原因: `{exit_reason}`"
+            )
+        return True
 
     def leverage(self, pair: str, current_time: datetime, current_rate: float,
                  proposed_leverage: float, max_leverage: float,
