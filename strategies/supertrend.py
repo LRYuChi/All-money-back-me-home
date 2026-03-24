@@ -268,20 +268,16 @@ class SupertrendStrategy(IStrategy):
         dataframe.loc[mask_confirmed_short, "enter_short"] = 1
         dataframe.loc[mask_confirmed_short, "enter_tag"] = "confirmed"
 
-        # === Phase 1 (scout): 3-layer aligned, 15m NOT yet flipped ===
-        # Only trigger on the first candle where 3 layers align (not every candle)
-        three_bull = dataframe["all_bullish"] & (dataframe["st_trend"] == -1)  # 3 layers bull but 15m still bear
-        three_bear = dataframe["all_bearish"] & (dataframe["st_trend"] == 1)   # 3 layers bear but 15m still bull
+        # === Phase 1 (scout): 3-layer aligned + quality, 15m NOT yet flipped ===
+        # Scout fires whenever conditions are met (Freqtrade handles dedup via open trades)
+        three_bull = dataframe["all_bullish"] & (dataframe["st_trend"] == -1)
+        three_bear = dataframe["all_bearish"] & (dataframe["st_trend"] == 1)
 
-        # Scout trigger: when 3-layer alignment first appears (change detection)
-        three_bull_new = three_bull & ~three_bull.shift(1).fillna(False)
-        three_bear_new = three_bear & ~three_bear.shift(1).fillna(False)
-
-        mask_scout_long = three_bull_new & quality & dataframe["fr_ok_long"] & ~mask_confirmed_long
+        mask_scout_long = three_bull & quality & dataframe["fr_ok_long"] & ~mask_confirmed_long
         dataframe.loc[mask_scout_long, "enter_long"] = 1
         dataframe.loc[mask_scout_long, "enter_tag"] = "scout"
 
-        mask_scout_short = three_bear_new & quality & dataframe["fr_ok_short"] & ~mask_confirmed_short
+        mask_scout_short = three_bear & quality & dataframe["fr_ok_short"] & ~mask_confirmed_short
         dataframe.loc[mask_scout_short, "enter_short"] = 1
         dataframe.loc[mask_scout_short, "enter_tag"] = "scout"
 
