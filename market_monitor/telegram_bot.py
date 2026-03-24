@@ -1384,97 +1384,189 @@ def handle_photo(photo_data: bytes, chat_id: int) -> str:
         return f"圖片處理失敗: {e}"
 
 
-_last_scheduled_report: float = 0
-_REPORT_INTERVAL = 4 * 3600  # 4 hours
+_TW_TZ = timezone(timedelta(hours=8))
+_last_morning_report: str = ""   # "YYYY-MM-DD" of last morning report
+_last_evening_report: str = ""   # "YYYY-MM-DD" of last evening report
 
 
-def generate_ai_market_report() -> str:
-    """Generate comprehensive AI market report from all signals."""
+def generate_morning_report() -> str:
+    """07:00 盤前報告：ML 預測 + 技術分析 + 國際連動 + AI 操作建議。"""
+    now_tw = datetime.now(_TW_TZ)
     sections = []
 
     # 1. ML predictions
     try:
         from market_monitor.ml.predict import predict_direction, format_ml_report
-        tw_result = predict_direction("^TWII", horizons=[5, 20])
-        btc_result = predict_direction("BTC-USD", horizons=[5, 20])
-        sections.append(format_ml_report(tw_result))
-        sections.append(format_ml_report(btc_result))
+        tw_ml = predict_direction("^TWII", horizons=[5, 20])
+        sections.append(format_ml_report(tw_ml))
+        btc_ml = predict_direction("BTC-USD", horizons=[5, 20])
+        sections.append(format_ml_report(btc_ml))
     except Exception as e:
-        sections.append(f"ML 預測: 不可用 ({e})")
+        sections.append(f"ML 預測: {e}")
 
-    # 2. Taiwan market
+    # 2. TW technical + direction
     try:
         from market_monitor.tw_predictor import predict, format_predict_report
         tw_pred = predict()
         sections.append(format_predict_report(tw_pred))
     except Exception as e:
-        sections.append(f"台股預測: 不可用 ({e})")
+        sections.append(f"台股預測: {e}")
 
-    # 3. Crypto strategy status
+    # 3. Crypto status
     try:
-        crypto_status = cmd_overview()
-        sections.append(crypto_status)
+        sections.append(cmd_overview())
     except Exception:
         pass
 
-    combined_data = "\n\n".join(sections)
+    combined = "\n\n".join(sections)
 
-    # 4. AI synthesis
-    if ANTHROPIC_API_KEY:
-        try:
-            import anthropic
-            client = anthropic.Anthropic()
-            response = client.messages.create(
-                model="claude-sonnet-4-6",
-                max_tokens=1200,
-                system=(
-                    "你是專業的多市場交易分析師。根據以下所有市場數據（台股、加密貨幣、ML 預測），"
-                    "給出一份簡潔的綜合市場報告。用繁體中文，500 字以內。"
-                    "必須包含：1. 整體市場環境判斷 2. 台股操作建議 3. 加密貨幣操作建議 "
-                    "4. 需要注意的風險 5. 今日關鍵觀察點。"
-                    "語氣專業但易懂，適合個人投資者閱讀。"
-                ),
-                messages=[{"role": "user", "content": f"以下是所有市場數據和 ML 預測結果：\n\n{combined_data[:3000]}"}],
-            )
-            ai_text = response.content[0].text if response.content else "無法生成"
-            tokens = f"({response.usage.input_tokens}in/{response.usage.output_tokens}out)"
-        except Exception as e:
-            ai_text = f"AI 分析不可用: {e}"
-            tokens = ""
-    else:
-        ai_text = "AI 分析未啟用（缺少 ANTHROPIC_API_KEY）"
-        tokens = ""
-
-    now_tw = datetime.now(timezone(timedelta(hours=8)))
-    report = (
-        f"📡 *4 小時市場報告* | {now_tw.strftime('%Y-%m-%d %H:%M')} (台灣)\n"
-        f"{'━' * 30}\n\n"
-        f"🤖 *AI 綜合觀點*\n{ai_text}\n\n{tokens}"
+    # AI synthesis
+    ai_text = _ai_synthesize(
+        "盤前分析",
+        "這是盤前 07:00 報告。根據隔夜美股、國際市場、ML 預測和技術分析，"
+        "給出今日台股操作建議。必須包含：1. 隔夜國際市場摘要 2. 今日台股方向判斷 "
+        "3. 關鍵支撐壓力位 4. 加密貨幣簡評 5. 風險提醒。500 字以內。",
+        combined,
     )
 
-    return report
+    return (
+        f"🌅 *盤前報告* | {now_tw.strftime('%Y-%m-%d %H:%M')} (台灣)\n"
+        f"{'━' * 30}\n\n"
+        f"🤖 *AI 操作建議*\n{ai_text}\n\n"
+        f"{'━' * 30}\n"
+        f"_詳細數據請按各功能按鈕查看_"
+    )
+
+
+def generate_evening_report() -> str:
+    """18:00 盤後報告：籌碼更新 + ML 重訓 + 收盤回顧 + AI 分析。"""
+    now_tw = datetime.now(_TW_TZ)
+    sections = []
+
+    # 1. Retrain ML model with latest data
+    try:
+        from market_monitor.ml.train import train_model
+        logger.info("盤後 ML 重訓開始...")
+        train_model("^TWII", horizons=[5, 20], test_months=6)
+        sections.append("✅ TAIEX ML 模型已重訓")
+    except Exception as e:
+        sections.append(f"ML 重訓: {e}")
+
+    # 2. ML prediction with fresh model
+    try:
+        from market_monitor.ml.predict import predict_direction, format_ml_report
+        tw_ml = predict_direction("^TWII", horizons=[5, 20])
+        sections.append(format_ml_report(tw_ml))
+    except Exception as e:
+        sections.append(f"ML 預測: {e}")
+
+    # 3. Chips (institutional + derivatives + retail)
+    try:
+        from market_monitor.tw_predictor import calc_institutional_score, format_chips_report
+        chips = calc_institutional_score()
+        sections.append(format_chips_report(chips))
+    except Exception as e:
+        sections.append(f"籌碼: {e}")
+
+    # 4. TW technical
+    try:
+        from market_monitor.tw_predictor import format_tech_report
+        sections.append(format_tech_report())
+    except Exception as e:
+        sections.append(f"技術: {e}")
+
+    # 5. Crypto
+    try:
+        sections.append(cmd_overview())
+    except Exception:
+        pass
+
+    combined = "\n\n".join(sections)
+
+    # AI synthesis
+    ai_text = _ai_synthesize(
+        "盤後分析",
+        "這是盤後 18:00 報告。根據今日收盤數據、三大法人籌碼、選擇權 OI 分布、"
+        "散戶多空、ML 重訓後的預測，給出完整收盤分析。"
+        "必須包含：1. 今日盤勢回顧 2. 籌碼面解讀（外資/投信/散戶動向）"
+        "3. 選擇權壓力支撐判讀 4. 明日操作建議 5. 加密貨幣簡評。500 字以內。",
+        combined,
+    )
+
+    return (
+        f"🌆 *盤後報告* | {now_tw.strftime('%Y-%m-%d %H:%M')} (台灣)\n"
+        f"{'━' * 30}\n\n"
+        f"🤖 *AI 收盤分析*\n{ai_text}\n\n"
+        f"{'━' * 30}\n"
+        f"_ML 模型已用最新數據重訓_"
+    )
+
+
+def _ai_synthesize(title: str, system_extra: str, data: str) -> str:
+    """Call Claude for AI synthesis."""
+    if not ANTHROPIC_API_KEY:
+        return "AI 未啟用（缺少 API Key）"
+    try:
+        import anthropic
+        client = anthropic.Anthropic()
+        response = client.messages.create(
+            model="claude-sonnet-4-6",
+            max_tokens=1200,
+            system=(
+                f"你是專業的多市場交易分析師，正在撰寫{title}。"
+                f"{system_extra} 用繁體中文，語氣專業但易懂。"
+            ),
+            messages=[{"role": "user", "content": f"市場數據：\n\n{data[:3500]}"}],
+        )
+        text = response.content[0].text if response.content else "無法生成"
+        tokens = f"({response.usage.input_tokens}in/{response.usage.output_tokens}out)"
+        return f"{text}\n\n{tokens}"
+    except Exception as e:
+        return f"AI 分析失敗: {e}"
 
 
 def _maybe_send_scheduled_report():
-    """Check if 4-hour report is due and send it."""
-    global _last_scheduled_report
-    now = time.time()
-    if now - _last_scheduled_report < _REPORT_INTERVAL:
+    """Check if morning (07:00) or evening (18:00) report is due."""
+    global _last_morning_report, _last_evening_report
+
+    now_tw = datetime.now(_TW_TZ)
+    today_str = now_tw.strftime("%Y-%m-%d")
+    hour = now_tw.hour
+    weekday = now_tw.weekday()
+
+    # Skip weekends
+    if weekday >= 5:
         return
 
-    _last_scheduled_report = now
     chat_id = os.environ.get("TELEGRAM_CHAT_ID", "")
     if not chat_id:
         return
 
-    logger.info("Generating scheduled 4-hour market report...")
-    try:
-        report = generate_ai_market_report()
-        for cid in [int(x.strip()) for x in chat_id.split(",") if x.strip()]:
-            send_reply(cid, report, with_menu=False)
-        logger.info("Scheduled report sent successfully")
-    except Exception as e:
-        logger.error("Scheduled report failed: %s", e)
+    cids = [int(x.strip()) for x in chat_id.split(",") if x.strip()]
+
+    # 07:00 盤前報告（07:00-07:59 觸發，每天只一次）
+    if 7 <= hour < 8 and _last_morning_report != today_str:
+        _last_morning_report = today_str
+        logger.info("📡 Generating morning pre-market report...")
+        try:
+            report = generate_morning_report()
+            for cid in cids:
+                send_reply(cid, report, with_menu=False)
+            logger.info("Morning report sent ✓")
+        except Exception as e:
+            logger.error("Morning report failed: %s", e)
+
+    # 18:00 盤後報告（18:00-18:59 觸發，每天只一次）
+    if 18 <= hour < 19 and _last_evening_report != today_str:
+        _last_evening_report = today_str
+        logger.info("📡 Generating evening post-market report...")
+        try:
+            report = generate_evening_report()
+            for cid in cids:
+                send_reply(cid, report, with_menu=False)
+            logger.info("Evening report sent ✓")
+        except Exception as e:
+            logger.error("Evening report failed: %s", e)
 
 
 def run_polling():
