@@ -61,6 +61,11 @@ _FEATURE_ZH = {
     "dow": "星期幾",
     "month_sin": "月份（週期）",
     "month_cos": "月份（週期）",
+    "chips_foreign_net_5d": "外資 5 日累計買賣超",
+    "chips_trust_net_5d": "投信 5 日累計買賣超",
+    "chips_futures_foreign_net": "外資台指期淨口數",
+    "chips_pc_ratio_percentile": "P/C Ratio 歷史分位數",
+    "chips_retail_net": "散戶小台淨部位",
 }
 
 

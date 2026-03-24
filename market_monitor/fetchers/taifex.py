@@ -79,14 +79,35 @@ def fetch_pc_ratio() -> dict:
             "oi_pc_ratio": float(latest[6]),  # > 100 = more put OI
         }
 
-        # Also get 5-day trend
-        if len(lines) >= 6:
-            ratios_5d = []
-            for line in lines[1:6]:
-                parts = line.strip().rstrip(",").split(",")
-                if len(parts) >= 7:
-                    ratios_5d.append(float(parts[6]))
-            result["oi_pc_5d_avg"] = round(sum(ratios_5d) / len(ratios_5d), 2) if ratios_5d else 0
+        # Historical data for percentile calculation
+        all_oi_ratios = []
+        for line in lines[1:]:
+            parts = line.strip().rstrip(",").split(",")
+            if len(parts) >= 7:
+                try:
+                    all_oi_ratios.append(float(parts[6]))
+                except (ValueError, TypeError):
+                    pass
+
+        # 5-day average
+        result["oi_pc_5d_avg"] = round(sum(all_oi_ratios[:5]) / len(all_oi_ratios[:5]), 2) if all_oi_ratios else 0
+
+        # Percentile ranking (rolling history from CSV, typically ~20 trading days)
+        if len(all_oi_ratios) >= 5:
+            current_ratio = result["oi_pc_ratio"]
+            percentile = sum(1 for r in all_oi_ratios if r <= current_ratio) / len(all_oi_ratios) * 100
+            result["oi_pc_percentile"] = round(percentile, 1)
+            # Interpretation
+            if percentile > 85:
+                result["oi_pc_signal"] = "過度恐慌（逆向看多）"
+            elif percentile > 65:
+                result["oi_pc_signal"] = "偏空情緒"
+            elif percentile < 15:
+                result["oi_pc_signal"] = "過度樂觀（逆向看空）"
+            elif percentile < 35:
+                result["oi_pc_signal"] = "偏多情緒"
+            else:
+                result["oi_pc_signal"] = "中性"
 
         _set_cache("pc_ratio", result)
         return result
@@ -460,23 +481,22 @@ def get_derivatives_summary() -> dict:
             signals.append(f"最大 Put OI: {max_put:,} 點 ({options_oi['max_put_oi']:,} 口) ← 支撐")
             signals.append(f"預估區間: {max_put:,} ~ {max_call:,}")
 
-    # PC Ratio scoring
+    # PC Ratio scoring — using percentile (adapts to market structure drift)
     if "error" not in pc:
         oi_ratio = pc.get("oi_pc_ratio", 100)
-        if oi_ratio > 130:
-            score += 20  # Many puts = contrarian bullish
-            signals.append(f"P/C OI {oi_ratio:.0f}% (過度悲觀→逆向看多)")
-        elif oi_ratio > 110:
+        pctl = pc.get("oi_pc_percentile", 50)
+        signal_text = pc.get("oi_pc_signal", "中性")
+
+        if pctl > 85:
+            score += 20  # Extreme fear → contrarian bullish
+        elif pctl > 65:
             score += 10
-            signals.append(f"P/C OI {oi_ratio:.0f}% (偏空)")
-        elif oi_ratio < 80:
-            score -= 20  # Few puts = complacent → bearish
-            signals.append(f"P/C OI {oi_ratio:.0f}% (過度樂觀→逆向看空)")
-        elif oi_ratio < 95:
+        elif pctl < 15:
+            score -= 20  # Extreme complacency → contrarian bearish
+        elif pctl < 35:
             score -= 10
-            signals.append(f"P/C OI {oi_ratio:.0f}% (偏多)")
-        else:
-            signals.append(f"P/C OI {oi_ratio:.0f}% (中性)")
+
+        signals.append(f"P/C OI {oi_ratio:.0f}% (分位數{pctl:.0f}%, {signal_text})")
 
     # Futures institutional scoring
     if "error" not in futures:

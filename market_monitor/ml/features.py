@@ -169,6 +169,13 @@ def compute_features(df: pd.DataFrame, macro: dict | None = None) -> pd.DataFram
                      "btc_roc5", "tnx", "gold_roc5"]:
             feat[f"macro_{key}"] = 0
 
+    # ===== INSTITUTIONAL / CHIPS (if available) =====
+    if macro:
+        # These come from TWSE/TAIFEX data when available
+        for key in ["foreign_net_5d", "trust_net_5d", "futures_foreign_net",
+                     "pc_ratio_percentile", "retail_net"]:
+            feat[f"chips_{key}"] = macro.get(key, 0)
+
     # ===== TIME FEATURES (5) =====
     if hasattr(df.index, 'dayofweek'):
         feat["dow"] = df.index.dayofweek

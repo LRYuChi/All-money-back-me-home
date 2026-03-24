@@ -142,6 +142,22 @@ class SupertrendStrategy(IStrategy):
         dataframe["st_buy"] = (dataframe["st_trend"] == 1) & (dataframe["st_trend"].shift(1) == -1)
         dataframe["st_sell"] = (dataframe["st_trend"] == -1) & (dataframe["st_trend"].shift(1) == 1)
 
+        # === Funding Rate filter (if available) ===
+        if "funding_rate" in dataframe.columns:
+            fr = dataframe["funding_rate"].fillna(0)
+            # Extreme positive FR → avoid longs (crowd overleveraged long)
+            dataframe["fr_ok_long"] = fr < 0.001   # < 0.1%/8h
+            # Extreme negative FR → avoid shorts
+            dataframe["fr_ok_short"] = fr > -0.001  # > -0.1%/8h
+            # FR as quality bonus: extreme negative + buying = short squeeze potential
+            dataframe["fr_bonus_long"] = (fr < -0.0005).astype(float) * 0.1
+            dataframe["fr_bonus_short"] = (fr > 0.0005).astype(float) * 0.1
+        else:
+            dataframe["fr_ok_long"] = True
+            dataframe["fr_ok_short"] = True
+            dataframe["fr_bonus_long"] = 0.0
+            dataframe["fr_bonus_short"] = 0.0
+
         # === 1H Supertrend ===
         htf1h = self.dp.get_pair_dataframe(pair=pair, timeframe="1h")
         if len(htf1h) > 0:
@@ -219,15 +235,17 @@ class SupertrendStrategy(IStrategy):
             & (dataframe["trend_quality"] > 0.5)  # Trend quality gate
         )
 
-        # Long: all bullish + 15m flip + quality
+        # Long: all bullish + 15m flip + quality + funding rate OK
         dataframe.loc[
-            dataframe["st_buy"] & dataframe["all_bullish"] & quality,
+            dataframe["st_buy"] & dataframe["all_bullish"] & quality
+            & dataframe["fr_ok_long"],
             "enter_long",
         ] = 1
 
-        # Short: all bearish + 15m flip + quality
+        # Short: all bearish + 15m flip + quality + funding rate OK
         dataframe.loc[
-            dataframe["st_sell"] & dataframe["all_bearish"] & quality,
+            dataframe["st_sell"] & dataframe["all_bearish"] & quality
+            & dataframe["fr_ok_short"],
             "enter_short",
         ] = 1
 
@@ -310,18 +328,44 @@ class SupertrendStrategy(IStrategy):
     position_adjustment_enable = True
     max_entry_position_adjustment = 0  # No DCA, only partial exits
 
-    # Position sizing: 75% Kelly
-    _KELLY_WR = 0.355
-    _KELLY_WL = 3.36
+    # Position sizing: Rolling Kelly (adapts to recent performance)
     _KELLY_FRAC = 0.75
+    _KELLY_LOOKBACK = 60  # Rolling window
+    _KELLY_DEFAULT_WR = 0.355
+    _KELLY_DEFAULT_WL = 3.36
+
+    def _calc_rolling_kelly(self) -> float:
+        """Calculate Kelly% from recent trades (rolling 60). Falls back to static."""
+        try:
+            recent = Trade.get_trades_proxy(is_open=False)
+            trades = list(recent)[-self._KELLY_LOOKBACK:]
+            if len(trades) < 10:
+                # Not enough data, use defaults
+                wr = self._KELLY_DEFAULT_WR
+                wl = self._KELLY_DEFAULT_WL
+            else:
+                wins = [t for t in trades if t.close_profit and t.close_profit > 0]
+                losses = [t for t in trades if t.close_profit and t.close_profit <= 0]
+                wr = len(wins) / len(trades)
+                avg_win = sum(t.close_profit for t in wins) / len(wins) if wins else 0.01
+                avg_loss = abs(sum(t.close_profit for t in losses) / len(losses)) if losses else 0.05
+                wl = avg_win / avg_loss if avg_loss > 0 else 1.0
+        except Exception:
+            wr = self._KELLY_DEFAULT_WR
+            wl = self._KELLY_DEFAULT_WL
+
+        if wl <= 0:
+            return 0.05
+        full_kelly = max(0, wr - (1 - wr) / wl)
+        return full_kelly * self._KELLY_FRAC
 
     def custom_stake_amount(self, current_time: datetime, current_rate: float,
                             proposed_stake: float, min_stake: float | None,
                             max_stake: float, leverage: float,
                             entry_tag: str | None, side: str, **kwargs) -> float:
-        """75% Kelly position sizing × trend quality."""
-        full_kelly = self._KELLY_WR - (1 - self._KELLY_WR) / self._KELLY_WL
-        target_pct = full_kelly * self._KELLY_FRAC  # ~12.2%
+        """Rolling Kelly position sizing × trend quality."""
+        target_pct = self._calc_rolling_kelly()
+        target_pct = max(0.03, min(target_pct, 0.20))  # Clamp [3%, 20%]
 
         balance = self.wallets.get_total_stake_amount() if self.wallets else 1000
         base_stake = balance * target_pct
