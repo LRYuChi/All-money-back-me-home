@@ -49,6 +49,28 @@ except ImportError:
 logger = logging.getLogger(__name__)
 
 
+def _send_to_all_bots(text: str) -> None:
+    """Send message to both notification bot AND AI bot."""
+    # 1. Notification bot (TELEGRAM_TOKEN)
+    if _TG:
+        _tg_send(text)
+    # 2. AI bot (TG_AI_BOT_TOKEN) — separate bot, same chat
+    try:
+        import json
+        import urllib.request
+        ai_token = os.environ.get("TG_AI_BOT_TOKEN", "")
+        chat_id = os.environ.get("TELEGRAM_CHAT_ID", "")
+        if ai_token and chat_id:
+            payload = json.dumps({"chat_id": int(chat_id), "text": text, "parse_mode": "Markdown"}).encode()
+            req = urllib.request.Request(
+                f"https://api.telegram.org/bot{ai_token}/sendMessage",
+                data=payload, headers={"Content-Type": "application/json"},
+            )
+            urllib.request.urlopen(req, timeout=5)
+    except Exception as e:
+        logger.debug("AI bot send failed: %s", e)
+
+
 def _calc_supertrend(df: DataFrame, period: int = 10, multiplier: float = 3.0) -> DataFrame:
     atr = ta.ATR(df, timeperiod=period)
     src = (df["high"].values + df["low"].values) / 2
@@ -450,39 +472,38 @@ class SupertrendStrategy(IStrategy):
     def confirm_trade_entry(self, pair: str, order_type: str, amount: float,
                             rate: float, time_in_force: str, current_time: datetime,
                             entry_tag: str | None, side: str, **kwargs) -> bool:
-        """Send Telegram notification on entry."""
-        if _TG:
-            dataframe, _ = self.dp.get_analyzed_dataframe(pair, self.timeframe)
-            ds = tq = 0.0
-            if len(dataframe) > 0:
-                last = dataframe.iloc[-1]
-                ds = float(last.get("direction_score", 0))
-                tq = float(last.get("trend_quality", 0))
-            emoji = "🟢" if side == "long" else "🔴"
-            _tg_send(
-                f"{emoji} *進場 {side.upper()}*\n"
-                f"幣種: `{pair}`\n"
-                f"價格: `{rate:.2f}`\n"
-                f"方向分數: `{ds:+.2f}` | 品質: `{tq:.2f}`\n"
-                f"策略: Supertrend 4L MTF"
-            )
+        """Send trade entry to both Telegram bots."""
+        dataframe, _ = self.dp.get_analyzed_dataframe(pair, self.timeframe)
+        ds = tq = 0.0
+        if len(dataframe) > 0:
+            last = dataframe.iloc[-1]
+            ds = float(last.get("direction_score", 0))
+            tq = float(last.get("trend_quality", 0))
+        emoji = "🟢" if side == "long" else "🔴"
+        phase = "🔍 試單" if entry_tag == "scout" else "✅ 確認"
+        _send_to_all_bots(
+            f"{emoji} *進場 {side.upper()}* ({phase})\n"
+            f"幣種: `{pair}`\n"
+            f"價格: `{rate:.2f}`\n"
+            f"方向分數: `{ds:+.2f}` | 品質: `{tq:.2f}`\n"
+            f"策略: Supertrend 4L Scout"
+        )
         return True
 
     def confirm_trade_exit(self, pair: str, trade: Trade, order_type: str,
                            amount: float, rate: float, time_in_force: str,
                            exit_reason: str, current_time: datetime, **kwargs) -> bool:
-        """Send Telegram notification on exit."""
-        if _TG:
-            pnl_pct = trade.calc_profit_ratio(rate) * 100
-            pnl_usd = trade.calc_profit(rate)
-            dur = (current_time - trade.open_date_utc).total_seconds() / 3600
-            emoji = "💰" if pnl_pct > 0 else "💸"
-            _tg_send(
-                f"{emoji} *出場 {'SHORT' if trade.is_short else 'LONG'}*\n"
-                f"幣種: `{pair}`\n"
-                f"P&L: `{pnl_pct:+.2f}%` (`{pnl_usd:+.2f}$`)\n"
-                f"持倉: `{dur:.1f}h` | 原因: `{exit_reason}`"
-            )
+        """Send trade exit to both Telegram bots."""
+        pnl_pct = trade.calc_profit_ratio(rate) * 100
+        pnl_usd = trade.calc_profit(rate)
+        dur = (current_time - trade.open_date_utc).total_seconds() / 3600
+        emoji = "💰" if pnl_pct > 0 else "💸"
+        _send_to_all_bots(
+            f"{emoji} *出場 {'SHORT' if trade.is_short else 'LONG'}*\n"
+            f"幣種: `{pair}`\n"
+            f"P&L: `{pnl_pct:+.2f}%` (`{pnl_usd:+.2f}$`)\n"
+            f"持倉: `{dur:.1f}h` | 原因: `{exit_reason}`"
+        )
         return True
 
     def leverage(self, pair: str, current_time: datetime, current_rate: float,
