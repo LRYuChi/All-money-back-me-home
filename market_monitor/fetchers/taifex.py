@@ -318,11 +318,134 @@ def fetch_options_max_oi() -> dict:
     return {"error": "No recent options OI data"}
 
 
+def fetch_retail_futures() -> dict:
+    """Fetch 散戶（自然人）小台指多空部位.
+
+    散戶 = 全市場未平倉 - 外資 - 投信 - 自營商
+    Uses TAIFEX CSV for MXF (小型臺指期貨).
+    """
+    cached = _cached("retail_futures")
+    if cached:
+        return cached
+
+    today = datetime.now(_TW_TZ)
+    for days_back in range(7):
+        query_date = today - timedelta(days=days_back)
+        if query_date.weekday() >= 5:
+            continue
+        date_str = query_date.strftime("%Y/%m/%d")
+
+        try:
+            url = "https://www.taifex.com.tw/cht/3/futContractsDateDown"
+            params = urllib.parse.urlencode({
+                "queryStartDate": date_str,
+                "queryEndDate": date_str,
+                "commodityId": "MXF",
+            }).encode()
+
+            req = urllib.request.Request(url, data=params, headers=_HEADERS)
+            with urllib.request.urlopen(req, timeout=15) as resp:
+                raw = resp.read()
+            text = raw.decode("big5", errors="replace")
+            lines = text.strip().split("\n")
+
+            if len(lines) < 2:
+                continue
+
+            # Parse institutional positions
+            inst_long = 0
+            inst_short = 0
+            for line in lines[1:]:
+                parts = line.split(",")
+                if len(parts) < 14:
+                    continue
+                product = parts[1].strip()
+                if "小型臺指" not in product:
+                    continue
+                identity = parts[2].strip()
+                if identity in ("自營商", "投信", "外資及陸資"):
+                    try:
+                        inst_long += int(parts[9].strip())   # 多方未平倉口數
+                        inst_short += int(parts[11].strip())  # 空方未平倉口數
+                    except (ValueError, IndexError):
+                        pass
+
+            # Get total market OI from PC ratio or estimate
+            # Total MXF OI ≈ inst_long + inst_short + retail (both sides)
+            # We need total OI — fetch from the HTML page
+            total_long = 0
+            total_short = 0
+
+            try:
+                url2 = "https://www.taifex.com.tw/cht/3/futContractsDate"
+                params2 = urllib.parse.urlencode({
+                    "queryType": "1", "doQuery": "1",
+                    "queryDate": date_str, "commodityId": "MXF",
+                }).encode()
+                req2 = urllib.request.Request(url2, data=params2, headers=_HEADERS)
+                with urllib.request.urlopen(req2, timeout=15) as resp2:
+                    html = resp2.read().decode("utf-8", errors="replace")
+                # Extract total numbers from the page
+                nums = re.findall(r'>([\d,]+)<', html)
+                big_nums = [int(n.replace(",", "")) for n in nums
+                            if n.replace(",", "").isdigit() and 50000 < int(n.replace(",", "")) < 2000000]
+                if len(big_nums) >= 2:
+                    total_long = big_nums[0]
+                    total_short = big_nums[1]
+            except Exception:
+                pass
+
+            # Retail = Total - Institutional
+            if total_long > 0 and total_short > 0:
+                retail_long = total_long - inst_long
+                retail_short = total_short - inst_short
+                retail_net = retail_long - retail_short
+            else:
+                # Fallback: just report institutional net (retail is inverse)
+                retail_net = -(inst_long - inst_short)  # 散戶 ≈ 法人反向
+                retail_long = 0
+                retail_short = 0
+
+            result = {
+                "date": date_str,
+                "retail_long": retail_long,
+                "retail_short": retail_short,
+                "retail_net": retail_net,
+                "inst_long": inst_long,
+                "inst_short": inst_short,
+                "inst_net": inst_long - inst_short,
+                "total_long": total_long,
+                "total_short": total_short,
+            }
+
+            # Sentiment interpretation
+            if retail_net > 5000:
+                result["sentiment"] = "散戶大量做多（逆向看空）"
+            elif retail_net > 1000:
+                result["sentiment"] = "散戶偏多（逆向偏空）"
+            elif retail_net < -5000:
+                result["sentiment"] = "散戶大量做空（逆向看多）"
+            elif retail_net < -1000:
+                result["sentiment"] = "散戶偏空（逆向偏多）"
+            else:
+                result["sentiment"] = "散戶中性"
+
+            _set_cache("retail_futures", result)
+            return result
+
+        except Exception as e:
+            logger.debug("Retail futures date %s failed: %s", date_str, e)
+            continue
+
+    return {"error": "No retail futures data"}
+
+
 def get_derivatives_summary() -> dict:
     """Get comprehensive Taiwan derivatives summary."""
     pc = fetch_pc_ratio()
     futures = fetch_futures_institutional()
     options_oi = fetch_options_max_oi()
+    retail = fetch_retail_futures()
 
     # Scoring
     score = 0
@@ -373,10 +496,24 @@ def get_derivatives_summary() -> dict:
         else:
             signals.append(f"外資期貨淨部位 {foreign_net:+,} 口（中性）")
 
+    # Retail sentiment (contrarian)
+    if "error" not in retail:
+        retail_net = retail.get("retail_net", 0)
+        if retail_net > 5000:
+            score -= 15  # Retail heavily long = bearish contrarian
+        elif retail_net > 1000:
+            score -= 5
+        elif retail_net < -5000:
+            score += 15  # Retail heavily short = bullish contrarian
+        elif retail_net < -1000:
+            score += 5
+        signals.append(f"散戶小台淨部位: {retail_net:+,} 口 ({retail.get('sentiment', '')})")
+
     return {
         "score": max(-100, min(100, score)),
         "pc_ratio": pc,
         "futures": futures,
         "options_oi": options_oi,
+        "retail": retail,
         "signals": signals,
     }

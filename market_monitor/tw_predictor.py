@@ -310,6 +310,12 @@ def calc_institutional_score() -> dict:
 
         factors["derivatives_signals"] = deriv.get("signals", [])
 
+        # Retail futures
+        retail = deriv.get("retail", {})
+        if "error" not in retail and retail:
+            factors["retail_net"] = f"{retail.get('retail_net', 0):+,} 口"
+            factors["retail_sentiment"] = retail.get("sentiment", "")
+
         # Options OI distribution
         opt_oi = deriv.get("options_oi", {})
         if "error" not in opt_oi and opt_oi:
@@ -637,6 +643,15 @@ def format_chips_report(result: dict) -> str:
                 bar_len = max(1, int(item["oi"] / max_oi * 10))
                 bar = "█" * bar_len + "░" * (10 - bar_len)
                 lines.append(f"    {item['strike']:>6,}: {bar} {item['oi']:,}")
+
+    # Retail futures
+    if f.get("retail_net"):
+        lines.extend([
+            "",
+            "*散戶動向（小台指）*：",
+            f"  淨部位: {f['retail_net']}",
+            f"  判讀: {f.get('retail_sentiment', '')}",
+        ])
 
     # Signals
     signals = f.get("derivatives_signals", [])
