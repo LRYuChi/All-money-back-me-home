@@ -47,6 +47,7 @@ PERSISTENT_MENU = {
         ["🛡 風控", "🌍 宏觀", "🧠 決策"],
         ["🤖 AI回顧", "🔮 AI預測", "⚠️ AI風控"],
         ["🇹🇼 台股預測", "🏦 台股籌碼", "📉 台股技術"],
+        ["🧠 台股ML", "🧠 BTC ML"],
         ["📰 投顧報告"],
     ],
     "resize_keyboard": True,
@@ -74,6 +75,8 @@ BUTTON_MAP: dict[str, str] = {
     "🇹🇼 台股預測": "tw_predict",
     "🏦 台股籌碼": "tw_chips",
     "📉 台股技術": "tw_tech",
+    "🧠 台股ML": "tw_ml",
+    "🧠 BTC ML": "btc_ml",
 }
 
 # =============================================
@@ -1177,6 +1180,28 @@ def cmd_tw_tech() -> str:
         return f"台股技術分析失敗: {e}"
 
 
+def cmd_tw_ml() -> str:
+    """ML 模型預測台股方向。"""
+    try:
+        from market_monitor.ml.predict import predict_direction, format_ml_report
+        result = predict_direction("^TWII", horizons=[5, 20])
+        return format_ml_report(result)
+    except Exception as e:
+        logger.error("TW ML predict failed: %s", e)
+        return f"ML 預測失敗: {e}"
+
+
+def cmd_btc_ml() -> str:
+    """ML 模型預測 BTC 方向。"""
+    try:
+        from market_monitor.ml.predict import predict_direction, format_ml_report
+        result = predict_direction("BTC-USD", horizons=[5, 20])
+        return format_ml_report(result)
+    except Exception as e:
+        logger.error("BTC ML predict failed: %s", e)
+        return f"ML 預測失敗: {e}"
+
+
 COMMANDS = {
     "status": cmd_status, "start": cmd_help, "help": cmd_help,
     "confidence": cmd_confidence, "crypto": cmd_crypto,
@@ -1194,6 +1219,8 @@ COMMANDS = {
     "tw_predict": cmd_tw_predict,
     "tw_chips": cmd_tw_chips,
     "tw_tech": cmd_tw_tech,
+    "tw_ml": cmd_tw_ml,
+    "btc_ml": cmd_btc_ml,
 }
 
 
