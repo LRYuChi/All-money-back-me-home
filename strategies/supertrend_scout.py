@@ -105,7 +105,7 @@ def _calc_4h_direction(df4h: DataFrame) -> DataFrame:
     return df4h
 
 
-class SupertrendStrategy(IStrategy):
+class SupertrendScout(IStrategy):
     """Two-phase entry: scout (3-layer aligned) + confirm (15m flip)."""
 
     INTERFACE_VERSION = 3
