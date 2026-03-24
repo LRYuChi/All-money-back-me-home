@@ -285,7 +285,36 @@ def calc_institutional_score() -> dict:
     factors["margin_net"] = f"{margin_net:+.0f} 張"
     factors["margin_balance"] = margin.get("margin_balance", 0)
 
-    return {"score": max(-100, min(100, score)), "factors": factors, "raw": {**inst, **margin}}
+    # === TAIFEX 期權籌碼 ===
+    derivatives = {}
+    try:
+        from market_monitor.fetchers.taifex import get_derivatives_summary
+        deriv = get_derivatives_summary()
+        derivatives = deriv
+
+        # Add derivatives score
+        score += deriv.get("score", 0)
+
+        # PC Ratio
+        pc = deriv.get("pc_ratio", {})
+        if "error" not in pc:
+            factors["pc_ratio_oi"] = f"{pc.get('oi_pc_ratio', 0):.1f}%"
+            factors["pc_ratio_vol"] = f"{pc.get('volume_pc_ratio', 0):.1f}%"
+            factors["put_oi"] = f"{pc.get('put_oi', 0):,}"
+            factors["call_oi"] = f"{pc.get('call_oi', 0):,}"
+
+        # Futures institutional
+        fut = deriv.get("futures", {})
+        if "error" not in fut:
+            factors["futures_foreign_net"] = f"{fut.get('foreign_net', 0):+,} 口"
+
+        factors["derivatives_signals"] = deriv.get("signals", [])
+
+    except Exception as e:
+        logger.warning("TAIFEX derivatives fetch failed: %s", e)
+
+    return {"score": max(-100, min(100, score)), "factors": factors,
+            "raw": {**inst, **margin}, "derivatives": derivatives}
 
 
 # ============================================================
@@ -536,19 +565,47 @@ def format_predict_report(result: dict) -> str:
 
 
 def format_chips_report(result: dict) -> str:
-    """Format institutional flow report."""
+    """Format institutional flow report with derivatives."""
     i = result if "score" in result else calc_institutional_score()
     f = i.get("factors", {})
-    return "\n".join([
+
+    lines = [
         f"🏦 *台股籌碼快報* | {datetime.now(TW_TZ).strftime('%Y-%m-%d')}",
         "",
-        f"📊 籌碼分數：*{i['score']:+d}*",
+        f"📊 綜合籌碼分數：*{i['score']:+d}*",
         "━━━━━━━━━━━━━━━━",
+        "",
+        "*現貨三大法人*：",
         f"  外資: {f.get('foreign_net', 'N/A')}",
         f"  投信: {f.get('trust_net', 'N/A')}",
         f"  自營商: {f.get('dealers_net', 'N/A')}",
         f"  融資淨變化: {f.get('margin_net', 'N/A')}",
-    ])
+    ]
+
+    # Derivatives section
+    if f.get("futures_foreign_net") or f.get("pc_ratio_oi"):
+        lines.extend(["", "*期貨*："])
+        if f.get("futures_foreign_net"):
+            lines.append(f"  外資台指期淨部位: {f['futures_foreign_net']}")
+
+        lines.extend(["", "*選擇權*："])
+        if f.get("pc_ratio_oi"):
+            lines.append(f"  P/C Ratio (未平倉): {f['pc_ratio_oi']}")
+        if f.get("pc_ratio_vol"):
+            lines.append(f"  P/C Ratio (成交量): {f['pc_ratio_vol']}")
+        if f.get("put_oi"):
+            lines.append(f"  Put 未平倉: {f['put_oi']}")
+        if f.get("call_oi"):
+            lines.append(f"  Call 未平倉: {f['call_oi']}")
+
+    # Signals
+    signals = f.get("derivatives_signals", [])
+    if signals:
+        lines.extend(["", "*期權信號*："])
+        for sig in signals:
+            lines.append(f"  • {sig}")
+
+    return "\n".join(lines)
 
 
 def format_tech_report() -> str:
