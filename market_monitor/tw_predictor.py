@@ -310,6 +310,16 @@ def calc_institutional_score() -> dict:
 
         factors["derivatives_signals"] = deriv.get("signals", [])
 
+        # Options OI distribution
+        opt_oi = deriv.get("options_oi", {})
+        if "error" not in opt_oi and opt_oi:
+            factors["max_call_strike"] = f"{opt_oi.get('max_call_strike', 0):,}"
+            factors["max_call_oi"] = f"{opt_oi.get('max_call_oi', 0):,}"
+            factors["max_put_strike"] = f"{opt_oi.get('max_put_strike', 0):,}"
+            factors["max_put_oi"] = f"{opt_oi.get('max_put_oi', 0):,}"
+            factors["top5_call"] = opt_oi.get("top5_call", [])
+            factors["top5_put"] = opt_oi.get("top5_put", [])
+
     except Exception as e:
         logger.warning("TAIFEX derivatives fetch failed: %s", e)
 
@@ -593,10 +603,26 @@ def format_chips_report(result: dict) -> str:
             lines.append(f"  P/C Ratio (未平倉): {f['pc_ratio_oi']}")
         if f.get("pc_ratio_vol"):
             lines.append(f"  P/C Ratio (成交量): {f['pc_ratio_vol']}")
-        if f.get("put_oi"):
-            lines.append(f"  Put 未平倉: {f['put_oi']}")
-        if f.get("call_oi"):
-            lines.append(f"  Call 未平倉: {f['call_oi']}")
+
+        # Max OI strikes = support/resistance
+        if f.get("max_call_strike"):
+            lines.extend([
+                "",
+                f"  🔺 最大 Call OI: *{f['max_call_strike']}* 點 ({f['max_call_oi']} 口) ← 壓力",
+                f"  🔻 最大 Put OI:  *{f['max_put_strike']}* 點 ({f['max_put_oi']} 口) ← 支撐",
+            ])
+
+        # Top 5 OI distribution
+        top5_call = f.get("top5_call", [])
+        top5_put = f.get("top5_put", [])
+        if top5_call:
+            lines.append("\n  *Call OI Top 5 (壓力區)*：")
+            for item in top5_call[:5]:
+                lines.append(f"    {item['strike']:,} 點: {item['oi']:,} 口")
+        if top5_put:
+            lines.append("\n  *Put OI Top 5 (支撐區)*：")
+            for item in top5_put[:5]:
+                lines.append(f"    {item['strike']:,} 點: {item['oi']:,} 口")
 
     # Signals
     signals = f.get("derivatives_signals", [])

@@ -181,85 +181,121 @@ def _parse_futures_html(html: str, date: str) -> dict | None:
 
 
 def fetch_options_max_oi() -> dict:
-    """Fetch options max OI strikes (support/resistance levels).
+    """Fetch options OI distribution by strike price.
 
-    Identifies the strike prices with highest Call OI (resistance)
-    and highest Put OI (support).
+    Downloads TXO daily data CSV from TAIFEX, parses Call/Put OI per strike.
+    Returns max Call OI strike (resistance) and max Put OI strike (support).
     """
     cached = _cached("options_max_oi")
     if cached:
         return cached
 
-    try:
-        today = datetime.now(_TW_TZ)
-        url = "https://www.taifex.com.tw/cht/3/optDailyMarketReport"
+    today = datetime.now(_TW_TZ)
 
-        for days_back in range(5):
-            query_date = today - timedelta(days=days_back)
-            if query_date.weekday() >= 5:
-                continue
+    for days_back in range(7):
+        query_date = today - timedelta(days=days_back)
+        if query_date.weekday() >= 5:
+            continue
+        date_str = query_date.strftime("%Y/%m/%d")
 
+        try:
+            url = "https://www.taifex.com.tw/cht/3/optDataDown"
             params = urllib.parse.urlencode({
-                "queryType": "1",
-                "goession": "",
-                "doQuery": "1",
-                "dateaddcnt": "",
-                "queryDate": query_date.strftime("%Y/%m/%d"),
-                "commodityId": "TXO",
+                "down_type": "1",
+                "queryStartDate": date_str,
+                "queryEndDate": date_str,
+                "commodity_id": "TXO",
             }).encode()
 
             req = urllib.request.Request(url, data=params, headers=_HEADERS)
-            with urllib.request.urlopen(req, timeout=15) as resp:
-                html = resp.read().decode("utf-8", errors="replace")
+            with urllib.request.urlopen(req, timeout=20) as resp:
+                raw = resp.read()
 
-            if "買權" not in html:
+            text = raw.decode("big5", errors="replace")
+            lines = text.strip().split("\n")
+
+            if len(lines) < 10:
                 continue
 
-            # Parse option chain for max OI
-            result = _parse_options_oi(html, query_date.strftime("%Y/%m/%d"))
-            if result:
+            # Parse CSV: 交易日期,契約,到期月份,履約價,買賣權,...,未沖銷契約數,...
+            call_oi = {}
+            put_oi = {}
+
+            for line in lines[1:]:
+                parts = line.split(",")
+                if len(parts) < 12:
+                    continue
+
+                strike_str = parts[3].strip()
+                cp = parts[4].strip()
+                oi_str = parts[11].strip()
+                session = parts[17].strip() if len(parts) > 17 else ""
+
+                # Only count regular session
+                if "盤後" in session:
+                    continue
+
+                try:
+                    strike = int(float(strike_str))
+                    oi = int(oi_str)
+                except (ValueError, TypeError):
+                    continue
+
+                if 15000 <= strike <= 30000 and oi > 0:
+                    if "買" in cp:
+                        call_oi[strike] = call_oi.get(strike, 0) + oi
+                    elif "賣" in cp:
+                        put_oi[strike] = put_oi.get(strike, 0) + oi
+
+            if call_oi and put_oi:
+                # Sort by OI descending
+                call_sorted = sorted(call_oi.items(), key=lambda x: x[1], reverse=True)
+                put_sorted = sorted(put_oi.items(), key=lambda x: x[1], reverse=True)
+
+                result = {
+                    "date": date_str,
+                    "max_call_strike": call_sorted[0][0],
+                    "max_call_oi": call_sorted[0][1],
+                    "max_put_strike": put_sorted[0][0],
+                    "max_put_oi": put_sorted[0][1],
+                    "top5_call": [{"strike": s, "oi": o} for s, o in call_sorted[:5]],
+                    "top5_put": [{"strike": s, "oi": o} for s, o in put_sorted[:5]],
+                    "total_call_oi": sum(call_oi.values()),
+                    "total_put_oi": sum(put_oi.values()),
+                }
+
+                logger.info("Options OI: max_call=%d(%d口) max_put=%d(%d口)",
+                            result["max_call_strike"], result["max_call_oi"],
+                            result["max_put_strike"], result["max_put_oi"])
+
                 _set_cache("options_max_oi", result)
                 return result
 
-        return {"error": "No recent options data"}
+        except Exception as e:
+            logger.debug("TAIFEX options date %s failed: %s", date_str, e)
+            continue
 
-    except Exception as e:
-        logger.warning("TAIFEX options OI fetch failed: %s", e)
-        return {"error": str(e)}
-
-
-def _parse_options_oi(html: str, date: str) -> dict | None:
-    """Parse options OI distribution to find max Call/Put OI strikes."""
-    # This is complex HTML parsing — simplified approach
-    # Look for strike prices and their OI numbers
-
-    # Find all strike prices (typically 4-5 digit numbers like 22000, 22500, etc.)
-    strikes = re.findall(r'(\d{4,5})(?:\.0{1,2})?', html)
-    if not strikes:
-        return None
-
-    # For now, estimate from PC ratio data
-    pc = fetch_pc_ratio()
-    if "error" in pc:
-        return None
-
-    return {
-        "date": date,
-        "call_oi": pc.get("call_oi", 0),
-        "put_oi": pc.get("put_oi", 0),
-        "pc_ratio_oi": pc.get("oi_pc_ratio", 0),
-        "pc_ratio_vol": pc.get("volume_pc_ratio", 0),
-    }
+    return {"error": "No recent options OI data"}
 
 
 def get_derivatives_summary() -> dict:
     """Get comprehensive Taiwan derivatives summary."""
     pc = fetch_pc_ratio()
     futures = fetch_futures_institutional()
+    options_oi = fetch_options_max_oi()
 
     # Scoring
     score = 0
     signals = []
+
+    # Options OI distribution
+    if "error" not in options_oi:
+        max_call = options_oi.get("max_call_strike", 0)
+        max_put = options_oi.get("max_put_strike", 0)
+        if max_call and max_put:
+            signals.append(f"最大 Call OI: {max_call:,} 點 ({options_oi['max_call_oi']:,} 口) ← 壓力")
+            signals.append(f"最大 Put OI: {max_put:,} 點 ({options_oi['max_put_oi']:,} 口) ← 支撐")
+            signals.append(f"預估區間: {max_put:,} ~ {max_call:,}")
 
     # PC Ratio scoring
     if "error" not in pc:
@@ -301,5 +337,6 @@ def get_derivatives_summary() -> dict:
         "score": max(-100, min(100, score)),
         "pc_ratio": pc,
         "futures": futures,
+        "options_oi": options_oi,
         "signals": signals,
     }
