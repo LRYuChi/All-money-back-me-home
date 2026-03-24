@@ -1384,6 +1384,99 @@ def handle_photo(photo_data: bytes, chat_id: int) -> str:
         return f"圖片處理失敗: {e}"
 
 
+_last_scheduled_report: float = 0
+_REPORT_INTERVAL = 4 * 3600  # 4 hours
+
+
+def generate_ai_market_report() -> str:
+    """Generate comprehensive AI market report from all signals."""
+    sections = []
+
+    # 1. ML predictions
+    try:
+        from market_monitor.ml.predict import predict_direction, format_ml_report
+        tw_result = predict_direction("^TWII", horizons=[5, 20])
+        btc_result = predict_direction("BTC-USD", horizons=[5, 20])
+        sections.append(format_ml_report(tw_result))
+        sections.append(format_ml_report(btc_result))
+    except Exception as e:
+        sections.append(f"ML 預測: 不可用 ({e})")
+
+    # 2. Taiwan market
+    try:
+        from market_monitor.tw_predictor import predict, format_predict_report
+        tw_pred = predict()
+        sections.append(format_predict_report(tw_pred))
+    except Exception as e:
+        sections.append(f"台股預測: 不可用 ({e})")
+
+    # 3. Crypto strategy status
+    try:
+        crypto_status = cmd_overview()
+        sections.append(crypto_status)
+    except Exception:
+        pass
+
+    combined_data = "\n\n".join(sections)
+
+    # 4. AI synthesis
+    if ANTHROPIC_API_KEY:
+        try:
+            import anthropic
+            client = anthropic.Anthropic()
+            response = client.messages.create(
+                model="claude-sonnet-4-6",
+                max_tokens=1200,
+                system=(
+                    "你是專業的多市場交易分析師。根據以下所有市場數據（台股、加密貨幣、ML 預測），"
+                    "給出一份簡潔的綜合市場報告。用繁體中文，500 字以內。"
+                    "必須包含：1. 整體市場環境判斷 2. 台股操作建議 3. 加密貨幣操作建議 "
+                    "4. 需要注意的風險 5. 今日關鍵觀察點。"
+                    "語氣專業但易懂，適合個人投資者閱讀。"
+                ),
+                messages=[{"role": "user", "content": f"以下是所有市場數據和 ML 預測結果：\n\n{combined_data[:3000]}"}],
+            )
+            ai_text = response.content[0].text if response.content else "無法生成"
+            tokens = f"({response.usage.input_tokens}in/{response.usage.output_tokens}out)"
+        except Exception as e:
+            ai_text = f"AI 分析不可用: {e}"
+            tokens = ""
+    else:
+        ai_text = "AI 分析未啟用（缺少 ANTHROPIC_API_KEY）"
+        tokens = ""
+
+    now_tw = datetime.now(timezone(timedelta(hours=8)))
+    report = (
+        f"📡 *4 小時市場報告* | {now_tw.strftime('%Y-%m-%d %H:%M')} (台灣)\n"
+        f"{'━' * 30}\n\n"
+        f"🤖 *AI 綜合觀點*\n{ai_text}\n\n{tokens}"
+    )
+
+    return report
+
+
+def _maybe_send_scheduled_report():
+    """Check if 4-hour report is due and send it."""
+    global _last_scheduled_report
+    now = time.time()
+    if now - _last_scheduled_report < _REPORT_INTERVAL:
+        return
+
+    _last_scheduled_report = now
+    chat_id = os.environ.get("TELEGRAM_CHAT_ID", "")
+    if not chat_id:
+        return
+
+    logger.info("Generating scheduled 4-hour market report...")
+    try:
+        report = generate_ai_market_report()
+        for cid in [int(x.strip()) for x in chat_id.split(",") if x.strip()]:
+            send_reply(cid, report, with_menu=False)
+        logger.info("Scheduled report sent successfully")
+    except Exception as e:
+        logger.error("Scheduled report failed: %s", e)
+
+
 def run_polling():
     if not BOT_TOKEN:
         logger.error("TG_AI_BOT_TOKEN not set!")
@@ -1448,6 +1541,9 @@ def run_polling():
                 logger.info("Msg from %s: %s", chat_id, text[:40])
                 response = process_message(chat_id, text)
                 send_reply(chat_id, response)
+
+            # Check scheduled report every polling cycle
+            _maybe_send_scheduled_report()
 
         except Exception as e:
             logger.error("Polling error: %s", e)

@@ -21,6 +21,48 @@ MODEL_DIR = Path(os.environ.get("DATA_DIR", "data")) / "models"
 _CLASS_NAMES = {0: "DOWN", 1: "FLAT", 2: "UP"}
 _CLASS_EMOJI = {0: "📉", 1: "➡️", 2: "📈"}
 
+# Feature name → Chinese description
+_FEATURE_ZH = {
+    "rsi_14": "RSI(14) 相對強弱",
+    "rsi_7": "RSI(7) 短期動量",
+    "macd_hist": "MACD 柱狀體",
+    "macd_cross": "MACD 交叉方向",
+    "adx_14": "ADX 趨勢強度",
+    "bb_pctb": "布林帶位置 %B",
+    "bb_width": "布林帶寬度（波動率）",
+    "ma20_dist": "與 20 日均線距離",
+    "ma60_dist": "與 60 日均線距離",
+    "ma120_dist": "與 120 日均線距離",
+    "atr_pct": "ATR 波動率",
+    "body_pct": "K 線實體比",
+    "upper_wick": "上影線比例",
+    "lower_wick": "下影線比例",
+    "dist_high_20": "距 20 日高點",
+    "dist_low_20": "距 20 日低點",
+    "above_st": "Supertrend 方向",
+    "roc_5": "5 日漲跌幅",
+    "roc_10": "10 日漲跌幅",
+    "roc_20": "20 日漲跌幅",
+    "mom_align": "多週期動量一致性",
+    "roc_accel": "動量加速度",
+    "vol_ratio_5_20": "成交量比（5/20 日）",
+    "vol_roc": "成交量變化率",
+    "obv_slope": "OBV 能量潮方向",
+    "pv_diverge": "價量背離信號",
+    "macro_sp500_roc5": "S&P500 5 日動量",
+    "macro_sox_roc5": "費城半導體 5 日動量",
+    "macro_vix": "VIX 恐慌指數",
+    "macro_vix_chg": "VIX 變化量",
+    "macro_dxy": "美元指數方向",
+    "macro_twd_chg": "台幣匯率變化",
+    "macro_btc_roc5": "BTC 5 日動量",
+    "macro_tnx": "美債 10Y 殖利率",
+    "macro_gold_roc5": "黃金 5 日動量",
+    "dow": "星期幾",
+    "month_sin": "月份（週期）",
+    "month_cos": "月份（週期）",
+}
+
 
 def _bar(pct: float, length: int = 10) -> str:
     filled = max(0, min(length, int(pct * length)))
@@ -164,9 +206,10 @@ def format_ml_report(result: dict) -> str:
         ])
 
     if result.get("top_features"):
-        lines.append("*特徵重要性 Top 5*：")
+        lines.append("*關鍵影響因子 Top 5*：")
         for i, (feat, imp) in enumerate(result["top_features"].items(), 1):
-            lines.append(f"  {i}. {feat} — {imp}")
+            zh_name = _FEATURE_ZH.get(feat, feat)
+            lines.append(f"  {i}. {zh_name} — 影響力 {imp}")
 
     lines.append(f"\n_模型訓練: {result.get('model_trained', 'N/A')[:10]}_")
 
