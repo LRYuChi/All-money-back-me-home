@@ -313,6 +313,7 @@ def calc_institutional_score() -> dict:
         # Options OI distribution
         opt_oi = deriv.get("options_oi", {})
         if "error" not in opt_oi and opt_oi:
+            factors["options_expiry"] = opt_oi.get("expiry", "")
             factors["max_call_strike"] = f"{opt_oi.get('max_call_strike', 0):,}"
             factors["max_call_oi"] = f"{opt_oi.get('max_call_oi', 0):,}"
             factors["max_put_strike"] = f"{opt_oi.get('max_put_strike', 0):,}"
@@ -609,8 +610,9 @@ def format_chips_report(result: dict) -> str:
         top5_put = f.get("top5_put", [])
 
         if top5_call or top5_put:
+            expiry_label = f.get("options_expiry", "")
             lines.append("")
-            lines.append("  _(僅統計價外 OTM 選擇權)_")
+            lines.append(f"  _(OTM 選擇權 [{expiry_label}])_")
 
         if top5_call:
             max_oi = max(item["oi"] for item in top5_call) if top5_call else 1

@@ -218,6 +218,27 @@ def fetch_options_max_oi() -> dict:
                 continue
 
             # Parse CSV: 交易日期,契約,到期月份,履約價,買賣權,...,未沖銷契約數,...
+            # Step 1: Find nearest expiry with most OI (exclude futures 'F')
+            from collections import defaultdict
+            expiry_oi_total = defaultdict(int)
+            for line in lines[1:]:
+                parts = line.split(",")
+                if len(parts) < 12:
+                    continue
+                expiry = parts[2].strip()
+                try:
+                    oi_val = int(parts[11].strip())
+                    expiry_oi_total[expiry] += oi_val
+                except (ValueError, TypeError):
+                    pass
+
+            # Pick the expiry with highest OI (excluding futures 'F' contracts)
+            option_expiries = {k: v for k, v in expiry_oi_total.items() if "F" not in k}
+            if not option_expiries:
+                continue
+            nearest_expiry = max(option_expiries, key=option_expiries.get)
+
+            # Step 2: Parse Call/Put OI for the nearest expiry only
             call_oi = {}
             put_oi = {}
 
@@ -225,13 +246,14 @@ def fetch_options_max_oi() -> dict:
                 parts = line.split(",")
                 if len(parts) < 12:
                     continue
+                if parts[2].strip() != nearest_expiry:
+                    continue
 
                 strike_str = parts[3].strip()
                 cp = parts[4].strip()
                 oi_str = parts[11].strip()
                 session = parts[17].strip() if len(parts) > 17 else ""
 
-                # Only count regular session
                 if "盤後" in session:
                     continue
 
@@ -269,6 +291,7 @@ def fetch_options_max_oi() -> dict:
 
                 result = {
                     "date": date_str,
+                    "expiry": nearest_expiry,
                     "current_price": current_price,
                     "max_call_strike": call_sorted[0][0] if call_sorted else 0,
                     "max_call_oi": call_sorted[0][1] if call_sorted else 0,
