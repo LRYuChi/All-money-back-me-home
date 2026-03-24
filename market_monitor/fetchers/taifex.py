@@ -241,27 +241,44 @@ def fetch_options_max_oi() -> dict:
                 except (ValueError, TypeError):
                     continue
 
-                if 15000 <= strike <= 30000 and oi > 0:
+                if 10000 <= strike <= 50000 and oi > 0:
                     if "買" in cp:
                         call_oi[strike] = call_oi.get(strike, 0) + oi
                     elif "賣" in cp:
                         put_oi[strike] = put_oi.get(strike, 0) + oi
 
             if call_oi and put_oi:
-                # Sort by OI descending
-                call_sorted = sorted(call_oi.items(), key=lambda x: x[1], reverse=True)
-                put_sorted = sorted(put_oi.items(), key=lambda x: x[1], reverse=True)
+                # Get current TAIEX price for OTM filtering
+                current_price = 0
+                try:
+                    import yfinance as yf
+                    taiex = yf.download("^TWII", period="1d", progress=False)
+                    if taiex is not None and len(taiex) > 0:
+                        current_price = int(float(taiex["Close"].iloc[-1]))
+                except Exception:
+                    # Estimate from strike midpoint
+                    all_s = sorted(set(list(call_oi.keys()) + list(put_oi.keys())))
+                    current_price = all_s[len(all_s) // 2] if all_s else 22000
+
+                # OTM filter: Call above current = resistance, Put below current = support
+                otm_call = {s: o for s, o in call_oi.items() if s > current_price}
+                otm_put = {s: o for s, o in put_oi.items() if s < current_price}
+
+                call_sorted = sorted(otm_call.items(), key=lambda x: x[1], reverse=True)
+                put_sorted = sorted(otm_put.items(), key=lambda x: x[1], reverse=True)
 
                 result = {
                     "date": date_str,
-                    "max_call_strike": call_sorted[0][0],
-                    "max_call_oi": call_sorted[0][1],
-                    "max_put_strike": put_sorted[0][0],
-                    "max_put_oi": put_sorted[0][1],
+                    "current_price": current_price,
+                    "max_call_strike": call_sorted[0][0] if call_sorted else 0,
+                    "max_call_oi": call_sorted[0][1] if call_sorted else 0,
+                    "max_put_strike": put_sorted[0][0] if put_sorted else 0,
+                    "max_put_oi": put_sorted[0][1] if put_sorted else 0,
                     "top5_call": [{"strike": s, "oi": o} for s, o in call_sorted[:5]],
                     "top5_put": [{"strike": s, "oi": o} for s, o in put_sorted[:5]],
-                    "total_call_oi": sum(call_oi.values()),
-                    "total_put_oi": sum(put_oi.values()),
+                    "total_call_oi": sum(otm_call.values()),
+                    "total_put_oi": sum(otm_put.values()),
+                    "otm_note": "僅統計價外選擇權 (OTM)",
                 }
 
                 logger.info("Options OI: max_call=%d(%d口) max_put=%d(%d口)",

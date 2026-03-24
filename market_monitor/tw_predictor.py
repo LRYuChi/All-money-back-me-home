@@ -604,25 +604,37 @@ def format_chips_report(result: dict) -> str:
         if f.get("pc_ratio_vol"):
             lines.append(f"  P/C Ratio (成交量): {f['pc_ratio_vol']}")
 
-        # Max OI strikes = support/resistance
-        if f.get("max_call_strike"):
-            lines.extend([
-                "",
-                f"  🔺 最大 Call OI: *{f['max_call_strike']}* 點 ({f['max_call_oi']} 口) ← 壓力",
-                f"  🔻 最大 Put OI:  *{f['max_put_strike']}* 點 ({f['max_put_oi']} 口) ← 支撐",
-            ])
-
-        # Top 5 OI distribution
+        # OTM OI distribution (like wantgoo)
         top5_call = f.get("top5_call", [])
         top5_put = f.get("top5_put", [])
+
+        if top5_call or top5_put:
+            lines.append("")
+            lines.append("  _(僅統計價外 OTM 選擇權)_")
+
         if top5_call:
-            lines.append("\n  *Call OI Top 5 (壓力區)*：")
+            max_oi = max(item["oi"] for item in top5_call) if top5_call else 1
+            lines.extend([
+                "",
+                f"  🔺 *壓力區 (OTM Call)*",
+                f"  最大壓力: *{f.get('max_call_strike', '')}* 點 ({f.get('max_call_oi', '')} 口)",
+            ])
             for item in top5_call[:5]:
-                lines.append(f"    {item['strike']:,} 點: {item['oi']:,} 口")
+                bar_len = max(1, int(item["oi"] / max_oi * 10))
+                bar = "█" * bar_len + "░" * (10 - bar_len)
+                lines.append(f"    {item['strike']:>6,}: {bar} {item['oi']:,}")
+
         if top5_put:
-            lines.append("\n  *Put OI Top 5 (支撐區)*：")
+            max_oi = max(item["oi"] for item in top5_put) if top5_put else 1
+            lines.extend([
+                "",
+                f"  🔻 *支撐區 (OTM Put)*",
+                f"  最大支撐: *{f.get('max_put_strike', '')}* 點 ({f.get('max_put_oi', '')} 口)",
+            ])
             for item in top5_put[:5]:
-                lines.append(f"    {item['strike']:,} 點: {item['oi']:,} 口")
+                bar_len = max(1, int(item["oi"] / max_oi * 10))
+                bar = "█" * bar_len + "░" * (10 - bar_len)
+                lines.append(f"    {item['strike']:>6,}: {bar} {item['oi']:,}")
 
     # Signals
     signals = f.get("derivatives_signals", [])
