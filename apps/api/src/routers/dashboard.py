@@ -716,3 +716,88 @@ async def get_guard_status():
             pass
 
     return result
+
+
+@router.get("/equity-curve")
+async def get_equity_curve():
+    """資金曲線 — 從 Freqtrade 交易記錄計算累積損益。"""
+    trades = _ft_api("/api/v1/trades?limit=500")
+    if not trades:
+        return {"curve": [], "total_profit": 0}
+
+    trade_list = trades.get("trades", []) if isinstance(trades, dict) else trades
+    curve = []
+    cumulative = 0
+    for t in trade_list:
+        if t.get("close_date") and t.get("profit_abs") is not None:
+            cumulative += t["profit_abs"]
+            curve.append({
+                "date": t["close_date"],
+                "profit": round(cumulative, 2),
+                "trade_profit": round(t["profit_abs"], 2),
+                "pair": t.get("pair", ""),
+                "side": "short" if t.get("is_short") else "long",
+            })
+
+    return {"curve": curve, "total_profit": round(cumulative, 2)}
+
+
+@router.get("/supertrend-signals")
+async def get_supertrend_signals():
+    """Supertrend 4L 即時信號 — 7 幣種的四層方向 + 品質分數。"""
+    pairs = ["BTC/USDT:USDT", "ETH/USDT:USDT", "AVAX/USDT:USDT",
+             "NEAR/USDT:USDT", "ATOM/USDT:USDT", "ADA/USDT:USDT", "DOT/USDT:USDT"]
+
+    signals = []
+    for pair in pairs:
+        candles = _ft_api(f"/api/v1/pair_candles?pair={pair}&timeframe=15m&limit=1")
+        if not candles:
+            continue
+        cols = candles.get("columns", [])
+        rows = candles.get("data", [])
+        if not rows:
+            continue
+        r = dict(zip(cols, rows[-1]))
+
+        st_15m = int(r.get("st_trend", 0))
+        st_1h = int(r.get("st_1h", 0))
+        st_1d = int(r.get("st_1d", 0))
+        dir_4h = float(r.get("dir_4h_score", 0))
+        adx = round(float(r.get("adx", 0)), 1)
+        tq = round(float(r.get("trend_quality", 0)), 2)
+        ab = bool(r.get("all_bullish", False))
+        ae = bool(r.get("all_bearish", False))
+
+        if ab and st_15m == 1:
+            status = "confirmed_long"
+        elif ae and st_15m == -1:
+            status = "confirmed_short"
+        elif ab and st_15m == -1:
+            status = "scout_long"
+        elif ae and st_15m == 1:
+            status = "scout_short"
+        elif ab:
+            status = "bullish"
+        elif ae:
+            status = "bearish"
+        else:
+            status = "neutral"
+
+        signals.append({
+            "pair": pair,
+            "symbol": pair.split("/")[0],
+            "close": round(float(r.get("close", 0)), 2),
+            "st_15m": st_15m,
+            "st_1h": st_1h,
+            "st_1d": st_1d,
+            "dir_4h": round(dir_4h, 2),
+            "adx": adx,
+            "trend_quality": tq,
+            "all_bullish": ab,
+            "all_bearish": ae,
+            "status": status,
+            "adx_ok": adx > 25,
+            "quality_ok": tq > 0.5,
+        })
+
+    return {"signals": signals, "timestamp": datetime.utcnow().isoformat()}

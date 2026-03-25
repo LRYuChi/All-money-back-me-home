@@ -10,6 +10,8 @@ import { MacroPanel } from '@/components/dashboard/MacroPanel';
 import { BotStatus } from '@/components/dashboard/BotStatus';
 import { HeatMap } from '@/components/charts/HeatMap';
 import { CryptoEnvPanel } from '@/components/dashboard/CryptoEnvPanel';
+import EquityCurve from '@/components/dashboard/EquityCurve';
+import SupertrendSignals from '@/components/dashboard/SupertrendSignals';
 
 interface DashboardData {
   timestamp: string;
@@ -156,7 +158,13 @@ export default function DashboardPage() {
           <MacroPanel data={data.macro} />
         </div>
 
-        {/* Row 3: Crypto Environment + Correlations */}
+        {/* Row 3: Supertrend Signals + Equity Curve */}
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+          <SupertrendSignals />
+          <EquityCurve />
+        </div>
+
+        {/* Row 4: Crypto Environment + Correlations */}
         <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
           <CryptoEnvPanel data={data.crypto_env || {}} />
           <div className="rounded-lg border border-gray-800 bg-gray-900/50 p-3">
