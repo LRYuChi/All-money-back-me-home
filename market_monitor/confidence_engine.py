@@ -270,6 +270,39 @@ class MacroSandbox:
         else:
             scores["oil"] = 0.5
 
+        # --- Institutional MCP data (only when API keys configured) ---
+        try:
+            from market_monitor.mcp_data_fetcher import (
+                fetch_lseg_yield_curve, fetch_lseg_rate_expectations,
+                fetch_moodys_credit_signals,
+            )
+
+            # 2s10s Yield Curve Spread (inverted = recession = bearish)
+            yc = fetch_lseg_yield_curve()
+            if yc is not None:
+                spread = yc["spread_2s10s"]
+                if spread > 0.5:
+                    scores["yield_curve_2s10s"] = 0.7
+                elif spread > 0:
+                    scores["yield_curve_2s10s"] = 0.55
+                elif spread > -0.5:
+                    scores["yield_curve_2s10s"] = 0.35
+                else:
+                    scores["yield_curve_2s10s"] = 0.15
+
+            # Fed Funds Rate Direction (easing = bullish for risk)
+            rates = fetch_lseg_rate_expectations()
+            if rates is not None:
+                direction_map = {"easing": 0.7, "hold": 0.5, "tightening": 0.25}
+                scores["fed_rate_direction"] = direction_map.get(rates["rate_direction"], 0.5)
+
+            # Credit Spread Direction (upgrades = tightening = bullish)
+            credit = fetch_moodys_credit_signals()
+            if credit is not None:
+                scores["credit_spreads"] = credit["migration_score"]
+        except ImportError:
+            pass  # mcp_data_fetcher not available
+
         return scores
 
 
@@ -314,6 +347,25 @@ class SentimentSandbox:
                 scores["gs_rai"] = 0.5
         else:
             scores["gs_rai"] = 0.5
+
+        # --- Institutional MCP data (only when API keys configured) ---
+        try:
+            from market_monitor.mcp_data_fetcher import (
+                fetch_mt_newswires_macro, fetch_factset_consensus,
+            )
+
+            # Real-time macro news sentiment
+            mt_news = fetch_mt_newswires_macro()
+            if mt_news is not None:
+                scores["macro_news"] = mt_news["macro_sentiment"]
+
+            # Earnings revision breadth (positive = bullish)
+            consensus = fetch_factset_consensus()
+            if consensus is not None:
+                breadth = consensus["revision_breadth"]  # -1 to 1
+                scores["earnings_revisions"] = float(np.clip(0.5 + breadth * 0.3, 0.2, 0.8))
+        except ImportError:
+            pass  # mcp_data_fetcher not available
 
         return scores
 
@@ -676,7 +728,22 @@ class GlobalConfidenceEngine:
                 "haven": {k: round(v, 4) for k, v in haven_scores.items()},
             },
             "guidance": self._regime_guidance(regime),
+            "institutional_sources": self._get_institutional_status(all_factors),
             "timestamp": (dt or datetime.now()).isoformat(),
+        }
+
+    @staticmethod
+    def _get_institutional_status(all_factors: dict) -> dict[str, bool]:
+        """Check which institutional MCP sources contributed to this calculation."""
+        institutional_factors = {
+            "lseg": {"yield_curve_2s10s", "fed_rate_direction"},
+            "moodys": {"credit_spreads"},
+            "mt_newswires": {"macro_news"},
+            "factset": {"earnings_revisions"},
+        }
+        return {
+            source: bool(factor_names & set(all_factors.keys()))
+            for source, factor_names in institutional_factors.items()
         }
 
     @staticmethod

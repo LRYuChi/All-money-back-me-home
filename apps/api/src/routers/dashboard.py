@@ -58,6 +58,7 @@ def _get_confidence() -> dict:
             "sandboxes": result["sandboxes"],
             "factors": result["factors"],
             "guidance": result["guidance"],
+            "institutional_sources": result.get("institutional_sources", {}),
         }
     except Exception as e:
         logger.warning("Confidence engine error: %s", e)
@@ -317,7 +318,8 @@ def _get_tw_market() -> dict:
             result["sectors"] = sectors
 
         # Watchlist fundamentals
-        fundamentals = twse.get_watchlist_fundamentals(["2330", "2317", "2454", "2382"])
+        watchlist_codes = ["2330", "2317", "2454", "2382"]
+        fundamentals = twse.get_watchlist_fundamentals(watchlist_codes)
         if fundamentals:
             result["fundamentals"] = [
                 {
@@ -329,6 +331,34 @@ def _get_tw_market() -> dict:
                 }
                 for f in fundamentals
             ]
+
+        # Institutional investors (三大法人) — market-level in 億元, per-stock in shares
+        try:
+            inst = twse.get_institutional_daily()
+            if inst:
+                result["institutional"] = {
+                    "date": inst.get("date", ""),
+                    "foreign": inst.get("foreign", {}),    # 億元
+                    "trust": inst.get("trust", {}),        # 億元
+                    "dealer": inst.get("dealer", {}),      # 億元
+                    "total": inst.get("total", {}),        # 億元
+                }
+                # Per-stock institutional data for watchlist (in shares)
+                inst_stocks = twse.get_institutional_for_stocks(watchlist_codes)
+                if inst_stocks:
+                    result["institutional_stocks"] = [
+                        {
+                            "code": s["code"],
+                            "name": s["name"],
+                            "foreign_net": s["foreign_net"],
+                            "trust_net": s["trust_net"],
+                            "dealer_net": s["dealer_net"],
+                            "total_net": s["total_net"],
+                        }
+                        for s in inst_stocks
+                    ]
+        except Exception as e:
+            logger.warning("Institutional data error: %s", e)
 
         return result
     except Exception as e:

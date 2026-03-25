@@ -99,6 +99,15 @@ def fetch_market_data() -> dict:
         fundamentals = twse.get_watchlist_fundamentals(watchlist_codes)
         if fundamentals:
             data["_tw_fundamentals"] = fundamentals
+
+        # Institutional investors (三大法人)
+        inst = twse.get_institutional_daily()
+        if inst:
+            data["_tw_institutional"] = inst
+            # Per-stock institutional data for watchlist
+            inst_stocks = twse.get_institutional_for_stocks(watchlist_codes)
+            if inst_stocks:
+                data["_tw_inst_stocks"] = inst_stocks
     except Exception as e:
         logger.warning("TWSE OpenAPI failed: %s", e)
 
@@ -213,6 +222,59 @@ def generate_report(data: dict) -> str:
             pb = f"PB:{f['pb_ratio']:.2f}" if f.get("pb_ratio") else "PB:—"
             dy = f"殖利率:{f['dividend_yield']:.2f}%" if f.get("dividend_yield") else "殖利率:—"
             lines.append(f"  {f['name']}({f['code']}): {pe} | {pb} | {dy}")
+
+    # TW Institutional Investors (三大法人)
+    tw_inst = data.get("_tw_institutional", {})
+    if tw_inst:
+        lines.append("")
+        lines.append("【三大法人買賣超】")
+        foreign = tw_inst.get("foreign", {})
+        trust = tw_inst.get("trust", {})
+        dealer = tw_inst.get("dealer", {})
+        total = tw_inst.get("total", {})
+
+        def _sign_yi(v: float) -> str:
+            """Format 億元 with sign."""
+            return f"+{v:,.2f}" if v > 0 else f"{v:,.2f}"
+
+        def _sign_lots(v: float) -> str:
+            """Format 張 with sign."""
+            return f"+{v:,.0f}" if v > 0 else f"{v:,.0f}"
+
+        if foreign:
+            lines.append(
+                f"  外資: {_sign_yi(foreign.get('net', 0))} 億"
+                f" (買 {foreign.get('buy', 0):,.2f} / 賣 {foreign.get('sell', 0):,.2f})"
+            )
+        if trust:
+            lines.append(
+                f"  投信: {_sign_yi(trust.get('net', 0))} 億"
+                f" (買 {trust.get('buy', 0):,.2f} / 賣 {trust.get('sell', 0):,.2f})"
+            )
+        if dealer:
+            lines.append(
+                f"  自營: {_sign_yi(dealer.get('net', 0))} 億"
+                f" (買 {dealer.get('buy', 0):,.2f} / 賣 {dealer.get('sell', 0):,.2f})"
+            )
+        if total:
+            lines.append(f"  合計: {_sign_yi(total.get('net', 0))} 億")
+
+        # Watchlist institutional detail (per-stock, in 張)
+        inst_stocks = data.get("_tw_inst_stocks", [])
+        if inst_stocks:
+            lines.append("")
+            lines.append("【觀察清單籌碼】")
+            for s in inst_stocks:
+                fn = s.get("foreign_net", 0)
+                tn = s.get("trust_net", 0)
+                # Display in 張 (lots of 1000 shares)
+                fn_lots = fn / 1000
+                tn_lots = tn / 1000
+                emoji = "🟢" if fn > 0 and tn > 0 else "🔴" if fn < 0 and tn < 0 else "🟡"
+                lines.append(
+                    f"  {emoji} {s['name']}({s['code']}): "
+                    f"外資 {_sign_lots(fn_lots)} 張 | 投信 {_sign_lots(tn_lots)} 張"
+                )
 
     # US Stocks
     lines.append("")
