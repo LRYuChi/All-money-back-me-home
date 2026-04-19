@@ -72,6 +72,10 @@ node_modules/
 
 # Runtime data
 data/paper_trades.json
+
+# Smart Money large caches (~28MB)
+data/hl_leaderboard.json
+data/smart_money/
 data/backtest/
 
 # Docker
