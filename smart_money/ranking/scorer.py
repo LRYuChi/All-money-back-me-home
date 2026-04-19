@@ -29,15 +29,20 @@ def _clip(x: float, lo: float, hi: float) -> float:
 
 
 def norm_sortino(x: float) -> float:
-    """Sortino [-3, 3] → [0, 1]; beyond ±3 = clamp."""
-    return (_clip(x, -3.0, 3.0) + 3.0) / 6.0
+    """Sortino [-2, 2] → [0, 1]; beyond ±2 = clamp.
+    Iteration 2: 收緊至 ±2,避免 grid bot 的極端 Sortino (e.g. 27+) 直接拿滿分.
+    真實 discretionary trader 的 Sortino 多落在 0.5 ~ 2.5.
+    """
+    return (_clip(x, -2.0, 2.0) + 2.0) / 4.0
 
 
 def norm_profit_factor(x: float) -> float:
-    """PF [0, ∞) → [0, 1].
-    PF = 1 → 0.5;PF = 2 → ~0.8;PF = 3 → ~0.9;PF = 10(上限) → ~0.97
+    """PF [0, 5) → [0, 1].
+    Iteration 2: 上限從 10 降至 5.PF=5 已屬頂級 discretionary trader;
+    > 5 多為 grid bot 或小樣本過擬合(e.g. 收到 PF=186 的就是 bot).
+    PF = 1 → 0.39, PF = 2 → 0.61, PF = 3 → 0.77, PF = 5+ → 1.0
     """
-    return _clip(math.log1p(max(0.0, x)) / math.log1p(10), 0.0, 1.0)
+    return _clip(math.log1p(max(0.0, x)) / math.log1p(5), 0.0, 1.0)
 
 
 def norm_holding_cv(x: float) -> float:
@@ -47,6 +52,24 @@ def norm_holding_cv(x: float) -> float:
     target = 1.5
     spread = 1.2
     return max(0.0, 1.0 - ((x - target) / spread) ** 2)
+
+
+def bot_penalty(holding_cv: float, *, threshold: float = 0.5) -> float:
+    """顯性 bot penalty (Iteration 2).
+
+    cv < threshold 時線性扣分:
+      cv = 0     → penalty = 1.0 (最重)
+      cv = 0.25  → penalty = 0.5
+      cv = 0.5+  → penalty = 0.0
+
+    與 norm_holding_cv 的 bell curve 不同:
+      - bell 是 "你拿多少正分",cv=0 時拿 0 分
+      - bot_penalty 是 "你被扣多少",cv=0 時扣滿
+    合起來:討喜的 cv 有小獎勵,極端 bot-like 有大懲罰.
+    """
+    if holding_cv >= threshold:
+        return 0.0
+    return 1.0 - (holding_cv / threshold)
 
 
 # ------------------------------------------------------------------ #
@@ -85,7 +108,11 @@ def score_wallet(
         "holding_time_cv":  norm_holding_cv(metrics.holding_time_cv),
         "regime_stability": metrics.regime_stability,       # already 0-1
         "martingale_penalty": metrics.martingale_penalty,   # already 0-1 (扣分)
+        "bot_penalty":       bot_penalty(metrics.holding_time_cv),  # cv < 0.5 扣分
     }
+
+    # Total negative-weight term (backward-compat with old RankingSettings missing w_bot_penalty)
+    w_bot = getattr(cfg, "w_bot_penalty", 0.0)
 
     # Weighted contributions
     contributions = {
@@ -95,6 +122,7 @@ def score_wallet(
         "holding_time_cv":  cfg.w_holding_cv * components["holding_time_cv"],
         "regime_stability": cfg.w_regime_stability * components["regime_stability"],
         "martingale_penalty": -cfg.w_martingale_penalty * components["martingale_penalty"],
+        "bot_penalty":       -w_bot * components["bot_penalty"],
     }
 
     raw_score = sum(contributions.values())
@@ -104,11 +132,10 @@ def score_wallet(
         cfg.w_sortino + cfg.w_profit_factor + cfg.w_dd_recovery
         + cfg.w_holding_cv + cfg.w_regime_stability
     )
-    # max score 是所有正項 = positive_weight_sum,min 是 -w_martingale_penalty
-    # 為了 UI 好讀,把 score shift 到 [0, 1]:
-    #   final = (raw_score + w_martingale_penalty) / (positive_weight_sum + w_martingale_penalty)
-    denom = positive_weight_sum + cfg.w_martingale_penalty
-    final = (raw_score + cfg.w_martingale_penalty) / denom if denom > 0 else 0.0
+    # max score 是所有正項 = positive_weight_sum,min 是 -(w_mart + w_bot)
+    total_penalty_weight = cfg.w_martingale_penalty + w_bot
+    denom = positive_weight_sum + total_penalty_weight
+    final = (raw_score + total_penalty_weight) / denom if denom > 0 else 0.0
     final = _clip(final, 0.0, 1.0)
 
     return ScoreBreakdown(
@@ -134,6 +161,7 @@ def score_and_rank(
 
 __all__ = [
     "ScoreBreakdown",
+    "bot_penalty",
     "norm_holding_cv",
     "norm_profit_factor",
     "norm_sortino",

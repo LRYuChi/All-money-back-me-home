@@ -75,9 +75,26 @@ def main(argv: list[str] | None = None) -> int:
         min_avg_holding_seconds=settings.ranking.min_avg_holding_seconds,
     )
 
+    # Perf: HFT bots 有 20k-50k trades 單次 fetch 會卡爆 pgbouncer.
+    # 用 count_trades (cheap) 先把「不可能通過 HFT filter」的 wallet 過濾掉.
+    # 假設 avg holding ≥ 600s,單日最多 144 closes → 365 天最多 52,560.
+    # 取 30,000 作 upper bound(給一些彈性,但擋掉 > 50k 的極端 bot).
+    MAX_TRADES_FOR_CONSIDERATION = 30_000
+
     eligible: list = []
     filtered_out = 0
+    skipped_hft = 0
     for w in wallets:
+        n_trades = store.count_trades(w.id)
+        if n_trades > MAX_TRADES_FOR_CONSIDERATION:
+            logger.debug("pre-filter: %s skipped (%d trades = HFT bot)", w.address, n_trades)
+            skipped_hft += 1
+            continue
+        if n_trades < settings.ranking.min_sample_size:
+            logger.debug("pre-filter: %s skipped (%d < sample_size floor)", w.address, n_trades)
+            filtered_out += 1
+            continue
+
         trades = store.get_trades(w.id, until=snapshot_dt)
         verdict = apply_filters(trades, thresholds=thresholds)
         if not verdict.passed:
@@ -86,6 +103,9 @@ def main(argv: list[str] | None = None) -> int:
             continue
         metrics = compute_all(trades)
         eligible.append((w, metrics))
+
+    logger.info("  pre-filter: skipped_hft=%d filtered_early=%d remaining=%d",
+                skipped_hft, filtered_out, len(eligible))
 
     logger.info("  eligible=%d filtered_out=%d", len(eligible), filtered_out)
     if not eligible:

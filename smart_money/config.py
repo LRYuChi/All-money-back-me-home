@@ -32,18 +32,21 @@ class RankingSettings(BaseSettings):
     model_config = SettingsConfigDict(env_prefix="SM_RANKING_", extra="ignore")
 
     # 硬門檻 (filters.py)
-    min_sample_size: int = 50           # 最少已平倉交易筆數
+    # Iteration 2 (2026-04-20): 提高 HFT 過濾標準以淘汰 grid bot
+    min_sample_size: int = 100              # 從 50 → 100,避免小樣本過擬合
     min_active_days: int = 30
     max_symbol_concentration: float = 0.80   # 單幣種佔比上限
-    min_avg_holding_seconds: int = 300       # 過濾 HFT/bot
+    min_avg_holding_seconds: int = 600       # 從 300 → 600 (10min),擋 HFT
 
     # 權重 (scorer.py) — 總和不強制為 1,scorer 內部 normalize
-    w_sortino: float = 0.25
-    w_profit_factor: float = 0.20
+    # Iteration 2: 調低 Sortino/PF 上限避免 bot 極端值灌分;提高 cv 權重與 bot-penalty
+    w_sortino: float = 0.22
+    w_profit_factor: float = 0.18
     w_dd_recovery: float = 0.15
-    w_holding_cv: float = 0.10
+    w_holding_cv: float = 0.15               # 從 0.10 → 0.15,bot 特徵更重
     w_regime_stability: float = 0.15
     w_martingale_penalty: float = 0.20       # 扣分權重
+    w_bot_penalty: float = 0.15              # 新增:cv < 0.5 直接扣分
 
     # 排名輸出
     top_n: int = 50

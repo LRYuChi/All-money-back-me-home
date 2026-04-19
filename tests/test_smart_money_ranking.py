@@ -458,9 +458,11 @@ def test_score_wallet_breakdown_sums_to_raw():
     # contributions 加總 + 重整後 == score (in [0,1])
     raw = sum(sb.contributions.values())
     cfg = RankingSettings()
-    denom = (cfg.w_sortino + cfg.w_profit_factor + cfg.w_dd_recovery +
-             cfg.w_holding_cv + cfg.w_regime_stability + cfg.w_martingale_penalty)
-    expected = (raw + cfg.w_martingale_penalty) / denom
+    positive = (cfg.w_sortino + cfg.w_profit_factor + cfg.w_dd_recovery +
+                cfg.w_holding_cv + cfg.w_regime_stability)
+    negative = cfg.w_martingale_penalty + getattr(cfg, "w_bot_penalty", 0.0)
+    denom = positive + negative
+    expected = (raw + negative) / denom
     assert sb.score == pytest.approx(max(0, min(1, expected)))
 
 
