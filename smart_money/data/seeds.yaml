@@ -1,0 +1,14 @@
+# Seed wallets for Hyperliquid scanner (Phase 1).
+#
+# This file ships empty by design.  Add wallet addresses here that you want
+# the backfill job to include.  Phase 4 adds automatic WS-discovery of active
+# addresses, which then become the canonical seed set.
+#
+# Format:
+#   wallets:
+#     - "0xabc...def"                       # shorthand
+#     - address: "0x123...456"              # with metadata
+#       name:    "BigWhaleA"
+#       tags:    ["known_smart_money"]
+
+wallets: []
