@@ -1,9 +1,16 @@
 # Smart Money 跟單系統 — 架構重構遷移計畫
 
 **起草日期**: 2026-04-19
-**狀態**: 🟡 Draft — 等使用者逐行審核
+**狀態**: ✅ P0-P3 實作完成(code-level);🟡 P3 gate 實跑需真實 HL 資料驗證
 **資金規模**: $1,000 USDT(上線後 2-4 週內逐步到位)
 **執行版本**: v1.0
+
+## Progress Log (最新在最前)
+
+- **2026-04-19 P3 complete**:backtest/validator + reporter + cli/backtest;12 tests + end-to-end smoke pass。`scripts/smart_money_smoke.py` 在合成資料上 3/3 cutoffs 通過 gate,證明 pipeline 全線可跑。
+- **2026-04-19 P2 complete**:ranking/filters + 6 metrics + scorer + cli/rank;44 tests 覆蓋 determinism / edge cases / healthy beats gambler。
+- **2026-04-19 P1 complete**:scanner/hl_client + historical + seeds + store (InMemory + Supabase) + cli/scan;29 tests 覆蓋 pagination / idempotency / resume / error recovery。
+- **2026-04-19 P0 complete**:skeleton + migration plan + branch `feat/smart-money-v1`。
 
 ---
 
