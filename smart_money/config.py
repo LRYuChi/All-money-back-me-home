@@ -17,6 +17,13 @@ from typing import Literal
 from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
+# Auto-load .env at import time so CLIs don't need explicit load_dotenv()
+try:
+    from dotenv import load_dotenv
+    load_dotenv()
+except ImportError:
+    pass
+
 
 # ------------------------------------------------------------------ #
 # 排名演算法 thresholds (Phase 2/3 會實際讀取)
@@ -88,7 +95,10 @@ class Settings(BaseSettings):
     okx_api_secret: str = Field(default="", alias="OKX_API_SECRET")
     okx_api_passphrase: str = Field(default="", alias="OKX_API_PASSPHRASE")
 
-    # Supabase (沿用現有)
+    # Supabase — 兩種連線擇一:
+    #   DATABASE_URL  (推薦,直連 postgres + pgbouncer pooler,bulk upsert 快)
+    #   SUPABASE_URL + SUPABASE_SERVICE_KEY  (REST via supabase-py, 較慢)
+    database_url: str = Field(default="", alias="DATABASE_URL")
     supabase_url: str = Field(default="", alias="SUPABASE_URL")
     supabase_service_key: str = Field(default="", alias="SUPABASE_SERVICE_KEY")
 
