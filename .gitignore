@@ -74,5 +74,10 @@ node_modules/
 data/paper_trades.json
 data/backtest/
 
+# Polymarket runtime
+data/polymarket.db
+data/polymarket.db-shm
+data/polymarket.db-wal
+
 # Docker
 docker-compose.override.yml

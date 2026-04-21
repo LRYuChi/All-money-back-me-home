@@ -1,0 +1,377 @@
+# Polymarket 系統預先登記（Pre-Registration）憲法
+#
+# 規則：
+#   1. 所有需要統計判斷的門檻值都必須在此登記。
+#   2. 策略代碼禁止 inline hardcode 這些值，一律從本檔讀取。
+#   3. 修改必須透過 git commit 進行，commit message 說明「舊值 → 新值 + 理由」。
+#   4. 每個值都有 set_at（設定日）、rationale（理由）、next_review（可重評日）。
+#   5. 未到 next_review 之前，不得以「觀察結果」作為修改理由。
+#
+# 與 docs/polymarket/architecture.md 第二章為同步關係，衝突時以本檔為準。
+
+meta:
+  schema_version: 1
+  document_version: "1.0"
+  last_updated: "2026-04-21"
+  maintainer: "persempre080709@gmail.com"
+
+# -----------------------------------------------------------------------------
+# § 1. 白名單門檻 — 鯨魚分層
+# -----------------------------------------------------------------------------
+whale_tiers:
+  A:
+    min_trades_90d:
+      value: 20
+      set_at: "2026-04-21"
+      rationale: "統計顯著性需要的最低交易筆數，等於每週 > 1.5 筆"
+      next_review: "2026-07-21"
+    min_win_rate:
+      value: 0.60
+      set_at: "2026-04-21"
+      rationale: "顯著高於市場平均，但不至於高到只選出極少數倖存者"
+      next_review: "2026-07-21"
+    min_cumulative_pnl_usdc:
+      value: 10000
+      set_at: "2026-04-21"
+      rationale: "足以支撐 60% 勝率非運氣的財務證據"
+      next_review: "2026-07-21"
+    min_avg_trade_size_usdc:
+      value: 500
+      set_at: "2026-04-21"
+      rationale: "過濾掉散戶尺度的噪音交易"
+      next_review: "2026-07-21"
+    push_strategy: "realtime_high_priority"
+
+  B:
+    min_trades_90d:
+      value: 15
+      set_at: "2026-04-21"
+      rationale: "介於 A 和 C 之間的中間層"
+      next_review: "2026-07-21"
+    min_win_rate:
+      value: 0.55
+      set_at: "2026-04-21"
+      rationale: "仍顯著優於隨機但放寬選擇範圍"
+      next_review: "2026-07-21"
+    min_cumulative_pnl_usdc:
+      value: 5000
+      set_at: "2026-04-21"
+      rationale: "A 的一半"
+      next_review: "2026-07-21"
+    min_avg_trade_size_usdc:
+      value: 250
+      set_at: "2026-04-21"
+      rationale: "A 的一半"
+      next_review: "2026-07-21"
+    push_strategy: "realtime_low_priority"
+
+  C:
+    min_trades_90d:
+      value: 10
+      set_at: "2026-04-21"
+      rationale: "累積足夠觀察樣本的最低門檻"
+      next_review: "2026-07-21"
+    min_win_rate:
+      value: 0.50
+      set_at: "2026-04-21"
+      rationale: "保本線，主要用作廣義情報觀察"
+      next_review: "2026-07-21"
+    min_cumulative_pnl_usdc:
+      value: 2000
+      set_at: "2026-04-21"
+      rationale: "C 層：小規模活躍交易者"
+      next_review: "2026-07-21"
+    min_avg_trade_size_usdc:
+      value: 100
+      set_at: "2026-04-21"
+      rationale: "排除灰塵交易"
+      next_review: "2026-07-21"
+    push_strategy: "daily_digest"
+
+  # 穩定性後過濾：防止「後 30 天爆走但前 60 天爛」的倖存者偏差
+  stability_filter:
+    segment_count:
+      value: 3
+      set_at: "2026-04-21"
+      rationale: "將 90 天切成 3 段 30 天做時間切片驗證"
+      next_review: "2026-07-21"
+    min_segment_win_rate_ratio:
+      value: 0.85
+      set_at: "2026-04-21"
+      rationale: "每段勝率必須 ≥ 層級勝率 × 0.85，允許 15% 偏差"
+      next_review: "2026-07-21"
+
+# -----------------------------------------------------------------------------
+# § 2. 晉升條件 — 策略從紙上晉升到 Phase 3
+# -----------------------------------------------------------------------------
+strategy_promotion:
+  # 主要指標：Brier Score（越低越好）
+  brier_score:
+    max_threshold:
+      value: 0.22
+      set_at: "2026-04-21"
+      rationale: "完全隨機約 0.25、市場本身約 0.18-0.20、優秀策略約 0.15。0.22 是優於市場的保守門檻"
+      next_review: "2026-07-21"
+    formula: "(1/N) × Σ(p_i - o_i)²，p_i 為進場時隱含機率，o_i 為 0 或 1 實際結果"
+    scope: "only settled trades"
+
+  # 輔助指標：校準誤差（用於視覺化與解釋，非硬門檻）
+  calibration_error:
+    max_threshold:
+      value: 0.08
+      set_at: "2026-04-21"
+      rationale: "加權絕對差 8% 是可接受的校準水準"
+      next_review: "2026-07-21"
+    buckets: [[0, 0.2], [0.2, 0.4], [0.4, 0.6], [0.6, 0.8], [0.8, 1.0]]
+    min_samples_per_bucket:
+      value: 10
+      set_at: "2026-04-21"
+      rationale: "少於 10 筆的桶統計不穩，排除於 CE 計算"
+      next_review: "2026-07-21"
+
+  # 存活性：紙上資金曲線最大回撤
+  survival:
+    max_drawdown_ratio:
+      value: 0.25
+      set_at: "2026-04-21"
+      rationale: "對應真實交易熔斷 10%，留 2.5× 安全邊際"
+      next_review: "2026-07-21"
+    reset_on_breach: true
+
+  # 樣本量：時間與交易數都必須滿足
+  sample_size:
+    min_settled_trades:
+      value: 50
+      set_at: "2026-04-21"
+      rationale: "統計上區分技能與運氣的最低門檻"
+      next_review: "2026-07-21"
+    min_observation_days:
+      value: 60
+      set_at: "2026-04-21"
+      rationale: "確保樣本跨越至少 2 個典型結算週期"
+      next_review: "2026-07-21"
+    logic: "AND"  # 兩個都要滿足
+
+  # 策略間獨立性：信號方向一致率
+  signal_concordance:
+    comparison_scope: "actual_entries_only"
+    time_window_hours:
+      value: 72
+      set_at: "2026-04-21"
+      rationale: "超過 72 小時的同方向訊號視為獨立決策"
+      next_review: "2026-07-21"
+    thresholds:
+      independent_max:
+        value: 0.50
+        set_at: "2026-04-21"
+        rationale: "隨機期望值約 50%"
+        next_review: "2026-07-21"
+      partial_overlap_max:
+        value: 0.70
+        set_at: "2026-04-21"
+        rationale: "50-70% 部分重疊，允許並存但降權 0.5"
+        next_review: "2026-07-21"
+      partial_weight_multiplier:
+        value: 0.5
+        set_at: "2026-04-21"
+        rationale: "部分重疊策略的信號權重打五折"
+        next_review: "2026-07-21"
+
+# -----------------------------------------------------------------------------
+# § 3. 資本階梯 — Phase 3 真實交易資金
+# -----------------------------------------------------------------------------
+capital_ladder:
+  month_1:
+    capital_usdc:
+      value: 50
+      set_at: "2026-04-21"
+      rationale: "壓力測試系統對接，非為盈利。金額小到 PnL 變異不影響判斷"
+      next_review: "2026-07-21"
+    purpose: "stress_test_infrastructure"
+    advance_conditions:
+      min_real_fills: 10
+      max_idempotency_violations: 0
+      circuit_breaker_test_required: true
+      actual_slippage_vs_expected_ratio_max:
+        value: 1.5
+        set_at: "2026-04-21"
+        rationale: "實際滑點不得超過紙上預期 1.5x"
+        next_review: "2026-07-21"
+    expected_pnl_range_usdc: [-10, 10]
+
+  month_2:
+    capital_usdc:
+      value: 200
+      set_at: "2026-04-21"
+      rationale: "4× 前階，足以產生有意義的樣本但仍在小風險區"
+      next_review: "2026-07-21"
+    purpose: "detect_model_drift"
+    advance_conditions:
+      drift_execution_layer_pass: true
+      drift_signal_layer_pass: true
+
+  month_3:
+    capital_usdc:
+      value: 500
+      set_at: "2026-04-21"
+      rationale: "2.5× 前階，開始能驗證信號的期望值假設"
+      next_review: "2026-07-21"
+    purpose: "validate_signal_edge"
+    advance_conditions:
+      cumulative_pnl_positive: true  # 三個月合計
+
+  month_4_plus:
+    max_scale_ratio_per_month:
+      value: 2.0
+      set_at: "2026-04-21"
+      rationale: "單月加碼最多 2×，防止過度曝險"
+      next_review: "2026-07-21"
+    max_total_capital_as_daily_volume_ratio:
+      value: 0.01
+      set_at: "2026-04-21"
+      rationale: "總資金不超過單市場 30 日均量 1%，避免自己推動價格"
+      next_review: "2026-07-21"
+
+  # 降階觸發（自動執行）
+  demotion_triggers:
+    monthly_pnl_threshold:
+      value: -0.15
+      set_at: "2026-04-21"
+      rationale: "單月虧損 15% 強制降回前階"
+      next_review: "2026-07-21"
+    brier_deterioration_ratio:
+      value: 1.5
+      set_at: "2026-04-21"
+      rationale: "Brier 惡化超過前期 1.5× 強制降階"
+      next_review: "2026-07-21"
+    idempotency_violation_action:
+      action: "demote_to_month_1_and_pause_7d"
+      set_at: "2026-04-21"
+      rationale: "idempotency 違規是嚴重系統錯誤，立即降到最低階並暫停"
+      next_review: "2026-07-21"
+
+# -----------------------------------------------------------------------------
+# § 4. 風控熔斷參數 — 真實交易階段
+# -----------------------------------------------------------------------------
+circuit_breakers:
+  per_position_max_ratio:
+    value: 0.02
+    set_at: "2026-04-21"
+    rationale: "單筆倉位上限 2%，標準凱利公式下極度保守"
+    next_review: "2026-07-21"
+    action: "reject_order"
+
+  per_market_max_ratio:
+    value: 0.05
+    set_at: "2026-04-21"
+    rationale: "單一市場 5% 曝險，防止單一解算爭議擊穿"
+    next_review: "2026-07-21"
+    action: "reject_new_entry"
+
+  per_category_max_ratio:
+    value: 0.20
+    set_at: "2026-04-21"
+    rationale: "類別（政治/體育/加密/其他）20% 上限"
+    next_review: "2026-07-21"
+    action: "reject_new_entry"
+
+  intraday_loss_ratio:
+    value: 0.05
+    set_at: "2026-04-21"
+    rationale: "日內虧損 5% 進入只減倉模式"
+    next_review: "2026-07-21"
+    action: "pause_new_orders_reduce_only"
+
+  weekly_drawdown_ratio:
+    value: 0.10
+    set_at: "2026-04-21"
+    rationale: "週度 10% 回撤暫停下單並降階"
+    next_review: "2026-07-21"
+    action: "pause_orders_and_demote_capital"
+
+  monthly_drawdown_ratio:
+    value: 0.15
+    set_at: "2026-04-21"
+    rationale: "月度 15% 回撤暫停策略 30 天，進入歸因"
+    next_review: "2026-07-21"
+    action: "suspend_strategy_30d_and_attribute"
+
+# -----------------------------------------------------------------------------
+# § 5. 漂移警報 — 兩層檢查
+# -----------------------------------------------------------------------------
+drift_alerts:
+  execution_layer:
+    avg_slippage_vs_expected_ratio_max:
+      value: 2.0
+      set_at: "2026-04-21"
+      rationale: "平均滑點超過預期 2× 表示滑點模型錯誤"
+      next_review: "2026-07-21"
+    p90_slippage_vs_expected_ratio_max:
+      value: 3.0
+      set_at: "2026-04-21"
+      rationale: "極端滑點 p90 超過預期 3× 表示市場深度模型錯誤"
+      next_review: "2026-07-21"
+    on_breach: "tune_slippage_model_not_pause_strategy"
+
+  signal_layer:
+    direction_mismatch_ratio_max:
+      value: 0.05
+      set_at: "2026-04-21"
+      rationale: "訊號與執行方向不一致 > 5% 表示執行層有 bug"
+      next_review: "2026-07-21"
+    signal_to_order_latency_p90_seconds_max:
+      value: 2.0
+      set_at: "2026-04-21"
+      rationale: "訊號到下單延遲超過 2 秒表示系統瓶頸"
+      next_review: "2026-07-21"
+    on_breach: "investigate_executor_and_rate_limits"
+
+  pnl_layer:
+    actual_vs_paper_pnl_divergence_max:
+      value: 0.30
+      set_at: "2026-04-21"
+      rationale: "前兩層都通過後，PnL 差異 > 30% 才算真漂移"
+      next_review: "2026-07-21"
+    min_sample_size: 20
+    on_breach: "re_evaluate_strategy_edge_by_market_category"
+
+# -----------------------------------------------------------------------------
+# § 6. 策略版本雙軌制
+# -----------------------------------------------------------------------------
+strategy_versioning:
+  review_cycle_days:
+    value: 90
+    set_at: "2026-04-21"
+    rationale: "每 90 天比較 live 與 experimental 表現"
+    next_review: "2026-07-21"
+  live_frozen_params: true
+  experimental_allowed_to_learn: true
+  promotion_from_experimental_restart_ladder: true  # 升版後從 $50 重新走階梯
+
+# -----------------------------------------------------------------------------
+# § 7. 基礎設施升級觸發條件
+# -----------------------------------------------------------------------------
+infra_upgrade_triggers:
+  message_queue:
+    current: "asyncio.Queue"
+    upgrade_to: "Redis Stream"
+    trigger: "messages_per_second > 100 for > 5 minutes"
+    last_checked: "2026-04-21"
+
+  time_series_db:
+    current: "Supabase PostgreSQL"
+    upgrade_to: "TimescaleDB extension"
+    trigger: "main_queries_p90 > 1s for > 7 days"
+    last_checked: "2026-04-21"
+
+  clob_client:
+    current: "py-clob-client"
+    upgrade_to: "rs-clob-client"
+    trigger: "ws_latency_p90 > 500ms OR monitored_markets > 50"
+    last_checked: "2026-04-21"
+
+  analytics_engine:
+    current: "pandas + SQL"
+    upgrade_to: "DuckDB"
+    trigger: "single_backtest > 10 minutes"
+    last_checked: "2026-04-21"
