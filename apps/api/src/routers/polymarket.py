@@ -24,9 +24,15 @@ logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/polymarket", tags=["polymarket"])
 
 # 路徑與快取
+# DB 在 shared docker 命名 volume，status.json 在 host 端由 wrapper 寫入後
+# 透過 docker-compose 的 bind mount 暴露給 api。兩條路徑分開是刻意的。
 _DATA_DIR = Path(os.environ.get("DATA_DIR", "/app/data"))
 _DB_PATH = _DATA_DIR / "polymarket.db"
-_STATUS_PATH = _DATA_DIR / "reports" / "polymarket_pipeline_status.json"
+
+_STATUS_FILENAME = "polymarket_pipeline_status.json"
+_STATUS_HOST_MOUNT = Path("/app/polymarket_status") / _STATUS_FILENAME  # bind mount
+_STATUS_DATA_DIR = _DATA_DIR / "reports" / _STATUS_FILENAME              # legacy / in-volume
+_STATUS_CANDIDATES = [_STATUS_HOST_MOUNT, _STATUS_DATA_DIR]
 
 _CACHE_TTL = 30.0  # seconds
 _cache: dict[str, tuple[Any, float]] = {}
@@ -79,7 +85,8 @@ def get_status() -> dict:
     if cached := _cache_get("status"):
         return cached
 
-    if not _STATUS_PATH.exists():
+    status_path = next((p for p in _STATUS_CANDIDATES if p.exists()), None)
+    if status_path is None:
         return {
             "last_run_start": None,
             "last_run_end": None,
@@ -91,7 +98,7 @@ def get_status() -> dict:
             "wallets_cap": None,
         }
     try:
-        data = json.loads(_STATUS_PATH.read_text(encoding="utf-8"))
+        data = json.loads(status_path.read_text(encoding="utf-8"))
     except Exception as exc:
         raise HTTPException(status_code=500, detail=f"status file unreadable: {exc}") from exc
 
