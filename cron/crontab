@@ -9,3 +9,7 @@
 
 # Institutional report collection + AI digest — every 6 hours (00/06/12/18 UTC)
 0 */6 * * * cd /opt/ambmh && docker compose -f docker-compose.prod.yml exec -T telegram-bot python -m market_monitor.report_collector >> /var/log/ambmh/digest.log 2>&1
+
+# Polymarket Phase 1 — every 5 minutes
+# Logging handled internally; status at data/reports/polymarket_pipeline_status.json
+*/5 * * * * /opt/ambmh/scripts/polymarket_pipeline.sh

@@ -120,8 +120,10 @@ services:
       - ./market_monitor:/app/market_monitor
       - ./agent:/app/agent
       - ./guards:/app/guards
+      - ./polymarket:/app/polymarket
     environment:
       - TG_AI_BOT_TOKEN=${TG_AI_BOT_TOKEN}
+      - TELEGRAM_TOKEN=${TELEGRAM_TOKEN}
       - TELEGRAM_CHAT_ID=${TELEGRAM_CHAT_ID}
       - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}
       - ANTHROPIC_BASE_URL=${ANTHROPIC_BASE_URL}
