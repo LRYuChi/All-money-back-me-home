@@ -10,12 +10,78 @@ import { WhaleDirectoryTable } from '@/components/polymarket/WhaleDirectoryTable
 import { AlertFeed } from '@/components/polymarket/AlertFeed';
 import { ActiveMarketsTable } from '@/components/polymarket/ActiveMarketsTable';
 
+interface StatusPayload {
+  last_run_start: string | null;
+  last_run_end: string | null;
+  duration_seconds: number | null;
+  result: 'ok' | 'fail' | 'never_run' | null;
+  exit_code: number | null;
+  mode: string | null;
+  markets_limit: number | null;
+  wallets_cap: number | null;
+}
+
+interface OverviewPayload {
+  tier_distribution: Record<string, number>;
+  totals: { markets: number; active_markets: number; whales: number; trades: number };
+  activity_24h: { trades: number; alerts: number };
+  latest_tier_change: {
+    wallet_address: string;
+    from_tier: string | null;
+    to_tier: string;
+    changed_at: string;
+    reason: string;
+  } | null;
+}
+
+interface WhaleRow {
+  wallet_address: string;
+  tier: string;
+  trade_count_90d: number;
+  win_rate: number;
+  cumulative_pnl: number;
+  avg_trade_size: number;
+  segment_win_rates: number[];
+  stability_pass: boolean;
+  resolved_count: number;
+  last_trade_at: string | null;
+  last_computed_at: string;
+}
+
+interface AlertRow {
+  wallet_address: string;
+  tx_hash: string;
+  event_index: number;
+  tier: string;
+  condition_id: string;
+  market_question: string;
+  side: string;
+  outcome: string;
+  size: number;
+  price: number;
+  notional: number;
+  match_time: string;
+  alerted_at: string;
+}
+
+interface MarketRow {
+  condition_id: string;
+  question: string;
+  market_slug: string;
+  category: string;
+  end_date_iso: string | null;
+  active: boolean;
+  closed: boolean;
+  tokens: { token_id: string; outcome: string; price: number | null }[];
+  trades_24h: number;
+}
+
 interface PageData {
-  status: any;
-  overview: any;
-  whales: any;
-  alerts: any;
-  markets: any;
+  status: StatusPayload | null;
+  overview: OverviewPayload | null;
+  whales: { count: number; whales: WhaleRow[] } | null;
+  alerts: { count: number; alerts: AlertRow[]; window_hours: number } | null;
+  markets: { count: number; markets: MarketRow[] } | null;
 }
 
 const REFRESH_INTERVAL_MS = 30_000;
@@ -29,24 +95,30 @@ export default function PolymarketPage() {
   const fetchAll = useCallback(async () => {
     try {
       const [status, overview, whales, alerts, markets] = await Promise.all([
-        apiClient.get('/api/polymarket/status'),
-        apiClient.get('/api/polymarket/overview').catch(() => null),
+        apiClient.get<StatusPayload>('/api/polymarket/status'),
+        apiClient.get<OverviewPayload>('/api/polymarket/overview').catch(() => null),
         apiClient
-          .get('/api/polymarket/whales', { params: { tier: 'A,B,C,volatile', limit: '100' } })
-          .catch(() => ({ whales: [] })),
-        apiClient.get('/api/polymarket/alerts', { params: { hours: '24', limit: '50' } }).catch(() => ({
-          alerts: [],
-          window_hours: 24,
-        })),
-        apiClient.get('/api/polymarket/markets', { params: { active: 'true', limit: '20' } }).catch(() => ({
-          markets: [],
-        })),
+          .get<{ count: number; whales: WhaleRow[] }>('/api/polymarket/whales', {
+            params: { tier: 'A,B,C,volatile', limit: '100' },
+          })
+          .catch(() => ({ count: 0, whales: [] })),
+        apiClient
+          .get<{ count: number; alerts: AlertRow[]; window_hours: number }>(
+            '/api/polymarket/alerts',
+            { params: { hours: '24', limit: '50' } },
+          )
+          .catch(() => ({ count: 0, alerts: [], window_hours: 24 })),
+        apiClient
+          .get<{ count: number; markets: MarketRow[] }>('/api/polymarket/markets', {
+            params: { active: 'true', limit: '20' },
+          })
+          .catch(() => ({ count: 0, markets: [] })),
       ]);
       setData({ status, overview, whales, alerts, markets });
       setLastUpdate(new Date());
       setError(null);
-    } catch (e: any) {
-      setError(e?.message ?? String(e));
+    } catch (e: unknown) {
+      setError(e instanceof Error ? e.message : String(e));
     } finally {
       setLoading(false);
     }
