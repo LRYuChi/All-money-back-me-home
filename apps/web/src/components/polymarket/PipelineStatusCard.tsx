@@ -1,7 +1,8 @@
 'use client';
 
-import { layer, fg, semantic } from '@/lib/polymarket/tokens';
-import { FreshnessIndicator } from './FreshnessIndicator';
+import { borderColor, fg, semantic } from '@/lib/polymarket/tokens';
+import { Card, CardHeader } from './Card';
+import { FreshnessIndicator, parseServerDateStr } from './FreshnessIndicator';
 
 interface Status {
   last_run_start: string | null;
@@ -14,73 +15,120 @@ interface Status {
   wallets_cap: number | null;
 }
 
+const STATUS_META = {
+  ok: { label: '運行正常', color: semantic.live },
+  fail: { label: '失敗', color: semantic.error },
+  never_run: { label: '尚未執行', color: semantic.stale },
+} as const;
+
 export function PipelineStatusCard({ status }: { status: Status | null }) {
-  const ok = status?.result === 'ok';
-  const fail = status?.result === 'fail';
-  const color = ok ? semantic.live : fail ? semantic.error : semantic.warn;
+  const key = (status?.result ?? 'never_run') as keyof typeof STATUS_META;
+  const meta = STATUS_META[key] ?? STATUS_META.never_run;
+  const lastEnd = parseServerDateStr(status?.last_run_end ?? null);
 
   return (
-    <div
-      className="rounded-md p-4 border"
-      style={{
-        backgroundColor: layer['01'],
-        borderColor: ok ? 'oklch(30% 0.06 200)' : 'oklch(30% 0.010 240)',
-        color: fg.primary,
-      }}
-    >
-      <div className="flex items-start justify-between mb-3">
-        <div>
-          <div style={{ color: fg.secondary, fontSize: '11px', textTransform: 'uppercase', letterSpacing: '0.08em' }}>
-            Pipeline 狀態
-          </div>
-          <div className="mt-1 flex items-baseline gap-3">
+    <Card accentColor={meta.color}>
+      <CardHeader
+        eyebrow="Pipeline 狀態"
+        trailing={<FreshnessIndicator lastUpdate={lastEnd} />}
+      />
+
+      {/* 主視覺 */}
+      <div style={{ padding: '4px 20px 20px' }}>
+        <div className="flex items-baseline gap-3" style={{ marginBottom: '2px' }}>
+          <span
+            style={{
+              color: meta.color,
+              fontSize: '32px',
+              fontWeight: 600,
+              letterSpacing: '-0.01em',
+              lineHeight: 1,
+            }}
+          >
+            {meta.label}
+          </span>
+          {status?.duration_seconds != null && (
             <span
               style={{
-                color,
-                fontSize: '24px',
-                fontWeight: 600,
-                fontFamily: 'var(--font-mono, ui-monospace)',
-                letterSpacing: '0.02em',
+                color: fg.tertiary,
+                fontSize: '13px',
+                fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace',
+                fontVariantNumeric: 'tabular-nums',
               }}
             >
-              {status?.result ?? '—'}
+              耗時 {status.duration_seconds}s
             </span>
-            {status?.duration_seconds != null && (
-              <span style={{ color: fg.secondary, fontSize: '13px', fontFamily: 'var(--font-mono)' }}>
-                {status.duration_seconds}s
-              </span>
-            )}
-          </div>
+          )}
         </div>
-        <FreshnessIndicator lastUpdate={status?.last_run_end ?? null} />
+        <div style={{ color: fg.tertiary, fontSize: '12px' }}>
+          每 5 分鐘自動觸發 · {status?.mode === 'docker' ? 'Docker Compose 模式' : '本機模式'}
+        </div>
       </div>
 
-      <div className="grid grid-cols-2 gap-x-6 gap-y-2 mt-4">
-        <KV label="上次開始" value={status?.last_run_start ?? '—'} mono />
-        <KV label="上次結束" value={status?.last_run_end ?? '—'} mono />
-        <KV label="模式" value={status?.mode ?? '—'} />
-        <KV label="退出碼" value={status?.exit_code?.toString() ?? '—'} mono />
-        <KV label="單次 markets" value={status?.markets_limit?.toString() ?? '—'} mono />
-        <KV label="單次 wallets" value={status?.wallets_cap?.toString() ?? '—'} mono />
-      </div>
-    </div>
+      {/* KV 區 */}
+      <dl
+        className="grid grid-cols-2 md:grid-cols-4"
+        style={{
+          borderTop: `1px solid ${borderColor.hair}`,
+          margin: 0,
+        }}
+      >
+        <KV label="上次開始" value={formatLocal(status?.last_run_start)} mono />
+        <KV label="上次結束" value={formatLocal(status?.last_run_end)} mono border />
+        <KV label="每次掃市場數" value={status?.markets_limit?.toString() ?? '—'} mono border />
+        <KV label="每次掃錢包數" value={status?.wallets_cap?.toString() ?? '—'} mono border />
+      </dl>
+    </Card>
   );
 }
 
-function KV({ label, value, mono }: { label: string; value: string; mono?: boolean }) {
+function KV({
+  label,
+  value,
+  mono,
+  border,
+}: {
+  label: string;
+  value: string;
+  mono?: boolean;
+  border?: boolean;
+}) {
   return (
-    <div>
-      <div style={{ color: fg.tertiary, fontSize: '11px' }}>{label}</div>
-      <div
+    <div
+      style={{
+        padding: '12px 20px',
+        borderLeft: border ? `1px solid ${borderColor.hair}` : undefined,
+      }}
+    >
+      <dt style={{ color: fg.tertiary, fontSize: '10px', textTransform: 'uppercase', letterSpacing: '0.08em' }}>
+        {label}
+      </dt>
+      <dd
         style={{
           color: fg.primary,
-          fontSize: '12px',
-          fontFamily: mono ? 'var(--font-mono, ui-monospace)' : undefined,
+          fontSize: '13px',
+          marginTop: '4px',
+          fontFamily: mono ? 'ui-monospace, SFMono-Regular, Menlo, monospace' : undefined,
           fontVariantNumeric: 'tabular-nums',
         }}
       >
         {value}
-      </div>
+      </dd>
     </div>
   );
+}
+
+function formatLocal(s: string | null | undefined): string {
+  if (!s) return '—';
+  const d = parseServerDateStr(s);
+  if (!d) return s;
+  return d.toLocaleString('zh-TW', {
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit',
+    hour12: false,
+  });
 }

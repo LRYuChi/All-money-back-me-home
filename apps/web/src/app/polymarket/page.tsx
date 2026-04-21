@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useState } from 'react';
 import Link from 'next/link';
 import { apiClient } from '@/lib/api-client';
-import { layer, fg, semantic } from '@/lib/polymarket/tokens';
+import { borderColor, fg, layer, semantic } from '@/lib/polymarket/tokens';
 import { PipelineStatusCard } from '@/components/polymarket/PipelineStatusCard';
 import { OverviewCards } from '@/components/polymarket/OverviewCards';
 import { WhaleDirectoryTable } from '@/components/polymarket/WhaleDirectoryTable';
@@ -103,10 +103,9 @@ export default function PolymarketPage() {
           })
           .catch(() => ({ count: 0, whales: [] })),
         apiClient
-          .get<{ count: number; alerts: AlertRow[]; window_hours: number }>(
-            '/api/polymarket/alerts',
-            { params: { hours: '24', limit: '50' } },
-          )
+          .get<{ count: number; alerts: AlertRow[]; window_hours: number }>('/api/polymarket/alerts', {
+            params: { hours: '24', limit: '50' },
+          })
           .catch(() => ({ count: 0, alerts: [], window_hours: 24 })),
         apiClient
           .get<{ count: number; markets: MarketRow[] }>('/api/polymarket/markets', {
@@ -136,85 +135,17 @@ export default function PolymarketPage() {
       style={{
         backgroundColor: layer['00'],
         color: fg.primary,
-        fontFamily:
-          'Inter, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif',
+        fontFamily: 'Inter, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif',
       }}
     >
-      <div className="max-w-7xl mx-auto px-4 py-6">
-        <header className="flex items-center justify-between mb-6">
-          <div>
-            <div className="flex items-baseline gap-3">
-              <Link
-                href="/"
-                style={{ color: fg.tertiary, fontSize: '12px', textDecoration: 'underline' }}
-              >
-                ← 主儀表板
-              </Link>
-              <h1 style={{ color: fg.primary, fontSize: '24px', fontWeight: 600 }}>
-                Polymarket 情報
-              </h1>
-              <span
-                style={{
-                  color: fg.tertiary,
-                  fontSize: '12px',
-                  fontFamily: 'var(--font-mono, ui-monospace)',
-                }}
-              >
-                Phase 1
-              </span>
-            </div>
-            <div style={{ color: fg.tertiary, fontSize: '12px', marginTop: '4px' }}>
-              鯨魚分層追蹤 · 5 分鐘自動更新 · 自動重新整理 30s
-            </div>
-          </div>
-          <div className="flex items-center gap-3">
-            {lastUpdate && (
-              <span style={{ color: fg.tertiary, fontSize: '11px', fontFamily: 'var(--font-mono)' }}>
-                UI 更新 {lastUpdate.toLocaleTimeString('zh-TW', { hour12: false })}
-              </span>
-            )}
-            <button
-              onClick={fetchAll}
-              className="rounded border px-3 py-1"
-              style={{
-                backgroundColor: layer['02'],
-                borderColor: 'oklch(30% 0.010 240)',
-                color: fg.primary,
-                fontSize: '12px',
-              }}
-            >
-              手動刷新
-            </button>
-          </div>
-        </header>
+      <div className="max-w-[1400px] mx-auto" style={{ padding: '24px 28px' }}>
+        <Header lastUpdate={lastUpdate} onRefresh={fetchAll} />
 
-        {loading && !data && (
-          <div
-            className="rounded-md p-8 text-center"
-            style={{ backgroundColor: layer['01'], color: fg.tertiary }}
-          >
-            載入中…
-          </div>
-        )}
-
-        {error && (
-          <div
-            className="rounded-md p-4 mb-4 border"
-            style={{
-              backgroundColor: semantic.errorBg,
-              borderColor: semantic.errorBorder,
-              color: semantic.error,
-            }}
-          >
-            <div style={{ fontWeight: 600 }}>API 錯誤</div>
-            <div style={{ fontSize: '12px', marginTop: '4px', fontFamily: 'var(--font-mono)' }}>
-              {error}
-            </div>
-          </div>
-        )}
+        {loading && !data && <LoadingState />}
+        {error && <ErrorBanner message={error} />}
 
         {data && (
-          <div className="space-y-4">
+          <div className="flex flex-col gap-4">
             <PipelineStatusCard status={data.status} />
             <OverviewCards overview={data.overview} />
             <WhaleDirectoryTable whales={data.whales?.whales ?? []} />
@@ -225,6 +156,137 @@ export default function PolymarketPage() {
             <ActiveMarketsTable markets={data.markets?.markets ?? []} />
           </div>
         )}
+
+        <footer
+          className="mt-8 pt-4"
+          style={{ borderTop: `1px solid ${borderColor.hair}`, color: fg.tertiary, fontSize: '11px' }}
+        >
+          Polymarket 情報系統 · Phase 1 鯨魚追蹤 · 每 5 分鐘自動收集，每 30 秒重新整理介面
+        </footer>
+      </div>
+    </div>
+  );
+}
+
+function Header({ lastUpdate, onRefresh }: { lastUpdate: Date | null; onRefresh: () => void }) {
+  return (
+    <header
+      className="flex items-end justify-between flex-wrap gap-4"
+      style={{ marginBottom: '24px' }}
+    >
+      <div>
+        <Link
+          href="/"
+          style={{
+            color: fg.tertiary,
+            fontSize: '11px',
+            textDecoration: 'none',
+          }}
+        >
+          ← 主儀表板
+        </Link>
+        <div className="flex items-baseline gap-3 mt-1">
+          <h1
+            style={{
+              color: fg.primary,
+              fontSize: '28px',
+              fontWeight: 700,
+              letterSpacing: '-0.02em',
+              lineHeight: 1.1,
+            }}
+          >
+            Polymarket 情報
+          </h1>
+          <span
+            className="rounded-full border"
+            style={{
+              padding: '3px 10px',
+              fontSize: '11px',
+              color: semantic.whale,
+              backgroundColor: layer['02'],
+              borderColor: 'color-mix(in oklab, ' + semantic.whale + ' 30%, transparent)',
+              fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace',
+            }}
+          >
+            Phase 1 · 鯨魚追蹤
+          </span>
+        </div>
+        <div style={{ color: fg.tertiary, fontSize: '12px', marginTop: '6px' }}>
+          基於 Polymarket CLOB + Data API · 讀取本地 SQLite 快照
+        </div>
+      </div>
+
+      <div className="flex items-center gap-3">
+        {lastUpdate && (
+          <span
+            style={{
+              color: fg.tertiary,
+              fontSize: '11px',
+              fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace',
+            }}
+          >
+            UI 更新 {lastUpdate.toLocaleTimeString('zh-TW', { hour12: false })}
+          </span>
+        )}
+        <button
+          onClick={onRefresh}
+          className="rounded-lg border transition-colors hover:border-opacity-50"
+          style={{
+            padding: '6px 14px',
+            backgroundColor: layer['02'],
+            borderColor: borderColor.base,
+            color: fg.primary,
+            fontSize: '12px',
+            fontWeight: 500,
+          }}
+        >
+          手動刷新
+        </button>
+      </div>
+    </header>
+  );
+}
+
+function LoadingState() {
+  return (
+    <div
+      className="rounded-lg text-center"
+      style={{
+        backgroundColor: layer['01'],
+        color: fg.tertiary,
+        border: `1px solid ${borderColor.hair}`,
+        padding: '80px 20px',
+        fontSize: '13px',
+      }}
+    >
+      載入中…
+    </div>
+  );
+}
+
+function ErrorBanner({ message }: { message: string }) {
+  return (
+    <div
+      className="rounded-lg border"
+      style={{
+        backgroundColor: semantic.errorBg,
+        borderColor: semantic.errorBorder,
+        color: semantic.error,
+        padding: '14px 18px',
+        marginBottom: '16px',
+      }}
+    >
+      <div style={{ fontWeight: 600, fontSize: '13px' }}>API 錯誤</div>
+      <div
+        style={{
+          fontSize: '11px',
+          marginTop: '4px',
+          fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace',
+          color: semantic.error,
+          opacity: 0.85,
+        }}
+      >
+        {message}
       </div>
     </div>
   );

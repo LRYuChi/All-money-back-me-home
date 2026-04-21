@@ -1,7 +1,9 @@
 'use client';
 
-import { fg, layer, semantic } from '@/lib/polymarket/tokens';
+import { borderColor, fg, layer, semantic } from '@/lib/polymarket/tokens';
+import { Card, CardHeader } from './Card';
 import { TierBadge } from './TierBadge';
+import { parseServerDateStr } from './FreshnessIndicator';
 
 interface Alert {
   wallet_address: string;
@@ -21,86 +23,131 @@ interface Alert {
 
 export function AlertFeed({ alerts, windowHours }: { alerts: Alert[]; windowHours: number }) {
   return (
-    <div
-      className="rounded-md border"
-      style={{ backgroundColor: layer['01'], borderColor: 'oklch(30% 0.010 240)' }}
-    >
-      <div className="flex items-center justify-between p-4 pb-3">
-        <div>
-          <div style={{ color: fg.secondary, fontSize: '11px', textTransform: 'uppercase', letterSpacing: '0.08em' }}>
-            鯨魚交易推播
-          </div>
-          <div style={{ color: fg.tertiary, fontSize: '11px', marginTop: '2px' }}>
-            過去 {windowHours}h · 共 {alerts.length} 筆
-          </div>
-        </div>
-      </div>
+    <Card>
+      <CardHeader
+        eyebrow="鯨魚交易推播"
+        subtitle={`過去 ${windowHours} 小時 · 共 ${alerts.length} 筆`}
+        divider
+      />
+      {alerts.length === 0 && <EmptyAlertState />}
+      {alerts.length > 0 && (
+        <ul style={{ listStyle: 'none' }}>
+          {alerts.slice(0, 30).map((a, i) => (
+            <AlertRow key={`${a.wallet_address}-${a.tx_hash}-${a.event_index}`} alert={a} first={i === 0} />
+          ))}
+        </ul>
+      )}
+    </Card>
+  );
+}
 
-      <div className="divide-y" style={{ borderColor: 'oklch(24% 0.010 240)' }}>
-        {alerts.length === 0 && (
-          <div className="px-4 py-8 text-center" style={{ color: fg.tertiary, fontSize: '12px' }}>
-            尚無鯨魚推播（Pipeline 需識別出 A/B/C 級錢包後才會產生）
-          </div>
-        )}
-        {alerts.slice(0, 30).map((a) => {
-          const sideColor = a.side === 'BUY' ? semantic.yes : semantic.no;
-          return (
-            <div
-              key={`${a.wallet_address}-${a.tx_hash}-${a.event_index}`}
-              className="px-4 py-3 flex items-start gap-3"
-              style={{ color: fg.primary }}
-            >
-              <TierBadge tier={a.tier} />
-              <div className="flex-1 min-w-0">
-                <div className="flex items-baseline gap-2 mb-1">
-                  <span
-                    style={{
-                      color: sideColor,
-                      fontFamily: 'var(--font-mono, ui-monospace)',
-                      fontWeight: 600,
-                      fontSize: '12px',
-                    }}
-                  >
-                    {a.side} {a.outcome || '?'}
-                  </span>
-                  <span style={{ color: fg.primary, fontFamily: 'var(--font-mono)', fontSize: '12px' }}>
-                    @ {a.price?.toFixed(4) ?? '?'}
-                  </span>
-                  <span
-                    style={{
-                      color: a.notional >= 10000 ? semantic.warn : fg.secondary,
-                      fontFamily: 'var(--font-mono)',
-                      fontSize: '12px',
-                      fontWeight: 500,
-                    }}
-                  >
-                    ${Math.round(a.notional ?? 0).toLocaleString()}
-                    {a.notional >= 10000 && ' (大額)'}
-                  </span>
-                </div>
-                <div style={{ color: fg.secondary, fontSize: '12px' }}>{a.market_question || '(未知市場)'}</div>
-                <div
-                  className="mt-1 flex gap-3"
-                  style={{ color: fg.tertiary, fontSize: '11px', fontFamily: 'var(--font-mono)' }}
-                >
-                  <span>錢包 {a.wallet_address.slice(0, 8)}…{a.wallet_address.slice(-4)}</span>
-                  <span>·</span>
-                  <span>{formatTime(a.match_time)}</span>
-                </div>
-              </div>
-            </div>
-          );
-        })}
+function EmptyAlertState() {
+  return (
+    <div
+      className="text-center"
+      style={{
+        padding: '40px 20px',
+        color: fg.tertiary,
+      }}
+    >
+      <div style={{ fontSize: '13px', marginBottom: '4px' }}>尚無推播</div>
+      <div style={{ fontSize: '11px', opacity: 0.7, maxWidth: '420px', margin: '0 auto' }}>
+        Pipeline 需識別出 A/B/C 級鯨魚才會產生推播。當前仍在累積資料。
       </div>
     </div>
   );
 }
 
-function formatTime(iso: string): string {
-  try {
-    const d = new Date(iso);
-    return d.toLocaleString('zh-TW', { hour12: false });
-  } catch {
-    return iso;
-  }
+function AlertRow({ alert, first }: { alert: Alert; first: boolean }) {
+  const sideColor = alert.side === 'BUY' ? semantic.yes : semantic.no;
+  const big = alert.notional >= 10000;
+  const matchTime = parseServerDateStr(alert.match_time);
+
+  return (
+    <li
+      className="flex items-start gap-3"
+      style={{
+        padding: '14px 20px',
+        borderTop: first ? undefined : `1px solid ${borderColor.hair}`,
+        color: fg.primary,
+      }}
+    >
+      <TierBadge tier={alert.tier} size="md" />
+
+      <div className="flex-1 min-w-0">
+        <div className="flex items-baseline gap-2 flex-wrap mb-1">
+          <span
+            style={{
+              color: sideColor,
+              fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace',
+              fontWeight: 600,
+              fontSize: '13px',
+            }}
+          >
+            {alert.side} {alert.outcome || '?'}
+          </span>
+          <span
+            style={{
+              color: fg.secondary,
+              fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace',
+              fontSize: '12px',
+              fontVariantNumeric: 'tabular-nums',
+            }}
+          >
+            @ {alert.price?.toFixed(4) ?? '?'}
+          </span>
+          <span
+            style={{
+              color: big ? semantic.warn : fg.primary,
+              fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace',
+              fontSize: '13px',
+              fontWeight: 500,
+              fontVariantNumeric: 'tabular-nums',
+            }}
+          >
+            ${Math.round(alert.notional ?? 0).toLocaleString()}
+          </span>
+          {big && (
+            <span
+              style={{
+                padding: '1px 6px',
+                borderRadius: '9999px',
+                fontSize: '10px',
+                color: semantic.warn,
+                backgroundColor: layer['02'],
+                border: `1px solid color-mix(in oklab, ${semantic.warn} 40%, transparent)`,
+              }}
+            >
+              大額
+            </span>
+          )}
+        </div>
+        <div
+          style={{
+            color: fg.secondary,
+            fontSize: '12px',
+            overflow: 'hidden',
+            textOverflow: 'ellipsis',
+            whiteSpace: 'nowrap',
+          }}
+        >
+          {alert.market_question || '(未知市場)'}
+        </div>
+        <div
+          className="mt-1 flex gap-3 flex-wrap"
+          style={{
+            color: fg.tertiary,
+            fontSize: '11px',
+            fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace',
+          }}
+        >
+          <span>
+            {alert.wallet_address.slice(0, 8)}…{alert.wallet_address.slice(-4)}
+          </span>
+          <span style={{ opacity: 0.5 }}>·</span>
+          <span>{matchTime ? matchTime.toLocaleString('zh-TW', { hour12: false }) : alert.match_time}</span>
+        </div>
+      </div>
+    </li>
+  );
 }

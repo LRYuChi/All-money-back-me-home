@@ -1,6 +1,7 @@
 'use client';
 
-import { fg, layer, semantic } from '@/lib/polymarket/tokens';
+import { borderColor, fg, semantic } from '@/lib/polymarket/tokens';
+import { Card, CardHeader } from './Card';
 
 interface Token {
   token_id: string;
@@ -21,77 +22,136 @@ interface Market {
 
 export function ActiveMarketsTable({ markets }: { markets: Market[] }) {
   return (
-    <div
-      className="rounded-md border"
-      style={{ backgroundColor: layer['01'], borderColor: 'oklch(30% 0.010 240)' }}
-    >
-      <div className="p-4 pb-3">
-        <div style={{ color: fg.secondary, fontSize: '11px', textTransform: 'uppercase', letterSpacing: '0.08em' }}>
-          活躍市場
-        </div>
-        <div style={{ color: fg.tertiary, fontSize: '11px', marginTop: '2px' }}>
-          依 24h 成交筆數排序 · 共 {markets.length} 個
-        </div>
-      </div>
+    <Card>
+      <CardHeader
+        eyebrow="活躍市場"
+        subtitle={`依 24 小時成交筆數排序 · 共 ${markets.length} 個`}
+        divider
+      />
 
       <div className="overflow-x-auto">
         <table
           className="w-full text-left"
-          style={{ fontSize: '12px', fontVariantNumeric: 'tabular-nums' }}
+          style={{
+            fontSize: '12px',
+            fontVariantNumeric: 'tabular-nums',
+            borderCollapse: 'separate',
+            borderSpacing: 0,
+          }}
         >
           <thead>
-            <tr style={{ color: fg.tertiary, fontSize: '10px', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
-              <th className="px-4 py-2 font-normal">類別</th>
-              <th className="px-2 py-2 font-normal">市場</th>
-              <th className="px-2 py-2 font-normal text-right">選項</th>
-              <th className="px-2 py-2 font-normal text-right">24h 成交</th>
-              <th className="px-2 py-2 font-normal">結算日</th>
+            <tr style={{ color: fg.tertiary, fontSize: '10px', letterSpacing: '0.08em', textTransform: 'uppercase' }}>
+              <Th first>類別</Th>
+              <Th>市場</Th>
+              <Th right>選項 / 價格</Th>
+              <Th right>24h 成交</Th>
+              <Th>結算日</Th>
             </tr>
           </thead>
           <tbody>
             {markets.length === 0 && (
               <tr>
-                <td colSpan={5} className="px-4 py-6 text-center" style={{ color: fg.tertiary }}>
+                <td
+                  colSpan={5}
+                  style={{ padding: '32px 20px', textAlign: 'center', color: fg.tertiary, fontSize: '12px' }}
+                >
                   尚無市場資料
                 </td>
               </tr>
             )}
-            {markets.slice(0, 20).map((m, i) => (
-              <tr
-                key={m.condition_id}
-                style={{
-                  backgroundColor: i % 2 === 0 ? layer['01'] : layer['02'],
-                  borderTop: '1px solid oklch(24% 0.010 240)',
-                  color: fg.primary,
-                }}
-              >
-                <td className="px-4 py-2" style={{ color: fg.secondary, fontSize: '11px' }}>
-                  {m.category || '—'}
-                </td>
-                <td className="px-2 py-2 max-w-[400px] truncate" title={m.question}>
-                  {m.question}
-                </td>
-                <td className="px-2 py-2 text-right">
+            {markets.slice(0, 20).map((m) => (
+              <tr key={m.condition_id} style={{ color: fg.primary }}>
+                <Td first>
+                  <span
+                    style={{
+                      color: fg.secondary,
+                      fontSize: '11px',
+                      padding: '2px 8px',
+                      borderRadius: '9999px',
+                      border: `1px solid ${borderColor.hair}`,
+                      whiteSpace: 'nowrap',
+                    }}
+                  >
+                    {m.category || '—'}
+                  </span>
+                </Td>
+                <Td style={{ maxWidth: '380px' }}>
+                  <div
+                    title={m.question}
+                    style={{
+                      overflow: 'hidden',
+                      textOverflow: 'ellipsis',
+                      whiteSpace: 'nowrap',
+                    }}
+                  >
+                    {m.question}
+                  </div>
+                </Td>
+                <Td right>
                   <MarketPrices tokens={m.tokens} />
-                </td>
-                <td
-                  className="px-2 py-2 text-right"
+                </Td>
+                <Td
+                  right
+                  mono
                   style={{
-                    fontFamily: 'var(--font-mono, ui-monospace)',
                     color: m.trades_24h > 10 ? semantic.live : fg.secondary,
+                    fontWeight: m.trades_24h > 10 ? 500 : 400,
                   }}
                 >
                   {m.trades_24h}
-                </td>
-                <td className="px-2 py-2" style={{ color: fg.tertiary, fontSize: '11px' }}>
-                  {formatEndDate(m.end_date_iso)}
-                </td>
+                </Td>
+                <Td style={{ color: fg.tertiary, fontSize: '11px' }}>{formatEndDate(m.end_date_iso)}</Td>
               </tr>
             ))}
           </tbody>
         </table>
       </div>
-    </div>
+    </Card>
+  );
+}
+
+function Th({ children, right, first }: { children: React.ReactNode; right?: boolean; first?: boolean }) {
+  return (
+    <th
+      style={{
+        padding: '10px 12px',
+        paddingLeft: first ? '20px' : '12px',
+        fontWeight: 500,
+        textAlign: right ? 'right' : 'left',
+        borderBottom: `1px solid ${borderColor.hair}`,
+      }}
+    >
+      {children}
+    </th>
+  );
+}
+
+function Td({
+  children,
+  right,
+  mono,
+  first,
+  style,
+}: {
+  children: React.ReactNode;
+  right?: boolean;
+  mono?: boolean;
+  first?: boolean;
+  style?: React.CSSProperties;
+}) {
+  return (
+    <td
+      style={{
+        padding: '10px 12px',
+        paddingLeft: first ? '20px' : '12px',
+        borderBottom: `1px solid ${borderColor.hair}`,
+        textAlign: right ? 'right' : 'left',
+        fontFamily: mono ? 'ui-monospace, SFMono-Regular, Menlo, monospace' : undefined,
+        ...style,
+      }}
+    >
+      {children}
+    </td>
   );
 }
 
@@ -100,19 +160,21 @@ function MarketPrices({ tokens }: { tokens: Token[] }) {
   const no = tokens.find((t) => t.outcome === 'No');
   if (yes && no && tokens.length === 2) {
     return (
-      <div
-        className="inline-flex gap-1 items-baseline"
-        style={{ fontFamily: 'var(--font-mono, ui-monospace)' }}
+      <span
+        style={{
+          fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace',
+          whiteSpace: 'nowrap',
+        }}
       >
-        <span style={{ color: semantic.yes }}>{yes.price?.toFixed(2) ?? '—'}</span>
-        <span style={{ color: fg.tertiary }}>/</span>
-        <span style={{ color: semantic.no }}>{no.price?.toFixed(2) ?? '—'}</span>
-      </div>
+        <span style={{ color: semantic.yes }}>{yes.price != null ? yes.price.toFixed(2) : '—'}</span>
+        <span style={{ color: fg.tertiary, margin: '0 4px' }}>/</span>
+        <span style={{ color: semantic.no }}>{no.price != null ? no.price.toFixed(2) : '—'}</span>
+      </span>
     );
   }
   return (
     <span style={{ color: fg.tertiary, fontSize: '11px' }}>
-      多選 ({tokens.length})
+      多選 · {tokens.length} 項
     </span>
   );
 }
@@ -123,8 +185,9 @@ function formatEndDate(iso: string | null): string {
     const d = new Date(iso);
     const daysLeft = (d.getTime() - Date.now()) / 86400_000;
     if (daysLeft < 0) return '已結束';
-    if (daysLeft < 1) return `${Math.floor(daysLeft * 24)}h`;
-    return `${Math.floor(daysLeft)}d`;
+    if (daysLeft < 1) return `${Math.max(0, Math.floor(daysLeft * 24))} 小時後`;
+    if (daysLeft < 30) return `${Math.floor(daysLeft)} 天後`;
+    return d.toLocaleDateString('zh-TW');
   } catch {
     return iso;
   }

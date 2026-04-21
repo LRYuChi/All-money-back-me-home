@@ -80,7 +80,7 @@ if ! acquire_lock; then
     exit 0
 fi
 
-TS_START="$(date -u '+%Y-%m-%d %H:%M:%S')"
+TS_START="$(date -u '+%Y-%m-%dT%H:%M:%SZ')"
 TS_START_EPOCH="$(date -u '+%s')"
 log "pipeline start"
 
@@ -117,7 +117,7 @@ else
     EXIT_CODE=$?
 fi
 
-TS_END="$(date -u '+%Y-%m-%d %H:%M:%S')"
+TS_END="$(date -u '+%Y-%m-%dT%H:%M:%SZ')"
 TS_END_EPOCH="$(date -u '+%s')"
 DURATION=$((TS_END_EPOCH - TS_START_EPOCH))
 
