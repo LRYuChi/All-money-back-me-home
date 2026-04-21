@@ -41,7 +41,13 @@ export function OverviewCards({ overview }: { overview: Overview | null }) {
         <div className="mt-3 grid grid-cols-5 gap-2">
           {(['A', 'B', 'C', 'volatile', 'excluded'] as const).map((t) => {
             const count = dist[t] ?? 0;
-            const colors = (tierTokens as Record<string, { fg: string; bg: string; border: string; label: string }>)[t];
+            const colors =
+              (tierTokens as Record<string, { fg: string; bg: string; border: string; label: string } | undefined>)[t] ?? {
+                fg: fg.tertiary,
+                bg: layer['02'],
+                border: 'oklch(28% 0.008 240)',
+                label: t,
+              };
             return (
               <div
                 key={t}
