@@ -21,6 +21,7 @@
 from __future__ import annotations
 
 import argparse
+import json
 import logging
 import sys
 import time
@@ -157,12 +158,20 @@ def run_once(
 
             # === Phase 1.5+: wallet_profiles（append-only 時序） ===
             try:
+                # 1.5b: 預取此錢包涉及的所有市場 category（讓 category_specialization 能用）
+                wallet_conditions = list({p.condition_id for p in positions if p.condition_id})
+                wallet_conditions.extend(t.market for t in user_trades if t.market)
+                wallet_conditions = list(set(wallet_conditions))
+                wallet_categories = repo.get_market_categories(wallet_conditions)
+                # 合併今日剛掃的活躍市場 category（覆蓋率最高優先）
+                wallet_categories.update(market_category)
+
                 profile = scan_wallet(
                     wallet,
                     user_trades,
                     positions,
                     pre_reg=pre_reg,
-                    market_categories=market_category,
+                    market_categories=wallet_categories,
                     now=now,
                 )
                 repo.insert_wallet_profile(profile.to_db_dict())
@@ -180,6 +189,27 @@ def run_once(
         whales = repo.list_whales_by_tier("A", "B", "C")
         whale_tiers = {w["wallet_address"]: w["tier"] for w in whales}
         whale_dicts = {w["wallet_address"]: w for w in whales}
+
+        # 1.5b: 取每個鯨魚最新的 wallet_profile 提取 specialist / consistency 資訊
+        whale_profile_extras: dict[str, dict] = {}
+        for w_addr in whale_tiers:
+            wp = repo.get_latest_wallet_profile(w_addr)
+            if wp is None:
+                continue
+            extras: dict = {}
+            try:
+                feats = json.loads(wp.get("features_json") or "{}")
+                cs = feats.get("category_specialization", {}).get("value") or {}
+                if cs:
+                    extras["specialist_categories"] = cs.get("specialist_categories", [])
+                    extras["primary_category"] = cs.get("primary_category")
+                ts = feats.get("time_slice_consistency", {}).get("value") or {}
+                if "consistent" in ts:
+                    extras["is_consistent"] = ts.get("consistent")
+            except (ValueError, TypeError, KeyError):
+                pass
+            if extras:
+                whale_profile_extras[w_addr] = extras
 
         # 從已存的 trades 表找出屬於鯨魚且在推播窗口內的交易
         since = (now - timedelta(hours=ALERT_TIME_WINDOW_HOURS)).isoformat()
@@ -212,11 +242,17 @@ def run_once(
                     stats.alerts_skipped_dup += 1
                     continue
 
+                # 1.5b: 判斷此筆交易是否在錢包專長類別
+                this_cat = market_category.get(row["condition_id"], "")
+                extras = dict(whale_profile_extras.get(wallet, {}))
+                if extras and this_cat:
+                    extras["match_specialist"] = this_cat in (extras.get("specialist_categories") or [])
+
                 ok, _ = send_whale_alert(
                     tier=tier,
                     wallet_address=wallet,
                     market_question=market_question.get(row["condition_id"], "(未知市場)"),
-                    market_category=market_category.get(row["condition_id"], ""),
+                    market_category=this_cat,
                     side=row["side"],
                     outcome=row.get("outcome") or "",
                     price=row["price"],
@@ -224,6 +260,7 @@ def run_once(
                     notional=notional,
                     match_time=_parse_iso(row["match_time"]),
                     wallet_stats=whale_dicts[wallet],
+                    profile_extras=extras or None,
                     dry_run=dry_run,
                 )
                 if ok:

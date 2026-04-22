@@ -29,8 +29,18 @@ def format_whale_alert(
     notional: float | Decimal,
     match_time: datetime | None = None,
     wallet_stats: dict | None = None,
+    profile_extras: dict | None = None,  # 1.5b: specialist_categories, time_slice info
 ) -> str:
-    """組成單一鯨魚交易的 Telegram 訊息."""
+    """組成單一鯨魚交易的 Telegram 訊息.
+
+    profile_extras 結構（皆為 optional）：
+      {
+        "specialist_categories": ["Politics"],
+        "primary_category": "Politics",
+        "is_consistent": True,
+        "match_specialist": True,  # 此筆交易是否落在錢包專長類別
+      }
+    """
     wallet_short = f"{wallet_address[:6]}...{wallet_address[-4:]}" if len(wallet_address) > 10 else wallet_address
     time_str = (match_time or datetime.now(timezone.utc)).strftime("%Y-%m-%d %H:%M:%S UTC")
 
@@ -38,8 +48,18 @@ def format_whale_alert(
     direction = "做多" if side == "BUY" else "做空"
     size_flag = " (大額)" if float(notional) >= 10000 else ""
 
+    # 1.5b: header tag with specialist info
+    extras = profile_extras or {}
+    specialists = extras.get("specialist_categories") or []
+    header_extra = ""
+    if specialists:
+        if extras.get("match_specialist"):
+            header_extra = f"・{specialists[0]}專家 ✓"
+        else:
+            header_extra = f"・{specialists[0]}專家 (本筆非專長領域)"
+
     lines = [
-        f"[POLY-{tier}] 鯨魚交易{size_flag}",
+        f"[POLY-{tier}{header_extra}] 鯨魚交易{size_flag}",
         f"錢包: {wallet_short} (Tier {tier})",
         f"市場: {market_question[:80]}",
     ]
@@ -68,6 +88,18 @@ def format_whale_alert(
                 f"  平均尺寸: ${avg_size:,.0f}",
             ]
         )
+
+    # 1.5b: 加入 specialist 詳情區塊
+    if specialists or extras.get("primary_category"):
+        lines.append("──────────────")
+        if specialists:
+            lines.append(f"專長類別: {', '.join(specialists)}")
+        elif extras.get("primary_category"):
+            lines.append(f"主要類別: {extras['primary_category']} (尚未達 specialist)")
+        if extras.get("is_consistent") is True:
+            lines.append("時間切片: 穩定 ✓")
+        elif extras.get("is_consistent") is False:
+            lines.append("時間切片: 不穩定（少數爆發）")
 
     lines.append(f"時間: {time_str}")
     return "\n".join(lines)
@@ -110,6 +142,7 @@ def send_whale_alert(
     notional: float | Decimal,
     match_time: datetime | None = None,
     wallet_stats: dict | None = None,
+    profile_extras: dict | None = None,
     dry_run: bool = False,
 ) -> tuple[bool, str]:
     """便利入口：格式化 + 發送。dry_run=True 僅回傳文字不真送。"""
@@ -125,6 +158,7 @@ def send_whale_alert(
         notional=notional,
         match_time=match_time,
         wallet_stats=wallet_stats,
+        profile_extras=profile_extras,
     )
     if dry_run:
         return True, text

@@ -368,6 +368,7 @@ pytest tests/test_polymarket_*.py
 |---|---|---|
 | 2026-04-21 | 1.0 | 初版定稿：五層架構、三層鯨魚、Brier 主指標、資本階梯、live/experimental 雙版本、pre-registration 擴展到指標 |
 | 2026-04-22 | 1.1 | Phase 1.5a：scanner 模組重構（4 階段：discovery → coarse_filter → features → classify）；新增 `wallet_profiles` 時序表；`WalletProfileService` 統一讀取介面；`scanner_version` 版本管理 |
+| 2026-04-22 | 1.2 | Phase 1.5b：新增 `category_specialization` 與 `time_slice_consistency` 兩個 feature；SCANNER_VERSION 升至 `1.5b.0`；Telegram 推播加入 specialist 標籤；pipeline 預取 market categories |
 
 ---
 
@@ -418,7 +419,7 @@ polymarket/
 | 階段 | 範圍 | scanner_version |
 |---|---|---|
 | **1.5a** ✅ | 重構 + scanner_version + 雙表 + 服務層 | 1.5a.0 |
-| **1.5b** | 領域專精、時間切片一致性 | 1.5b.0 |
+| **1.5b** ✅ | 領域專精、時間切片一致性 | 1.5b.0 |
 | **1.5b.1** | + Brier 機率校準（樣本累積後） | 1.5b.1 |
 | **1.5b.2** | + 倉位-信心一致性 | 1.5b.2 |
 | **1.5c** | 風險特徵：回撤、回撤後倉位行為、連虧後頻率、集中度；archetype 啟用 | 1.5c.0 |

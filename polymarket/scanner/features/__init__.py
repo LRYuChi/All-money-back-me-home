@@ -7,11 +7,17 @@ Scanner.scan() 透過 pre_registered.yaml 的 enabled_in_version 決定要跑哪
 from __future__ import annotations
 
 from polymarket.scanner.features.base import BaseFeature, ScanContext
+from polymarket.scanner.features.category_specialization import CategorySpecializationFeature
 from polymarket.scanner.features.core import CoreStatsFeature
+from polymarket.scanner.features.time_slice_consistency import TimeSliceConsistencyFeature
 
 # 註冊表：feature name → BaseFeature 實例
+# 啟用順序由 pre_registered.yaml 的 scanner.features.enabled_in_version 決定，
+# 此處只是「全部可選清單」。新 feature 加在這裡，要在 yaml 對應 version 啟用才會跑。
 REGISTRY: dict[str, BaseFeature] = {
     CoreStatsFeature.name: CoreStatsFeature(),
+    CategorySpecializationFeature.name: CategorySpecializationFeature(),
+    TimeSliceConsistencyFeature.name: TimeSliceConsistencyFeature(),
 }
 
 

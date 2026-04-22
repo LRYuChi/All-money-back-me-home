@@ -27,9 +27,9 @@ meta:
 # -----------------------------------------------------------------------------
 scanner:
   version:
-    value: "1.5a.0"
+    value: "1.5b.0"
     set_at: "2026-04-22"
-    rationale: "Initial 4-stage scanner refactor: discovery → coarse_filter → features → classify"
+    rationale: "Phase 1.5b — adds category_specialization + time_slice_consistency features; enables specialist tagging"
     next_review: "2026-07-22"
 
   # § 0.1 第一階段：Discovery — 候選錢包池
@@ -91,6 +91,52 @@ scanner:
         - "time_slice_consistency"
         - "brier_calibration"
         - "position_confidence"      # 倉位-信心一致性
+
+    # § 0.3.1 各 feature 的閾值——用於 archetype 判定 (1.5c) 與 specialist tag
+    thresholds:
+      category_specialization:
+        min_samples_per_category:
+          value: 5
+          set_at: "2026-04-22"
+          rationale: "單一類別下少於 5 筆已結算倉位無法可靠估計勝率"
+          next_review: "2026-07-22"
+        min_total_resolved:
+          value: 10
+          set_at: "2026-04-22"
+          rationale: "整體已結算倉位少於 10 筆時整個特徵不可靠，回傳 low_samples"
+          next_review: "2026-07-22"
+        specialist_win_rate_lift:
+          value: 0.10
+          set_at: "2026-04-22"
+          rationale: "某類別勝率比錢包整體高 10 個百分點以上才視為 specialist"
+          next_review: "2026-07-22"
+        max_unknown_ratio:
+          value: 0.50
+          set_at: "2026-04-22"
+          rationale: "若 > 50% 的倉位 category 無法判定 (markets 表未涵蓋)，confidence 降為 low_samples"
+          next_review: "2026-07-22"
+
+      time_slice_consistency:
+        segment_days:
+          value: 30
+          set_at: "2026-04-22"
+          rationale: "30 天為一段，與 stability_filter (§1) 一致便於對照"
+          next_review: "2026-07-22"
+        num_segments:
+          value: 3
+          set_at: "2026-04-22"
+          rationale: "3 段 = 90 天觀察窗，與其他特徵時間軸對齊"
+          next_review: "2026-07-22"
+        min_samples_per_segment:
+          value: 3
+          set_at: "2026-04-22"
+          rationale: "每段少於 3 筆無法計算有意義的勝率"
+          next_review: "2026-07-22"
+        max_std_for_consistent:
+          value: 0.15
+          set_at: "2026-04-22"
+          rationale: "段間勝率標準差 ≤ 0.15 視為穩定。0.15 = 段勝率波動約 ±15%；超出可能是少數爆發撐場"
+          next_review: "2026-07-22"
 
 # -----------------------------------------------------------------------------
 # § 1. 白名單門檻 — 鯨魚分層（A/B/C：量的閘門，不代表跟單優先序）

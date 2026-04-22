@@ -63,18 +63,22 @@ class TestScanWallet:
         assert profile.features["core_stats"].confidence == "ok"
 
     def test_features_only_includes_enabled(self):
-        # 1.5a 只啟用 core_stats
+        # 1.5b.0 啟用 core_stats + category_specialization + time_slice_consistency
         trades = [_trade(f"0x{i}", i) for i in range(10)]
         profile = scan_wallet("0xw", trades, [_resolved(100)], now=NOW)
-        assert list(profile.features.keys()) == ["core_stats"]
+        assert set(profile.features.keys()) == {
+            "core_stats",
+            "category_specialization",
+            "time_slice_consistency",
+        }
 
-    def test_archetypes_empty_in_v15a(self):
+    def test_archetypes_empty_until_15c(self):
         trades = [_trade(f"0x{i}", i) for i in range(10)]
         profile = scan_wallet("0xw", trades, [_resolved(100)], now=NOW)
-        # 1.5a 不啟用 archetype
+        # 1.5b 仍不啟用 archetype（1.5c 才會）
         assert profile.archetypes == []
 
-    def test_risk_flags_empty_in_v15a(self):
+    def test_risk_flags_empty_until_15c(self):
         trades = [_trade(f"0x{i}", i) for i in range(10)]
         profile = scan_wallet("0xw", trades, [_resolved(100)], now=NOW)
         assert profile.risk_flags == []

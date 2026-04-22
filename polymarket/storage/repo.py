@@ -537,6 +537,32 @@ class SqliteRepo:
             row = conn.execute("SELECT COUNT(*) AS c FROM wallet_profiles").fetchone()
         return int(row["c"])
 
+    # === Markets metadata helpers (Phase 1.5b: category lookup for scanner) ===
+
+    def get_market_categories(self, condition_ids: list[str]) -> dict[str, str]:
+        """Bulk lookup: condition_id → category. Missing IDs are absent from the dict.
+
+        Used by the scanner to pre-build market_categories for category_specialization
+        feature without N+1 queries.
+        """
+        if not condition_ids:
+            return {}
+        conn = self._connect()
+        # SQLite has a default limit on parameters per query (~999). Chunk to be safe.
+        result: dict[str, str] = {}
+        chunk_size = 500
+        for i in range(0, len(condition_ids), chunk_size):
+            chunk = condition_ids[i : i + chunk_size]
+            placeholders = ",".join("?" * len(chunk))
+            rows = conn.execute(
+                f"SELECT condition_id, category FROM markets WHERE condition_id IN ({placeholders})",
+                chunk,
+            ).fetchall()
+            for r in rows:
+                if r["category"]:
+                    result[r["condition_id"]] = r["category"]
+        return result
+
 
 def _tier_change_reason(prev: str | None, new: str, stability_pass: bool) -> str:
     if prev is None:
