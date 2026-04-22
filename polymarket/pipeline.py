@@ -31,7 +31,9 @@ from typing import Any
 from polymarket.clients.clob import ClobClient
 from polymarket.clients.data_api import DataApiClient
 from polymarket.clients.gamma import GammaClient
+from polymarket.config import load_pre_registered
 from polymarket.features.whales import TIER_ORDER, classify_wallet
+from polymarket.scanner.scan import scan_wallet
 from polymarket.storage.repo import SqliteRepo
 from polymarket.telegram import send_whale_alert
 
@@ -52,6 +54,7 @@ class RunStats:
     trades_ingested: int = 0
     unique_wallets_seen: int = 0
     wallets_recomputed: int = 0
+    profiles_written: int = 0  # Phase 1.5+: append-only count
     tier_changes: int = 0
     alerts_sent: int = 0
     alerts_skipped_dup: int = 0
@@ -61,8 +64,9 @@ class RunStats:
         return (
             f"markets={self.markets_scanned} trades={self.trades_ingested} "
             f"wallets={self.unique_wallets_seen} recomputed={self.wallets_recomputed} "
-            f"tier_changes={self.tier_changes} alerts_sent={self.alerts_sent} "
-            f"alerts_dup={self.alerts_skipped_dup} errors={len(self.errors)}"
+            f"profiles={self.profiles_written} tier_changes={self.tier_changes} "
+            f"alerts_sent={self.alerts_sent} alerts_dup={self.alerts_skipped_dup} "
+            f"errors={len(self.errors)}"
         )
 
 
@@ -122,10 +126,12 @@ def run_once(
         wallets = repo.recent_unique_wallets(hours=ALERT_TIME_WINDOW_HOURS, limit=500)
         stats.unique_wallets_seen = len(wallets)
 
-        # --- Step 4: 為新/過期錢包重新計算統計 ---
+        # --- Step 4: 為新/過期錢包重新計算統計（同時寫 whale_stats + wallet_profiles） ---
         now = datetime.now(timezone.utc)
         cutoff = (now - timedelta(hours=WALLET_REFRESH_INTERVAL_HOURS)).isoformat()
+        pre_reg = load_pre_registered()
         recomputed = 0
+        profiles_written = 0
 
         for wallet in wallets:
             if recomputed >= wallets_cap:
@@ -140,6 +146,7 @@ def run_once(
                 stats.errors.append(f"fetch wallet {wallet[:10]}: {exc}")
                 continue
 
+            # === Phase 1 contract: whale_stats（保留不動） ===
             whale_stats = classify_wallet(wallet, user_trades, positions, now=now)
             changed_from = repo.upsert_whale_stats(whale_stats.to_dict())
             if changed_from is not None:
@@ -147,9 +154,27 @@ def run_once(
                 logger.info(
                     "tier change: %s %s -> %s", wallet[:10], changed_from, whale_stats.tier
                 )
+
+            # === Phase 1.5+: wallet_profiles（append-only 時序） ===
+            try:
+                profile = scan_wallet(
+                    wallet,
+                    user_trades,
+                    positions,
+                    pre_reg=pre_reg,
+                    market_categories=market_category,
+                    now=now,
+                )
+                repo.insert_wallet_profile(profile.to_db_dict())
+                profiles_written += 1
+            except Exception as exc:
+                stats.errors.append(f"scan_wallet {wallet[:10]}: {exc}")
+                logger.exception("scan_wallet failed for %s", wallet)
+
             recomputed += 1
 
         stats.wallets_recomputed = recomputed
+        stats.profiles_written = profiles_written
 
         # --- Step 5: 對 A/B/C 鯨魚的新交易送推播 ---
         whales = repo.list_whales_by_tier("A", "B", "C")

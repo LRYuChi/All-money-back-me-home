@@ -401,6 +401,143 @@ class SqliteRepo:
         return int(row["c"])
 
 
+    # === wallet_profiles (Phase 1.5+, append-only time-series) ===
+
+    def insert_wallet_profile(self, profile_dict: dict[str, Any]) -> int:
+        """Append 一筆 wallet_profile 紀錄（永不覆蓋）.
+
+        Args:
+            profile_dict: 來自 WalletProfile.to_db_dict()
+        Returns:
+            新插入的 row id
+        """
+        conn = self._connect()
+        cur = conn.execute(
+            """
+            INSERT INTO wallet_profiles (
+                wallet_address, scanner_version, scanned_at,
+                passed_coarse_filter, coarse_filter_reasons,
+                trade_count_90d, resolved_count, cumulative_pnl, avg_trade_size, win_rate,
+                features_json, tier, archetypes_json, risk_flags_json,
+                sample_size_warning, raw_features_json
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                profile_dict["wallet_address"],
+                profile_dict["scanner_version"],
+                profile_dict["scanned_at"],
+                profile_dict["passed_coarse_filter"],
+                profile_dict["coarse_filter_reasons"],
+                profile_dict.get("trade_count_90d"),
+                profile_dict.get("resolved_count"),
+                profile_dict.get("cumulative_pnl"),
+                profile_dict.get("avg_trade_size"),
+                profile_dict.get("win_rate"),
+                profile_dict["features_json"],
+                profile_dict["tier"],
+                profile_dict["archetypes_json"],
+                profile_dict["risk_flags_json"],
+                profile_dict["sample_size_warning"],
+                profile_dict["raw_features_json"],
+            ),
+        )
+        conn.commit()
+        return int(cur.lastrowid or 0)
+
+    def get_latest_wallet_profile(
+        self,
+        wallet_address: str,
+        scanner_version: str | None = None,
+    ) -> dict | None:
+        """取得錢包的最新 profile。可選指定 scanner_version."""
+        conn = self._connect()
+        if scanner_version:
+            row = conn.execute(
+                """
+                SELECT * FROM wallet_profiles
+                WHERE wallet_address = ? AND scanner_version = ?
+                ORDER BY scanned_at DESC LIMIT 1
+                """,
+                (wallet_address, scanner_version),
+            ).fetchone()
+        else:
+            row = conn.execute(
+                """
+                SELECT * FROM wallet_profiles
+                WHERE wallet_address = ?
+                ORDER BY scanned_at DESC LIMIT 1
+                """,
+                (wallet_address,),
+            ).fetchone()
+        return dict(row) if row else None
+
+    def list_latest_wallet_profiles(
+        self,
+        *,
+        tier: str | list[str] | None = None,
+        scanner_version: str | None = None,
+        limit: int = 100,
+    ) -> list[dict]:
+        """每個錢包只取最新一筆。可選 tier 過濾與 version 過濾."""
+        conn = self._connect()
+        # 子查詢取每個 wallet 的最新 id
+        sql = """
+            SELECT wp.* FROM wallet_profiles wp
+            INNER JOIN (
+                SELECT wallet_address, MAX(scanned_at) AS latest
+                FROM wallet_profiles
+                {version_filter}
+                GROUP BY wallet_address
+            ) latest ON wp.wallet_address = latest.wallet_address
+                    AND wp.scanned_at = latest.latest
+            {tier_filter}
+            ORDER BY wp.cumulative_pnl DESC
+            LIMIT ?
+        """
+        version_filter = ""
+        tier_filter = ""
+        params: list[Any] = []
+
+        if scanner_version:
+            version_filter = "WHERE scanner_version = ?"
+            params.append(scanner_version)
+
+        if tier:
+            tiers = [tier] if isinstance(tier, str) else list(tier)
+            placeholders = ",".join("?" * len(tiers))
+            tier_filter = f"WHERE wp.tier IN ({placeholders})"
+            params.extend(tiers)
+
+        params.append(limit)
+        rows = conn.execute(
+            sql.format(version_filter=version_filter, tier_filter=tier_filter), params
+        ).fetchall()
+        return [dict(r) for r in rows]
+
+    def list_wallet_profile_history(
+        self, wallet_address: str, *, limit: int = 30
+    ) -> list[dict]:
+        """單一錢包的 profile 時序（新→舊）."""
+        conn = self._connect()
+        rows = conn.execute(
+            "SELECT * FROM wallet_profiles WHERE wallet_address=? "
+            "ORDER BY scanned_at DESC LIMIT ?",
+            (wallet_address, limit),
+        ).fetchall()
+        return [dict(r) for r in rows]
+
+    def count_wallet_profiles(self, *, scanner_version: str | None = None) -> int:
+        conn = self._connect()
+        if scanner_version:
+            row = conn.execute(
+                "SELECT COUNT(*) AS c FROM wallet_profiles WHERE scanner_version=?",
+                (scanner_version,),
+            ).fetchone()
+        else:
+            row = conn.execute("SELECT COUNT(*) AS c FROM wallet_profiles").fetchone()
+        return int(row["c"])
+
+
 def _tier_change_reason(prev: str | None, new: str, stability_pass: bool) -> str:
     if prev is None:
         return "initial"

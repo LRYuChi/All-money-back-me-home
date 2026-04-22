@@ -138,3 +138,53 @@ CREATE TABLE IF NOT EXISTS whale_trade_alerts (
 
 CREATE INDEX IF NOT EXISTS idx_alerts_wallet_time ON whale_trade_alerts(wallet_address, match_time);
 CREATE INDEX IF NOT EXISTS idx_alerts_tier_time ON whale_trade_alerts(tier, match_time);
+
+-- ============================================================================
+-- Phase 1.5+: 錢包畫像（Wallet Profile）— 多維度行為特徵掃描器輸出
+-- ============================================================================
+-- 此表與 whale_stats 的關係：
+--   - whale_stats 是 Phase 1 的當前快照（每錢包一筆，UPSERT 覆蓋）
+--   - wallet_profiles 是 Phase 1.5+ 的時序紀錄（每次掃描 append 一筆）
+--   - 兩者並存，由 services.wallet_profile_service 統一對外提供讀取介面
+--
+-- 設計原則：
+--   1. Append-only：永不覆蓋歷史紀錄，scanner 每跑一次就 INSERT 新列
+--   2. Versioned：scanner_version 記錄當時的計算邏輯版本，禁止 cross-version 直接比較
+--   3. JSON-extensible：features/archetypes/risk_flags 用 JSON 儲存，schema 演進無需 migration
+--   4. Time-indexable：scanned_at 為主要時間索引，方便未來按月分區或冷資料歸檔
+-- ============================================================================
+
+CREATE TABLE IF NOT EXISTS wallet_profiles (
+    id                  INTEGER PRIMARY KEY AUTOINCREMENT,
+    wallet_address      TEXT NOT NULL,
+    scanner_version     TEXT NOT NULL,              -- e.g. "1.5a.0"
+    scanned_at          TEXT NOT NULL,              -- ISO 8601 UTC
+    -- 第二階段：Coarse filter result
+    passed_coarse_filter INTEGER NOT NULL DEFAULT 1,
+    coarse_filter_reasons TEXT,                     -- JSON array of failure reasons
+    -- 第三階段：Core stats（這幾欄為了快速查詢拆出來，不放 JSON）
+    trade_count_90d     INTEGER,
+    resolved_count      INTEGER,
+    cumulative_pnl      REAL,
+    avg_trade_size      REAL,
+    win_rate            REAL,
+    -- 第三階段：Features（多家族特徵全部塞 JSON，schema 自由演進）
+    -- 結構: { "feature_name": { "value": ..., "confidence": "ok|low_samples|unknown", ... }, ... }
+    features_json       TEXT,
+    -- 第四階段：分類
+    tier                TEXT,                       -- A | B | C | volatile | excluded
+    archetypes_json     TEXT,                       -- JSON array, multi-label, e.g. ["selective", "political_expert"]
+    risk_flags_json     TEXT,                       -- JSON array, e.g. ["concentration_high", "loss_loading"]
+    -- 元資料
+    sample_size_warning INTEGER NOT NULL DEFAULT 0, -- 1 = 整體樣本不足，需在 UI 上明示
+    raw_features_json   TEXT                        -- 完整中間計算結果，供未來歸因 / 重新評估
+);
+
+-- 複合索引：查詢「某錢包的歷史 profile」是常見模式
+CREATE INDEX IF NOT EXISTS idx_wp_wallet_time ON wallet_profiles(wallet_address, scanned_at DESC);
+-- 時間索引：未來分區與冷資料歸檔
+CREATE INDEX IF NOT EXISTS idx_wp_scanned ON wallet_profiles(scanned_at);
+-- 版本索引：方便比較不同 scanner 版本的差異
+CREATE INDEX IF NOT EXISTS idx_wp_version_wallet ON wallet_profiles(scanner_version, wallet_address);
+-- Tier 索引：A/B/C 篩選查詢加速
+CREATE INDEX IF NOT EXISTS idx_wp_tier ON wallet_profiles(tier);

@@ -367,3 +367,76 @@ pytest tests/test_polymarket_*.py
 | 日期 | 版本 | 主要變更 |
 |---|---|---|
 | 2026-04-21 | 1.0 | 初版定稿：五層架構、三層鯨魚、Brier 主指標、資本階梯、live/experimental 雙版本、pre-registration 擴展到指標 |
+| 2026-04-22 | 1.1 | Phase 1.5a：scanner 模組重構（4 階段：discovery → coarse_filter → features → classify）；新增 `wallet_profiles` 時序表；`WalletProfileService` 統一讀取介面；`scanner_version` 版本管理 |
+
+---
+
+## 第五章 Phase 1.5：Scanner 重構（2026-04-22 新增）
+
+Phase 1 的 `features/whales.py` 已升級為 `polymarket/scanner/` 模組，採用四階段流水線。**此重構不改變任何外部行為或推播邏輯**——目的是為 Phase 1.5b+ 的多維特徵擴充建立基礎。
+
+### 5.1 架構層次
+
+```
+polymarket/
+├── scanner/                       # NEW — 錢包畫像生成器
+│   ├── __init__.py               # SCANNER_VERSION 常量
+│   ├── discovery.py              # 第一階段：候選池
+│   ├── coarse_filter.py          # 第二階段：粗篩淘汰
+│   ├── features/
+│   │   ├── base.py               # BaseFeature ABC（min_samples + unknown fallback）
+│   │   ├── core.py               # CoreStatsFeature (1.5a)
+│   │   └── (1.5b: category_specialization, time_slice, brier...)
+│   ├── classify.py               # 第四階段：tier + archetype + risk_flags
+│   ├── profile.py                # WalletProfile dataclass
+│   └── scan.py                   # 主流程編排
+├── services/
+│   └── wallet_profile_service.py # 統一讀取介面（兩表 fallback）
+└── features/whales.py            # Phase 1 邏輯保留，被 scanner 包裝
+```
+
+### 5.2 雙表並存策略
+
+`whale_stats`（Phase 1 契約）與 `wallet_profiles`（Phase 1.5+）同時存在：
+
+| 表 | 用途 | 寫入模式 |
+|---|---|---|
+| `whale_stats` | Phase 1 推播契約，UPSERT 覆蓋 | 每錢包一筆，反映「當前」 |
+| `wallet_profiles` | Phase 1.5+ 時序紀錄，append-only | 每次掃描 INSERT 一筆，反映「當時」 |
+
+下游一律透過 `WalletProfileService` 讀取，避免雙表 schema 細節外洩。
+
+### 5.3 A/B/C vs Archetype 的明確分工
+
+- **A/B/C（量的閘門）**：粗粒度過濾，回答「值不值得進入注意範圍」。**字母順序代表「資料樣本基礎的穩固度」，不代表跟單優先序**
+- **Archetype（質的畫像）**：多標籤分類，回答「行為模式是哪一類」。1.5c 起啟用：穩健 / 選擇 / 爆發 / 領域專家 / 異常訊息
+
+兩者並存：粗篩走 A/B/C，深度畫像走 archetype。Telegram 推播會合併兩者標籤。
+
+### 5.4 1.5 子階段交付計畫
+
+| 階段 | 範圍 | scanner_version |
+|---|---|---|
+| **1.5a** ✅ | 重構 + scanner_version + 雙表 + 服務層 | 1.5a.0 |
+| **1.5b** | 領域專精、時間切片一致性 | 1.5b.0 |
+| **1.5b.1** | + Brier 機率校準（樣本累積後） | 1.5b.1 |
+| **1.5b.2** | + 倉位-信心一致性 | 1.5b.2 |
+| **1.5c** | 風險特徵：回撤、回撤後倉位行為、連虧後頻率、集中度；archetype 啟用 | 1.5c.0 |
+| **1.5d** | 高成本特徵：分批進場、試探倉、加碼減碼對稱性 | 1.5d.0 |
+| **1.7** | 訊息領先性、跨平台對沖偵測（條件性開啟） | 1.7.0 |
+
+每個子階段結束都有可運行系統 + 累積的 wallet_profiles 時序資料。
+
+### 5.5 Pre-registration 與 scanner_version 的雙重版本管理
+
+兩種版本機制各司其職：
+
+- **`pre_registered.yaml` 的 `next_review`**：閾值的時間版本
+- **`SCANNER_VERSION`**：計算邏輯的代碼版本
+
+當 `enabled_in_version` 列表中新增特徵 → 必須升 `SCANNER_VERSION`。
+當既有特徵的計算邏輯改變 → 必須升 `SCANNER_VERSION`。
+當僅閾值調整（例如 `min_trades_total` 從 5 改 10）→ 不升 `SCANNER_VERSION`，但要在 yaml 更新 `set_at` 與 `rationale`。
+
+歷史 `wallet_profiles` 紀錄永不重算。跨版本比較需明確標示。詳見 `docs/polymarket/known_issues.md`。
+

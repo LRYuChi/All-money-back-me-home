@@ -10,13 +10,90 @@
 # 與 docs/polymarket/architecture.md 第二章為同步關係，衝突時以本檔為準。
 
 meta:
-  schema_version: 1
-  document_version: "1.0"
-  last_updated: "2026-04-21"
+  schema_version: 2
+  document_version: "1.1"
+  last_updated: "2026-04-22"
   maintainer: "persempre080709@gmail.com"
 
 # -----------------------------------------------------------------------------
-# § 1. 白名單門檻 — 鯨魚分層
+# § 0. 掃描器（Scanner）— Phase 1.5+
+#
+# A/B/C 與 archetype 的分工：
+#   - whale_tiers (§1) 是「量的閘門」，回答「這個錢包值不值得被深度分析」
+#     A/B/C 的字母順序僅代表「資料樣本基礎的穩固度」，不代表跟單優先序
+#     高字母不等於更好的跟單對象——一個 C 級的領域專家可能比 A 級的通才更值得跟
+#   - archetypes (§8) 是「質的畫像」，回答「這個錢包的行為模式是什麼類型」
+#   - 兩者並存：粗篩走 §1，深度畫像走 §8。Telegram 推播會合併兩者標籤。
+# -----------------------------------------------------------------------------
+scanner:
+  version:
+    value: "1.5a.0"
+    set_at: "2026-04-22"
+    rationale: "Initial 4-stage scanner refactor: discovery → coarse_filter → features → classify"
+    next_review: "2026-07-22"
+
+  # § 0.1 第一階段：Discovery — 候選錢包池
+  discovery:
+    active_window_days:
+      value: 90
+      set_at: "2026-04-22"
+      rationale: "90 天可涵蓋多週期事件型交易者，又能排除殭屍錢包"
+      next_review: "2026-07-22"
+    max_candidates_per_run:
+      value: 1000
+      set_at: "2026-04-22"
+      rationale: "保護 Data API quota；超過此數依 24h notional 排序取前 N"
+      next_review: "2026-07-22"
+
+  # § 0.2 第二階段：Coarse Filter — 粗篩淘汰
+  # 通過粗篩的錢包才會進入 features 階段
+  coarse_filter:
+    min_trades_total:
+      value: 5
+      set_at: "2026-04-22"
+      rationale: "少於 5 筆交易連任何統計判斷都做不了，直接淘汰"
+      next_review: "2026-07-22"
+    max_days_since_last_trade:
+      value: 30
+      set_at: "2026-04-22"
+      rationale: "30 天無交易視為非活躍，避免分析快結束的歷史錢包"
+      next_review: "2026-07-22"
+    min_cumulative_pnl_usdc:
+      value: -1000
+      set_at: "2026-04-22"
+      rationale: "累積 PnL 低於 -1000 USDC 屬明顯虧損者，跟單價值極低；門檻寬鬆讓邊緣錢包仍可被觀察"
+      next_review: "2026-07-22"
+    max_market_concentration:
+      value: 0.5
+      set_at: "2026-04-22"
+      rationale: "單一市場佔總成交 > 50% 通常是該市場做市商，行為不可複製"
+      next_review: "2026-07-22"
+
+  # § 0.3 第三階段：Features — 特徵計算
+  # 每個特徵自帶 min_samples 門檻；不達門檻時回傳 'unknown' 而非 0 或 false
+  # 1.5b 起逐批啟用，1.5a 只跑 core stats（不算新特徵）
+  features:
+    enabled_in_version:
+      "1.5a.0":
+        - "core_stats"  # trade_count, win_rate, cumulative_pnl, avg_size
+      "1.5b.0":
+        - "core_stats"
+        - "category_specialization"  # 領域專精（首批優先）
+        - "time_slice_consistency"   # 時間切片一致性
+      "1.5b.1":
+        - "core_stats"
+        - "category_specialization"
+        - "time_slice_consistency"
+        - "brier_calibration"        # Brier + 機率校準
+      "1.5b.2":
+        - "core_stats"
+        - "category_specialization"
+        - "time_slice_consistency"
+        - "brier_calibration"
+        - "position_confidence"      # 倉位-信心一致性
+
+# -----------------------------------------------------------------------------
+# § 1. 白名單門檻 — 鯨魚分層（A/B/C：量的閘門，不代表跟單優先序）
 # -----------------------------------------------------------------------------
 whale_tiers:
   A:
