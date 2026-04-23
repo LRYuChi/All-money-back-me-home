@@ -87,6 +87,55 @@ def _cmd_stats(args: argparse.Namespace) -> int:
     return 0
 
 
+def _cmd_follower_stats(args: argparse.Namespace) -> int:
+    """顯示 paper trading 帳本統計（每個 follower 分開）。"""
+    from polymarket.followers import REGISTRY
+    from polymarket.followers.paper_book import PaperBook
+
+    with SqliteRepo() as repo:
+        book = PaperBook(repo)
+
+        # 先掃一次 resolve 新結算的市場
+        try:
+            resolve = book.scan_and_resolve()
+            print(f"[resolve scan] resolved={resolve['resolved']} timeout={resolve['timeout']} open={resolve['still_open']}")
+        except Exception as e:
+            print(f"[resolve scan] failed: {e}")
+        print()
+
+        print("=== Per-follower summary ===")
+        for name in list(REGISTRY.keys()) + [None]:
+            label = name or "ALL"
+            s = book.summary(follower_name=name)
+            if s["total"] == 0:
+                print(f"  {label:<20} (no trades)")
+                continue
+            print(
+                f"  {label:<20} n={s['total']:<3} "
+                f"open={s['open']:<3} closed={s['closed']:<3} "
+                f"wr={s['win_rate']*100:>5.1f}% "
+                f"pnl=${s['realized_pnl_usdc']:+,.2f} "
+                f"pnl%={s['realized_pnl_pct']*100:+.2f}%"
+            )
+
+        # 近期決策摘要
+        conn = repo._connect()
+        print()
+        print("=== Recent 10 follower decisions ===")
+        for r in conn.execute(
+            "SELECT decided_at, follower_name, source_tier, decision, reason, "
+            "proposed_size_usdc "
+            "FROM follower_decisions ORDER BY id DESC LIMIT 10"
+        ):
+            size = r["proposed_size_usdc"]
+            size_s = f"${size:.0f}" if size is not None else "—"
+            print(
+                f"  {r['decided_at']} [{r['follower_name']}] {r['source_tier'] or '?'}"
+                f" {r['decision']:<7} size={size_s}  {r['reason']}"
+            )
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(prog="polymarket.cli", description="Polymarket Phase 0 CLI")
     sub = p.add_subparsers(dest="cmd", required=True)
@@ -107,6 +156,9 @@ def build_parser() -> argparse.ArgumentParser:
 
     s = sub.add_parser("stats", help="顯示本地 DB 計數")
     s.set_defaults(func=_cmd_stats)
+
+    fs = sub.add_parser("follower-stats", help="Follower 與 paper trading 統計")
+    fs.set_defaults(func=_cmd_follower_stats)
 
     return p
 

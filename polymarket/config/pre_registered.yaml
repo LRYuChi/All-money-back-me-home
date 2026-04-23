@@ -211,6 +211,53 @@ whale_tiers:
       next_review: "2026-07-21"
     push_strategy: "daily_digest"
 
+  # § 新增層：emerging — 「最近爆發但歷史短」的錢包
+  # 背景：pre-registration 的 stability filter 要求 3 段 × 30d 都有 ≥ 3 筆 resolved。
+  # 但 Polymarket Data API /positions 只回當前 + redeemable，歷史無法補回。
+  # 結果：最近 30 天大量活動的好錢包永遠卡在 volatile。
+  # emerging 解法：不放寬既有層的閾值（pre-registration 不可事後調），
+  # 而是新增獨立類別專門辨識這種「短樣本但質量好」的錢包。
+  E:
+    min_trades_90d:
+      value: 20
+      set_at: "2026-04-23"
+      rationale: "需要足夠的近期活動，排除新手錢包"
+      next_review: "2026-07-23"
+    min_win_rate:
+      value: 0.50
+      set_at: "2026-04-23"
+      rationale: "用 C 層的保本線；不同於 emerging 的，真正的驗證來自下方 segment 0 門檻"
+      next_review: "2026-07-23"
+    min_cumulative_pnl_usdc:
+      value: 2000
+      set_at: "2026-04-23"
+      rationale: "與 C 相同 — 有實際賺錢證據"
+      next_review: "2026-07-23"
+    min_avg_trade_size_usdc:
+      value: 100
+      set_at: "2026-04-23"
+      rationale: "與 C 相同"
+      next_review: "2026-07-23"
+    # emerging 獨有：segment 0（最近 30 天）的充分性要求
+    min_segment_0_resolved:
+      value: 10
+      set_at: "2026-04-23"
+      rationale: "最近 30 天至少 10 筆已結算 — 確保不是運氣好的小樣本"
+      next_review: "2026-07-23"
+    min_segment_0_win_rate:
+      value: 0.50
+      set_at: "2026-04-23"
+      rationale: "最近 30 天的勝率不能低於整體最低門檻"
+      next_review: "2026-07-23"
+    # emerging 接受 segments 1, 2 = N/A（資料不足）但不接受「有資料且勝率低」
+    # 也就是說：如果 seg 1 or 2 有 ≥ 3 筆 resolved 但勝率顯著低，就不是 emerging
+    max_segment_1_2_dropoff:
+      value: 0.20
+      set_at: "2026-04-23"
+      rationale: "若 seg 1 或 2 有充分樣本且勝率比 seg 0 低 20pp 以上，則退化為 volatile（真的不穩）"
+      next_review: "2026-07-23"
+    push_strategy: "realtime_low_priority"   # 推送但標明「樣本不足」
+
   # 穩定性後過濾：防止「後 30 天爆走但前 60 天爛」的倖存者偏差
   stability_filter:
     segment_count:

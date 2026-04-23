@@ -32,6 +32,7 @@ from polymarket.models import Position, Trade
 logger = logging.getLogger(__name__)
 
 TIER_ORDER = ("A", "B", "C")
+TIER_EMERGING = "emerging"
 TIER_VOLATILE = "volatile"
 TIER_EXCLUDED = "excluded"
 
@@ -136,7 +137,13 @@ def _compute_segment_win_rates(
 
 
 def classify_tier(stats: WhaleStats, pre_reg: dict | None = None) -> str:
-    """根據 stats 與 pre_registered thresholds 判定 tier。修改 stats.tier 並回傳。"""
+    """根據 stats 與 pre_registered thresholds 判定 tier。修改 stats.tier 並回傳.
+
+    判定順序：
+      A → B → C（嚴格層級） → 穩定性檢查通過即返回
+      若穩定性失敗 → 檢查 emerging（seg 0 達標 + seg 1/2 不顯著走壞）
+      仍不符合 → volatile 或 excluded
+    """
     cfg = pre_reg if pre_reg is not None else load_pre_registered()
     tiers_cfg = cfg["whale_tiers"]
     stability_cfg = tiers_cfg.get("stability_filter", {})
@@ -152,14 +159,62 @@ def classify_tier(stats: WhaleStats, pre_reg: dict | None = None) -> str:
         stats.stability_pass = _check_stability(
             stats.segment_win_rates, min_win_rate, stability_ratio
         )
-        if not stats.stability_pass:
-            stats.tier = TIER_VOLATILE
+        if stats.stability_pass:
+            stats.tier = tier_key
             return stats.tier
-        stats.tier = tier_key
+        # 穩定性失敗 — 嘗試 emerging 判定
+        emerging_cfg = tiers_cfg.get("E")
+        if emerging_cfg and _meets_emerging_criteria(stats, emerging_cfg):
+            stats.tier = TIER_EMERGING
+            return stats.tier
+        # 既不穩又不符合 emerging → volatile
+        stats.tier = TIER_VOLATILE
         return stats.tier
 
     stats.tier = TIER_EXCLUDED
     return stats.tier
+
+
+def _meets_emerging_criteria(stats: WhaleStats, ecfg: dict) -> bool:
+    """判斷是否符合 emerging tier。
+
+    條件：
+    1. 通過 emerging 的基本數量/勝率/PnL/平均尺寸門檻（與 C 相同或更嚴）
+    2. Segment 0（最近 30 天）有充分樣本 + 勝率達標
+    3. Segments 1, 2 允許 N/A (-1)，但若有資料，不能比 segment 0 掉太多
+    """
+    # 基本門檻
+    if not _meets_tier_thresholds(stats, ecfg):
+        return False
+
+    # Segment 0 門檻
+    # 我們需要從 segment_win_rates + 原始 segment 樣本數獲取資訊
+    # 但 WhaleStats 只保存 segment_win_rates（-1 代表樣本不足）
+    # 這裡用 win_rate 推估：若 segment 0 rate >= min_segment_0_win_rate
+    # 並且整體 resolved_count >= min_segment_0_resolved（近似，因為 emerging 的 seg 0 通常就是全部 resolved）
+    min_seg0_resolved = int(ecfg["min_segment_0_resolved"]["value"])
+    min_seg0_wr = float(ecfg["min_segment_0_win_rate"]["value"])
+    max_dropoff = float(ecfg["max_segment_1_2_dropoff"]["value"])
+
+    # 至少要有 segment 0 資料
+    if not stats.segment_win_rates or len(stats.segment_win_rates) < 1:
+        return False
+    seg0 = stats.segment_win_rates[0]
+    if seg0 == -1 or seg0 < min_seg0_wr:
+        return False
+
+    # resolved_count 是整體，但對 emerging 而言 seg 1/2 通常是 0，所以 resolved_count ≈ seg 0 resolved
+    if stats.resolved_count < min_seg0_resolved:
+        return False
+
+    # Segments 1, 2 的保護機制：若有資料且勝率顯著低於 seg 0 → 不是 emerging，是 volatile
+    for other_seg in stats.segment_win_rates[1:]:
+        if other_seg == -1:
+            continue  # 允許 N/A
+        if (seg0 - other_seg) > max_dropoff:
+            return False
+
+    return True
 
 
 def _meets_tier_thresholds(stats: WhaleStats, tcfg: dict) -> bool:

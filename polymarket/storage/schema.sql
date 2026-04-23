@@ -188,3 +188,69 @@ CREATE INDEX IF NOT EXISTS idx_wp_scanned ON wallet_profiles(scanned_at);
 CREATE INDEX IF NOT EXISTS idx_wp_version_wallet ON wallet_profiles(scanner_version, wallet_address);
 -- Tier 索引：A/B/C 篩選查詢加速
 CREATE INDEX IF NOT EXISTS idx_wp_tier ON wallet_profiles(tier);
+
+-- ============================================================================
+-- Phase 1.5b+: 跟單業務邏輯 (Followers)
+-- ============================================================================
+-- 所有 follower 的決策完整紀錄（含 skip/veto，供未來歸因）
+CREATE TABLE IF NOT EXISTS follower_decisions (
+    id                  INTEGER PRIMARY KEY AUTOINCREMENT,
+    follower_name       TEXT NOT NULL,
+    follower_version    TEXT NOT NULL,
+    decided_at          TEXT NOT NULL,
+    -- 來源 alert (FK 形式但 SQLite 不強制)
+    source_wallet       TEXT NOT NULL,
+    source_tx_hash      TEXT NOT NULL,
+    source_event_index  INTEGER NOT NULL,
+    source_tier         TEXT,
+    -- 決策
+    decision            TEXT NOT NULL,   -- 'follow' | 'skip' | 'veto'
+    reason              TEXT,
+    -- if decision='follow'
+    proposed_stake_pct  REAL,
+    proposed_size_usdc  REAL,
+    -- 若 follow 成功寫入 paper_trades，對應 id
+    paper_trade_id      INTEGER
+);
+
+CREATE INDEX IF NOT EXISTS idx_fd_decided_at ON follower_decisions(decided_at DESC);
+CREATE INDEX IF NOT EXISTS idx_fd_follower_decision ON follower_decisions(follower_name, decision);
+CREATE INDEX IF NOT EXISTS idx_fd_source ON follower_decisions(source_wallet, source_tx_hash);
+
+-- 紙上跟單帳本 (純模擬, 絕不執行真實下單)
+CREATE TABLE IF NOT EXISTS paper_trades (
+    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+    follower_name   TEXT NOT NULL,
+    -- 來源鯨魚
+    source_wallet   TEXT NOT NULL,
+    source_tier     TEXT,
+    -- 市場
+    condition_id    TEXT NOT NULL,
+    token_id        TEXT,
+    market_question TEXT,
+    market_category TEXT,
+    outcome         TEXT,
+    side            TEXT NOT NULL,       -- 'BUY' | 'SELL'
+    -- 進場
+    entry_price     REAL NOT NULL,
+    entry_size      REAL NOT NULL,       -- 在 outcome 代幣的數量
+    entry_notional  REAL NOT NULL,       -- USDC
+    entry_time      TEXT NOT NULL,
+    -- 退場 (NULL until 結算)
+    exit_price      REAL,
+    exit_size       REAL,
+    exit_notional   REAL,
+    exit_time       TEXT,
+    exit_reason     TEXT,                 -- 'market_resolved_win' | 'market_resolved_loss' | 'timeout_90d'
+    -- 結果
+    realized_pnl        REAL,
+    realized_pnl_pct    REAL,
+    status          TEXT NOT NULL DEFAULT 'open',  -- 'open' | 'closed'
+    created_at      TEXT NOT NULL,
+    updated_at      TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_pt_status ON paper_trades(status);
+CREATE INDEX IF NOT EXISTS idx_pt_follower_status ON paper_trades(follower_name, status);
+CREATE INDEX IF NOT EXISTS idx_pt_source_wallet ON paper_trades(source_wallet);
+CREATE INDEX IF NOT EXISTS idx_pt_condition ON paper_trades(condition_id);

@@ -34,6 +34,9 @@ from polymarket.clients.data_api import DataApiClient
 from polymarket.clients.gamma import GammaClient
 from polymarket.config import load_pre_registered
 from polymarket.features.whales import TIER_ORDER, classify_wallet
+from polymarket.followers import REGISTRY as FOLLOWER_REGISTRY
+from polymarket.followers.base import AlertContext, FollowerDecision
+from polymarket.followers.paper_book import PAPER_INITIAL_CAPITAL_USDC, PaperBook, PaperTradeEntry
 from polymarket.scanner.scan import scan_wallet
 from polymarket.storage.repo import SqliteRepo
 from polymarket.telegram import send_whale_alert
@@ -47,6 +50,7 @@ TRADES_PER_MARKET = 50            # 每市場取最近 N 筆成交
 WALLET_REFRESH_INTERVAL_HOURS = 24  # 錢包統計的快取壽命
 WALLET_COMPUTE_CAP_PER_RUN = 30     # 每次最多重算幾個錢包（保護 API quota）
 ALERT_TIME_WINDOW_HOURS = 24        # 推播範圍：只對過去 N 小時的鯨魚交易推播
+CANDIDATE_LOOKBACK_HOURS = 72       # 1.5b.1 擴窗：7d 活動夠稀疏的鯨魚也能被抓到
 
 
 @dataclass
@@ -86,6 +90,8 @@ def run_once(
         DataApiClient() as data_api,
         SqliteRepo() as repo,
     ):
+        paper_book = PaperBook(repo)
+
         # --- Step 1: 抓活躍市場並 upsert ---
         try:
             raw_list = gamma.list_markets(
@@ -123,8 +129,10 @@ def run_once(
             new_count, _ = repo.insert_trades(trades)
             stats.trades_ingested += new_count
 
-        # --- Step 3: 找不重複錢包 ---
-        wallets = repo.recent_unique_wallets(hours=ALERT_TIME_WINDOW_HOURS, limit=500)
+        # --- Step 3: 找不重複錢包（擴窗 72h 以捕捉稀疏但高值鯨魚）---
+        # 1.5b.1 observation: 真鯨魚如 0x204f72f3 可能 2-3 天才出手一次，
+        # 24h 窗口會錯過他們。擴到 72h，排序仍是成交量優先。
+        wallets = repo.recent_unique_wallets(hours=CANDIDATE_LOOKBACK_HOURS, limit=500)
         stats.unique_wallets_seen = len(wallets)
 
         # --- Step 4: 為新/過期錢包重新計算統計（同時寫 whale_stats + wallet_profiles） ---
@@ -248,6 +256,28 @@ def run_once(
                 if extras and this_cat:
                     extras["match_specialist"] = this_cat in (extras.get("specialist_categories") or [])
 
+                # === 1.5b: Followers 決策層 ===
+                # 把 alert 丟給每個 follower；可能產生 paper trade + 改變推播標記
+                alert_ctx = AlertContext(
+                    wallet_address=wallet,
+                    tx_hash=alert["tx_hash"],
+                    event_index=alert["event_index"],
+                    tier=tier,
+                    condition_id=row["condition_id"],
+                    market_question=market_question.get(row["condition_id"], ""),
+                    market_category=this_cat,
+                    outcome=row.get("outcome") or "",
+                    side=row["side"],
+                    price=float(row["price"]),
+                    size=float(row["size"]),
+                    notional=notional,
+                    match_time=_parse_iso(row["match_time"]) or datetime.now(timezone.utc),
+                    wallet_profile=whale_dicts.get(wallet),
+                )
+                follow_summary = _run_followers(paper_book, alert_ctx, stats)
+                if follow_summary:
+                    extras["follow_summary"] = follow_summary
+
                 ok, _ = send_whale_alert(
                     tier=tier,
                     wallet_address=wallet,
@@ -265,10 +295,87 @@ def run_once(
                 )
                 if ok:
                     stats.alerts_sent += 1
-                # 更新 telegram_sent 標記由 record_alert 決定（INSERT 時為 False）
-                # 若需要更新已推播狀態，可後續加 update method。Phase 1 先接受此限制。
+
+        # --- Step 6: 結算 paper trades (resolve when market closed) ---
+        try:
+            resolve_stats = paper_book.scan_and_resolve(now=now)
+            stats.paper_trades_resolved = resolve_stats.get("resolved", 0)
+            stats.paper_trades_timeout = resolve_stats.get("timeout", 0)
+        except Exception as exc:
+            stats.errors.append(f"paper_resolve: {exc}")
+            logger.exception("paper_book.scan_and_resolve failed")
 
     return stats
+
+
+def _run_followers(paper_book: PaperBook, alert_ctx: AlertContext, stats: RunStats) -> str | None:
+    """把 alert 過一遍所有 followers, 寫 follower_decisions + 可能開 paper_trade.
+
+    回傳一段簡短的文字摘要給 Telegram 訊息（若至少一個 follower 決定 follow）.
+    """
+    follow_summaries: list[str] = []
+    for follower in FOLLOWER_REGISTRY.values():
+        decision = follower.on_alert(alert_ctx)
+        paper_trade_id: int | None = None
+
+        if decision.is_follow():
+            # 檢查是否已有同錢包+同市場的開倉 paper_trade
+            if paper_book.has_open_position(follower.name, alert_ctx.wallet_address, alert_ctx.condition_id or ""):
+                decision = FollowerDecision(
+                    follower_name=follower.name,
+                    follower_version=follower.version,
+                    decision="skip",
+                    reason="duplicate_position_already_open",
+                    decided_at=decision.decided_at,
+                )
+            else:
+                # 轉為 paper trade
+                stake_pct = decision.proposed_stake_pct or 0.0
+                notional = PAPER_INITIAL_CAPITAL_USDC * stake_pct
+                try:
+                    entry_size = notional / alert_ctx.price if alert_ctx.price > 0 else 0.0
+                    entry = PaperTradeEntry(
+                        follower_name=follower.name,
+                        source_wallet=alert_ctx.wallet_address,
+                        source_tier=alert_ctx.tier,
+                        condition_id=alert_ctx.condition_id or "",
+                        token_id="",  # 可後續 lookup
+                        market_question=alert_ctx.market_question or "",
+                        market_category=alert_ctx.market_category or "",
+                        outcome=alert_ctx.outcome,
+                        side=alert_ctx.side,
+                        entry_price=alert_ctx.price,
+                        entry_size=entry_size,
+                        entry_notional=notional,
+                        entry_time=alert_ctx.match_time,
+                    )
+                    paper_trade_id = paper_book.enter_paper_trade(entry)
+                    stats.paper_trades_opened += 1
+                    decision.proposed_size_usdc = notional
+                    follow_summaries.append(f"{follower.name}:follow(${notional:.0f})")
+                except Exception as exc:
+                    stats.errors.append(f"paper_enter {follower.name}: {exc}")
+                    logger.exception("paper_enter failed")
+                    decision = FollowerDecision(
+                        follower_name=follower.name,
+                        follower_version=follower.version,
+                        decision="skip",
+                        reason=f"paper_enter_error:{exc}",
+                        decided_at=decision.decided_at,
+                    )
+
+        # 紀錄決策（無論 follow / skip）
+        try:
+            paper_book.record_decision(decision, alert_ctx, paper_trade_id=paper_trade_id)
+        except Exception as exc:
+            stats.errors.append(f"record_decision: {exc}")
+
+        if decision.is_follow():
+            stats.follows += 1
+        else:
+            stats.follow_skips += 1
+
+    return " | ".join(follow_summaries) if follow_summaries else None
 
 
 def _select_wallet_trades_since(repo: SqliteRepo, wallet: str, since_iso: str) -> list[dict]:
