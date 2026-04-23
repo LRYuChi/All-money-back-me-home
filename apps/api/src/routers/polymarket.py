@@ -267,6 +267,153 @@ def list_whales(
 
 
 # ─────────────────────────────────────────────────────────────────────
+# GET /api/polymarket/wallet/{address}
+# 單一錢包完整詳情 — 合併 whale_stats + wallet_profiles 最新一筆 + features
+# 供 dashboard /polymarket/wallet/[address] 頁面使用
+# ─────────────────────────────────────────────────────────────────────
+@router.get("/wallet/{address}")
+def wallet_detail(address: str) -> dict:
+    """完整錢包詳情：stats + features + equity curve + recent trades + tier history."""
+    cache_key = f"wallet_detail:{address}"
+    if cached := _cache_get(cache_key):
+        return cached
+
+    with _connect() as conn:
+        ws_row = conn.execute(
+            "SELECT * FROM whale_stats WHERE wallet_address=?", (address,)
+        ).fetchone()
+
+        wp_row = conn.execute(
+            "SELECT scanner_version, scanned_at, tier, trade_count_90d, resolved_count, "
+            "win_rate, cumulative_pnl, avg_trade_size, features_json, archetypes_json, "
+            "risk_flags_json, sample_size_warning, passed_coarse_filter, coarse_filter_reasons "
+            "FROM wallet_profiles WHERE wallet_address=? "
+            "ORDER BY scanned_at DESC LIMIT 1",
+            (address,),
+        ).fetchone()
+
+        if ws_row is None and wp_row is None:
+            raise HTTPException(status_code=404, detail=f"wallet {address} not found in whale_stats or wallet_profiles")
+
+        # 近期交易（maker/taker 都算）
+        recent_trades = conn.execute(
+            """
+            SELECT id, condition_id, token_id, price, size, notional, side, match_time,
+                   (SELECT question FROM markets WHERE condition_id=trades.condition_id) AS market_question,
+                   (SELECT category FROM markets WHERE condition_id=trades.condition_id) AS market_category
+            FROM trades
+            WHERE (maker_address=? OR taker_address=?)
+              AND match_time >= datetime('now', '-90 days')
+            ORDER BY match_time DESC
+            LIMIT 50
+            """,
+            (address, address),
+        ).fetchall()
+
+        # Tier 變動歷史
+        tier_history = conn.execute(
+            "SELECT from_tier, to_tier, changed_at, reason FROM whale_tier_history "
+            "WHERE wallet_address=? ORDER BY id DESC LIMIT 20",
+            (address,),
+        ).fetchall()
+
+    # 基礎 stats — 以 wallet_profiles 為主，fallback 到 whale_stats
+    stats = _merge_stats(ws_row, wp_row)
+
+    # Features 解包
+    features = _parse_json_field(wp_row["features_json"], {}) if wp_row else {}
+    steady_growth = _extract_feature(features, "steady_growth")
+    category_spec = _extract_feature(features, "category_specialization")
+    time_slice = _extract_feature(features, "time_slice_consistency")
+    core_stats = _extract_feature(features, "core_stats")
+
+    # Equity curve — 來自 steady_growth feature value.curve (v1.1+)
+    sg_value = (steady_growth or {}).get("value") or {}
+    curve = sg_value.get("curve") or []
+    events = sg_value.get("events") or []
+
+    result = {
+        "wallet_address": address,
+        "stats": stats,
+        "scanner_version": wp_row["scanner_version"] if wp_row else None,
+        "scanned_at": wp_row["scanned_at"] if wp_row else None,
+        "passed_coarse_filter": bool(wp_row["passed_coarse_filter"]) if wp_row else None,
+        "coarse_filter_reasons": _parse_json_field(wp_row["coarse_filter_reasons"], []) if wp_row else [],
+        "archetypes": _parse_json_field(wp_row["archetypes_json"], []) if wp_row else [],
+        "risk_flags": _parse_json_field(wp_row["risk_flags_json"], []) if wp_row else [],
+        "sample_size_warning": bool(wp_row["sample_size_warning"]) if wp_row else False,
+        "features": {
+            "core_stats": core_stats,
+            "steady_growth": steady_growth,
+            "category_specialization": category_spec,
+            "time_slice_consistency": time_slice,
+        },
+        "curve": curve,
+        "events": events,
+        "recent_trades": [_trade_row_to_dict(r) for r in recent_trades],
+        "tier_history": [dict(r) for r in tier_history],
+    }
+    _cache_set(cache_key, result, ttl=15.0)  # 短 TTL，錢包詳情頁期待即時
+    return result
+
+
+def _merge_stats(ws_row, wp_row) -> dict:
+    """以 wp_row 為主（1.5+），fallback 到 ws_row（Phase 1）."""
+    def _pick(field_name, default=None):
+        if wp_row is not None and wp_row[field_name] is not None:
+            return wp_row[field_name]
+        if ws_row is not None:
+            try:
+                return ws_row[field_name]
+            except (KeyError, IndexError):
+                return default
+        return default
+
+    return {
+        "tier": _pick("tier", "excluded"),
+        "trade_count_90d": int(_pick("trade_count_90d", 0) or 0),
+        "resolved_count": int(_pick("resolved_count", 0) or 0),
+        "win_rate": float(_pick("win_rate", 0.0) or 0.0),
+        "cumulative_pnl": float(_pick("cumulative_pnl", 0.0) or 0.0),
+        "avg_trade_size": float(_pick("avg_trade_size", 0.0) or 0.0),
+        "last_trade_at": ws_row["last_trade_at"] if ws_row is not None else None,
+        "last_computed_at": (
+            wp_row["scanned_at"] if wp_row is not None else
+            (ws_row["last_computed_at"] if ws_row is not None else None)
+        ),
+    }
+
+
+def _extract_feature(features: dict, name: str) -> dict | None:
+    """取出 feature dict 若存在（含 value/confidence/sample_size/notes）."""
+    f = features.get(name)
+    if not isinstance(f, dict):
+        return None
+    return {
+        "feature_version": f.get("feature_version"),
+        "value": f.get("value"),
+        "confidence": f.get("confidence"),
+        "sample_size": f.get("sample_size"),
+        "notes": f.get("notes", ""),
+    }
+
+
+def _trade_row_to_dict(r) -> dict:
+    return {
+        "id": r["id"],
+        "condition_id": r["condition_id"],
+        "token_id": r["token_id"],
+        "price": float(r["price"]) if r["price"] is not None else None,
+        "size": float(r["size"]) if r["size"] is not None else None,
+        "notional": float(r["notional"]) if r["notional"] is not None else None,
+        "side": r["side"],
+        "match_time": r["match_time"],
+        "market_question": r["market_question"],
+        "market_category": r["market_category"],
+    }
+
+
+# ─────────────────────────────────────────────────────────────────────
 # GET /api/polymarket/profiles/{wallet}/history?limit=30
 # 單一錢包的 profile 時序變化（畫像如何演進）
 # ─────────────────────────────────────────────────────────────────────

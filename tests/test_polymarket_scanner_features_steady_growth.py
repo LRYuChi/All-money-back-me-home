@@ -301,7 +301,14 @@ class TestSteadyGrowthFeature:
             "cumulative_pnl_usdc",
             "curve_days",
             "checks",
+            "curve",
+            "events",
         }
+        # v1.1: curve + events 必須是 list of dicts
+        assert isinstance(v["curve"], list) and len(v["curve"]) > 0
+        assert set(v["curve"][0].keys()) == {"date", "value"}
+        assert isinstance(v["events"], list) and len(v["events"]) > 0
+        assert set(v["events"][0].keys()) >= {"date", "pnl", "won", "notional"}
         assert set(v["components"].keys()) == {
             "r_squared",
             "gain_to_pain_ratio",
@@ -315,6 +322,20 @@ class TestSteadyGrowthFeature:
             "segments_positive",
         }
 
+    def test_low_samples_still_returns_curve(self):
+        # 5 resolved positions (below 20 threshold) — should still produce curve data
+        positions = [
+            _pos(days_ago=80 - i * 10, pnl=100, won=True, condition_id=f"0x{i}")
+            for i in range(5)
+        ]
+        result = SteadyGrowthFeature().compute(_ctx(positions))
+        assert result.confidence == "low_samples"
+        assert result.value["is_steady_grower"] is False
+        # v1.1: low_samples 仍需提供 partial curve/events 供 dashboard 呈現
+        assert isinstance(result.value.get("curve"), list)
+        assert isinstance(result.value.get("events"), list)
+        assert len(result.value["events"]) == 5
+
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Registry + scanner integration
@@ -325,7 +346,7 @@ class TestRegistryIntegration:
         from polymarket.scanner.features import REGISTRY
 
         assert "steady_growth" in REGISTRY
-        assert REGISTRY["steady_growth"].version == "1.0"
+        assert REGISTRY["steady_growth"].version == "1.1"
 
     def test_enabled_in_current_scanner_version(self):
         from polymarket.scanner import SCANNER_VERSION

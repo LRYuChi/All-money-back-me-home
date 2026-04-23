@@ -37,10 +37,14 @@ logger = logging.getLogger(__name__)
 
 
 class SteadyGrowthFeature(BaseFeature):
-    """資產曲線平滑度 — 辨識「策略執行者」型錢包."""
+    """資產曲線平滑度 — 辨識「策略執行者」型錢包.
+
+    v1.1 新增：value 內含完整 curve 與 resolved events，供 dashboard 直接渲染
+    而不需重算。curve 為 daily 累積已實現 PnL，events 為每筆 resolved 倉位落點。
+    """
 
     name = "steady_growth"
-    version = "1.0"
+    version = "1.1"
     min_samples = 20  # resolved positions
 
     def _compute(self, ctx: ScanContext) -> FeatureResult:
@@ -58,6 +62,13 @@ class SteadyGrowthFeature(BaseFeature):
         }
 
         resolved = [p for p in ctx.positions if p.is_resolved and p.end_date is not None]
+        # 即使 resolved 不足門檻，仍輸出 partial curve 供 dashboard 呈現
+        # （dashboard 需要能顯示所有錢包，is_steady_grower=False 不代表無資料）
+        partial_dates, partial_curve = _build_realized_pnl_curve(
+            resolved, now=ctx.now, window_days=90
+        )
+        partial_events = _build_events_payload(resolved, now=ctx.now, window_days=90)
+
         if len(resolved) < min_resolved:
             return FeatureResult(
                 feature_name=self.name,
@@ -66,18 +77,25 @@ class SteadyGrowthFeature(BaseFeature):
                     "is_steady_grower": False,
                     "reason": "insufficient_resolved",
                     "resolved_count": len(resolved),
+                    "curve": _serialize_curve(partial_dates, partial_curve),
+                    "events": partial_events,
                 },
                 confidence="low_samples",
                 sample_size=len(resolved),
                 notes=f"need >= {min_resolved} resolved positions, got {len(resolved)}",
             )
 
-        dates, curve = _build_realized_pnl_curve(resolved, now=ctx.now, window_days=90)
+        dates, curve = partial_dates, partial_curve
         if not curve or len(curve) < 2:
             return FeatureResult(
                 feature_name=self.name,
                 feature_version=self.version,
-                value={"is_steady_grower": False, "reason": "curve_too_short"},
+                value={
+                    "is_steady_grower": False,
+                    "reason": "curve_too_short",
+                    "curve": _serialize_curve(dates, curve),
+                    "events": partial_events,
+                },
                 confidence="low_samples",
                 sample_size=len(resolved),
                 notes="equity curve reconstruction produced fewer than 2 daily points",
@@ -134,6 +152,9 @@ class SteadyGrowthFeature(BaseFeature):
                     "losing_streak": passes_streak,
                     "segments_positive": passes_segments,
                 },
+                # v1.1: 完整曲線資料供 dashboard 直接渲染
+                "curve": _serialize_curve(dates, curve),
+                "events": _build_events_payload(resolved, now=ctx.now, window_days=90),
             },
             confidence="ok",
             sample_size=len(resolved),
@@ -291,3 +312,44 @@ def _compute_segment_pnls(
         if 0 <= seg_idx < num_segments:
             segments[seg_idx] += float(p.cash_pnl)
     return segments
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Serialization helpers for v1.1 dashboard output
+# ─────────────────────────────────────────────────────────────────────────────
+
+def _serialize_curve(dates: Sequence[date], values: Sequence[float]) -> list[dict]:
+    """Convert parallel (dates, values) into list of {date, value} dicts (JSON-safe)."""
+    return [
+        {"date": d.isoformat(), "value": round(v, 2)}
+        for d, v in zip(dates, values)
+    ]
+
+
+def _build_events_payload(
+    resolved: Sequence[Position],
+    *,
+    now: datetime,
+    window_days: int = 90,
+) -> list[dict]:
+    """Per-resolution event data for chart markers. Sorted by end_date ascending."""
+    if now.tzinfo is None:
+        now = now.replace(tzinfo=timezone.utc)
+    cutoff = (now - timedelta(days=window_days)).date()
+    events: list[dict] = []
+    for p in resolved:
+        if p.end_date is None:
+            continue
+        d = p.end_date.date()
+        if d < cutoff:
+            continue
+        events.append({
+            "date": d.isoformat(),
+            "pnl": round(float(p.cash_pnl), 2),
+            "won": bool(p.is_winning),
+            "notional": round(abs(float(p.initial_value)), 2),
+            "condition_id": p.condition_id or "",
+            "outcome": p.outcome or "",
+        })
+    events.sort(key=lambda e: e["date"])
+    return events

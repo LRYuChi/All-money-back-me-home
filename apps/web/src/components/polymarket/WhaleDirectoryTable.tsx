@@ -1,5 +1,6 @@
 'use client';
 
+import Link from 'next/link';
 import { useState } from 'react';
 import { borderColor, fg, layer, semantic } from '@/lib/polymarket/tokens';
 import { Card, CardHeader } from './Card';
@@ -115,9 +116,16 @@ export function WhaleDirectoryTable({ whales }: { whales: Whale[] }) {
                     <TierBadge tier={w.tier} />
                   </Td>
                   <Td>
-                    <code style={{ fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace' }}>
+                    <Link
+                      href={`/polymarket/wallet/${w.wallet_address}`}
+                      style={{
+                        fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace',
+                        color: semantic.live,
+                        textDecoration: 'none',
+                      }}
+                    >
                       {w.wallet_address.slice(0, 6)}…{w.wallet_address.slice(-4)}
-                    </code>
+                    </Link>
                   </Td>
                   <Td right mono>{w.trade_count_90d}</Td>
                   <Td right mono>{w.resolved_count}</Td>
