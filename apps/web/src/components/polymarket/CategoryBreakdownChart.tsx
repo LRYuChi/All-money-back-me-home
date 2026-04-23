@@ -189,7 +189,7 @@ function Baseline({ winRate }: { winRate: number }) {
         bottom: 32, // 留空間給 legend
         left: `calc(120px + 10px + ${leftPct}% * (100% - 120px - 70px - 20px) / 100%)`,
         width: 1,
-        borderLeft: `1px dashed ${borderColor.medium}`,
+        borderLeft: `1px dashed ${borderColor.base}`,
         pointerEvents: 'none',
         zIndex: 2,
       }}
