@@ -233,7 +233,8 @@ function AlertBanner({ level, msg }: { level: 'danger' | 'warning' | 'info'; msg
 
 function QuickLinks() {
   const links = [
-    { href: '/polymarket', label: 'Polymarket 情報', sub: 'Phase 1.5b · 鯨魚追蹤', accent: 'oklch(70% 0.18 290)' },
+    { href: '/polymarket', label: 'Polymarket 情報', sub: 'Phase 1.5c · 鯨魚追蹤', accent: 'oklch(70% 0.18 290)' },
+    { href: '/smart-money', label: 'Smart Money (HL)', sub: '鯨魚排行榜 · Hyperliquid', accent: 'oklch(65% 0.20 200)' },
     { href: '/market/crypto', label: '加密貨幣', sub: 'BTC / ETH / SOL', accent: 'oklch(70% 0.16 50)' },
     { href: '/market/us', label: '美股', sub: 'S&P / Nasdaq', accent: 'oklch(65% 0.18 155)' },
     { href: '/market/tw', label: '台股', sub: '加權指數 / 半導體', accent: 'oklch(65% 0.16 250)' },

@@ -7,6 +7,7 @@ from src.routers import analysis, market_data
 from src.routers.strategy import router as strategy_router
 from src.routers.dashboard import router as dashboard_router
 from src.routers.polymarket import router as polymarket_router
+from src.routers.smart_money import router as smart_money_router
 
 app = FastAPI(
     title="AMBMH API - 交易策略輔助顧問系統",
@@ -29,6 +30,7 @@ app.include_router(market_data.router)
 app.include_router(strategy_router)
 app.include_router(dashboard_router)
 app.include_router(polymarket_router)
+app.include_router(smart_money_router)
 
 
 @app.get("/health")
