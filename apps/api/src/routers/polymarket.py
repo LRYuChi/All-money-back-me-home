@@ -429,8 +429,8 @@ def wallet_profile_history(
     with _connect() as conn:
         rows = conn.execute(
             "SELECT wallet_address, scanner_version, scanned_at, tier, "
-            "trade_count_90d, resolved_count, win_rate, cumulative_pnl, "
-            "features_json, archetypes_json "
+            "trade_count_90d, resolved_count, win_rate, cumulative_pnl, avg_trade_size, "
+            "features_json, archetypes_json, risk_flags_json, sample_size_warning "
             "FROM wallet_profiles WHERE wallet_address=? "
             "ORDER BY scanned_at DESC LIMIT ?",
             (wallet, limit),
@@ -441,6 +441,9 @@ def wallet_profile_history(
         features = _parse_json_field(r["features_json"], {})
         cat = (features.get("category_specialization", {}) or {}).get("value") or {}
         ts = (features.get("time_slice_consistency", {}) or {}).get("value") or {}
+        sg = (features.get("steady_growth", {}) or {}).get("value") or {}
+        brier = (features.get("brier_calibration", {}) or {}).get("value") or {}
+        pc = (features.get("position_confidence", {}) or {}).get("value") or {}
         profiles.append(
             {
                 "scanner_version": r["scanner_version"],
@@ -450,14 +453,132 @@ def wallet_profile_history(
                 "resolved_count": r["resolved_count"],
                 "win_rate": r["win_rate"],
                 "cumulative_pnl": r["cumulative_pnl"],
+                "avg_trade_size": r["avg_trade_size"],
+                # Archetype + risk 單一來源：classify 層的輸出
+                "archetypes": _parse_json_field(r["archetypes_json"], []),
+                "risk_flags": _parse_json_field(r["risk_flags_json"], []),
+                "sample_size_warning": bool(r["sample_size_warning"]),
+                # Feature 快取：讓前端不用再分析 features_json
                 "primary_category": cat.get("primary_category"),
                 "specialist_categories": cat.get("specialist_categories", []) or [],
                 "is_consistent": ts.get("consistent"),
-                "archetypes": _parse_json_field(r["archetypes_json"], []),
+                "smoothness_score": sg.get("smoothness_score"),
+                "is_steady_grower": sg.get("is_steady_grower"),
+                "max_drawdown_ratio": sg.get("max_drawdown_ratio"),
+                "market_edge": brier.get("market_edge"),
+                "brier_score": brier.get("brier_score"),
+                "is_confidence_sized": pc.get("is_confidence_sized"),
+                "is_reverse_sized": pc.get("is_reverse_sized"),
+                "size_ratio": pc.get("size_ratio_winners_over_losers"),
             }
         )
 
     result = {"wallet_address": wallet, "count": len(profiles), "profiles": profiles}
+    _cache_set(cache_key, result)
+    return result
+
+
+# ─────────────────────────────────────────────────────────────────────
+# GET /api/polymarket/profiles/{wallet}/timeline
+# Phase B.1: 從 wallet_profiles 時序計算 state change events.
+# 供 UI 顯示「錢包行為演進時間線」— tier 變動 / archetype 新增或移除 /
+# risk_flag 新增或移除 / 關鍵指標顯著變化。
+# ─────────────────────────────────────────────────────────────────────
+@router.get("/profiles/{wallet}/timeline")
+def wallet_profile_timeline(
+    wallet: str,
+    limit: int = Query(default=50, ge=1, le=200),
+    metric_shift_threshold: float = Query(
+        default=0.20,
+        ge=0.05,
+        le=1.0,
+        description="認定為顯著變化的相對差（20% 以上 shift）",
+    ),
+) -> dict:
+    cache_key = f"wp_timeline:{wallet}:{limit}:{metric_shift_threshold}"
+    if cached := _cache_get(cache_key):
+        return cached
+
+    with _connect() as conn:
+        rows = conn.execute(
+            "SELECT scanned_at, tier, cumulative_pnl, win_rate, "
+            "features_json, archetypes_json, risk_flags_json, scanner_version "
+            "FROM wallet_profiles WHERE wallet_address=? "
+            "ORDER BY scanned_at ASC LIMIT ?",
+            (wallet, limit),
+        ).fetchall()
+
+    if len(rows) < 2:
+        result = {"wallet_address": wallet, "event_count": 0, "events": []}
+        _cache_set(cache_key, result)
+        return result
+
+    events: list[dict] = []
+
+    def _summary(r) -> dict:
+        features = _parse_json_field(r["features_json"], {})
+        sg = (features.get("steady_growth", {}) or {}).get("value") or {}
+        brier = (features.get("brier_calibration", {}) or {}).get("value") or {}
+        return {
+            "tier": r["tier"],
+            "cumulative_pnl": float(r["cumulative_pnl"] or 0),
+            "win_rate": float(r["win_rate"] or 0),
+            "archetypes": set(_parse_json_field(r["archetypes_json"], []) or []),
+            "risk_flags": set(_parse_json_field(r["risk_flags_json"], []) or []),
+            "smoothness_score": sg.get("smoothness_score"),
+            "market_edge": brier.get("market_edge"),
+        }
+
+    prev = _summary(rows[0])
+    for r in rows[1:]:
+        curr = _summary(r)
+        at = r["scanned_at"]
+
+        # Tier change
+        if curr["tier"] != prev["tier"]:
+            events.append({
+                "at": at,
+                "type": "tier_change",
+                "from": prev["tier"],
+                "to": curr["tier"],
+            })
+
+        # Archetype added / removed
+        for added in sorted(curr["archetypes"] - prev["archetypes"]):
+            events.append({"at": at, "type": "archetype_added", "archetype": added})
+        for removed in sorted(prev["archetypes"] - curr["archetypes"]):
+            events.append({"at": at, "type": "archetype_removed", "archetype": removed})
+
+        # Risk flag added / removed
+        for added in sorted(curr["risk_flags"] - prev["risk_flags"]):
+            events.append({"at": at, "type": "risk_flag_added", "flag": added})
+        for removed in sorted(prev["risk_flags"] - curr["risk_flags"]):
+            events.append({"at": at, "type": "risk_flag_removed", "flag": removed})
+
+        # Metric shifts — cumulative_pnl / smoothness_score / market_edge
+        for key in ("cumulative_pnl", "smoothness_score", "market_edge"):
+            old_v = prev.get(key)
+            new_v = curr.get(key)
+            if old_v is None or new_v is None:
+                continue
+            denom = max(abs(old_v), 1.0)
+            if abs(new_v - old_v) / denom >= metric_shift_threshold:
+                events.append({
+                    "at": at,
+                    "type": "metric_shift",
+                    "metric": key,
+                    "from": round(old_v, 4),
+                    "to": round(new_v, 4),
+                    "delta": round(new_v - old_v, 4),
+                })
+
+        prev = curr
+
+    result = {
+        "wallet_address": wallet,
+        "event_count": len(events),
+        "events": events,
+    }
     _cache_set(cache_key, result)
     return result
 

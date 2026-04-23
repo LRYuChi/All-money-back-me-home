@@ -263,6 +263,123 @@ class TestEmergingWhales:
         assert {w["wallet_address"] for w in data["whales"]} == {"0xEM1", "0xEM2"}
 
 
+class TestProfileTimeline:
+    def _seed_profile(
+        self,
+        db_path: Path,
+        *,
+        wallet: str,
+        scanned_at: str,
+        tier: str,
+        archetypes: list[str] = None,
+        risk_flags: list[str] = None,
+        cumulative_pnl: float = 1000.0,
+        smoothness_score: float | None = None,
+        market_edge: float | None = None,
+    ):
+        features: dict = {}
+        if smoothness_score is not None:
+            features["steady_growth"] = {
+                "feature_version": "1.1",
+                "value": {"smoothness_score": smoothness_score, "is_steady_grower": smoothness_score > 0.7},
+                "confidence": "ok",
+            }
+        if market_edge is not None:
+            features["brier_calibration"] = {
+                "feature_version": "1.0",
+                "value": {"market_edge": market_edge, "brier_score": 0.25},
+                "confidence": "ok",
+            }
+        conn = sqlite3.connect(db_path)
+        conn.execute(
+            """INSERT INTO wallet_profiles (wallet_address, scanner_version, scanned_at,
+               passed_coarse_filter, coarse_filter_reasons, trade_count_90d, resolved_count,
+               cumulative_pnl, avg_trade_size, win_rate, features_json, tier,
+               archetypes_json, risk_flags_json, sample_size_warning, raw_features_json)
+               VALUES (?, ?, ?, 1, '[]', 30, 20, ?, 300, 0.65, ?, ?, ?, ?, 0, '{}')""",
+            (
+                wallet, "1.5c.3", scanned_at,
+                cumulative_pnl,
+                json.dumps(features),
+                tier,
+                json.dumps(archetypes or []),
+                json.dumps(risk_flags or []),
+            ),
+        )
+        conn.commit()
+        conn.close()
+
+    def test_empty_when_single_profile(self, client):
+        c, db_path = client
+        self._seed_profile(db_path, wallet="0xABC", scanned_at="2026-04-20T00:00:00+00:00", tier="C")
+        resp = c.get("/api/polymarket/profiles/0xABC/timeline")
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["event_count"] == 0
+
+    def test_detects_tier_change(self, client):
+        c, db_path = client
+        self._seed_profile(db_path, wallet="0xABC", scanned_at="2026-04-20T00:00:00+00:00", tier="C")
+        self._seed_profile(db_path, wallet="0xABC", scanned_at="2026-04-21T00:00:00+00:00", tier="B")
+        resp = c.get("/api/polymarket/profiles/0xABC/timeline")
+        data = resp.json()
+        tier_events = [e for e in data["events"] if e["type"] == "tier_change"]
+        assert len(tier_events) == 1
+        assert tier_events[0]["from"] == "C"
+        assert tier_events[0]["to"] == "B"
+
+    def test_detects_archetype_add_remove(self, client):
+        c, db_path = client
+        self._seed_profile(
+            db_path, wallet="0xABC", scanned_at="2026-04-20T00:00:00+00:00",
+            tier="B", archetypes=["steady_grower"],
+        )
+        self._seed_profile(
+            db_path, wallet="0xABC", scanned_at="2026-04-21T00:00:00+00:00",
+            tier="B", archetypes=["steady_grower", "alpha_hunter"],
+        )
+        self._seed_profile(
+            db_path, wallet="0xABC", scanned_at="2026-04-22T00:00:00+00:00",
+            tier="B", archetypes=["alpha_hunter"],  # steady_grower dropped
+        )
+        resp = c.get("/api/polymarket/profiles/0xABC/timeline")
+        data = resp.json()
+        added = [e for e in data["events"] if e["type"] == "archetype_added"]
+        removed = [e for e in data["events"] if e["type"] == "archetype_removed"]
+        assert any(e["archetype"] == "alpha_hunter" for e in added)
+        assert any(e["archetype"] == "steady_grower" for e in removed)
+
+    def test_detects_risk_flag_changes(self, client):
+        c, db_path = client
+        self._seed_profile(db_path, wallet="0xABC", scanned_at="2026-04-20T00:00:00+00:00", tier="B")
+        self._seed_profile(
+            db_path, wallet="0xABC", scanned_at="2026-04-21T00:00:00+00:00",
+            tier="B", risk_flags=["concentration_high"],
+        )
+        resp = c.get("/api/polymarket/profiles/0xABC/timeline")
+        data = resp.json()
+        added = [e for e in data["events"] if e["type"] == "risk_flag_added"]
+        assert len(added) == 1
+        assert added[0]["flag"] == "concentration_high"
+
+    def test_detects_metric_shift(self, client):
+        c, db_path = client
+        self._seed_profile(
+            db_path, wallet="0xABC", scanned_at="2026-04-20T00:00:00+00:00",
+            tier="B", cumulative_pnl=1000,
+        )
+        self._seed_profile(
+            db_path, wallet="0xABC", scanned_at="2026-04-21T00:00:00+00:00",
+            tier="B", cumulative_pnl=1500,  # +50%
+        )
+        resp = c.get("/api/polymarket/profiles/0xABC/timeline?metric_shift_threshold=0.20")
+        data = resp.json()
+        shifts = [e for e in data["events"] if e["type"] == "metric_shift"]
+        assert len(shifts) >= 1
+        assert shifts[0]["metric"] == "cumulative_pnl"
+        assert shifts[0]["delta"] == pytest.approx(500)
+
+
 class TestSteadyGrowers:
     def test_filters_by_is_steady_grower(self, client):
         c, db_path = client
