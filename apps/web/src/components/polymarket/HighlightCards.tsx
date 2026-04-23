@@ -1,7 +1,7 @@
 'use client';
 
 import Link from 'next/link';
-import { borderColor, fg, layer, semantic } from '@/lib/polymarket/tokens';
+import { borderColor, fg, semantic } from '@/lib/polymarket/tokens';
 import { Card, CardHeader, CardBody } from './Card';
 import { TierBadge } from './TierBadge';
 
