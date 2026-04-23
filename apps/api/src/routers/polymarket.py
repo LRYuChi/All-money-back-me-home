@@ -160,6 +160,10 @@ def get_overview() -> dict:
 
 # ─────────────────────────────────────────────────────────────────────
 # GET /api/polymarket/whales?tier=A,B,C&limit=50&order_by=cumulative_pnl
+#
+# 此端點 LEFT JOIN whale_stats (Phase 1 contract) 與 wallet_profiles
+# (Phase 1.5+) 的最新 row，把 specialist + consistency 等 1.5b feature
+# 一併回傳。當錢包尚無 wallet_profile 時，1.5b 欄位為 null/[]。
 # ─────────────────────────────────────────────────────────────────────
 @router.get("/whales")
 def list_whales(
@@ -186,20 +190,49 @@ def list_whales(
         return cached
 
     placeholders = ",".join("?" * len(tiers))
-    sql = (
-        f"SELECT wallet_address, tier, trade_count_90d, win_rate, cumulative_pnl, "
-        f"avg_trade_size, segment_win_rates, stability_pass, resolved_count, "
-        f"last_trade_at, last_computed_at "
-        f"FROM whale_stats WHERE tier IN ({placeholders}) "
-        f"ORDER BY {order_by} DESC LIMIT ?"
-    )
+    sql = f"""
+        SELECT
+          ws.wallet_address, ws.tier, ws.trade_count_90d, ws.win_rate,
+          ws.cumulative_pnl, ws.avg_trade_size, ws.segment_win_rates,
+          ws.stability_pass, ws.resolved_count, ws.last_trade_at, ws.last_computed_at,
+          wp.scanner_version AS wp_scanner_version,
+          wp.features_json   AS wp_features_json,
+          wp.archetypes_json AS wp_archetypes_json,
+          wp.risk_flags_json AS wp_risk_flags_json,
+          wp.scanned_at      AS wp_scanned_at
+        FROM whale_stats ws
+        LEFT JOIN (
+            SELECT wp_inner.* FROM wallet_profiles wp_inner
+            INNER JOIN (
+                SELECT wallet_address, MAX(scanned_at) AS latest
+                FROM wallet_profiles GROUP BY wallet_address
+            ) latest
+              ON wp_inner.wallet_address = latest.wallet_address
+             AND wp_inner.scanned_at = latest.latest
+        ) wp ON ws.wallet_address = wp.wallet_address
+        WHERE ws.tier IN ({placeholders})
+        ORDER BY ws.{order_by} DESC
+        LIMIT ?
+    """
+
     with _connect() as conn:
         rows = conn.execute(sql, (*tiers, limit)).fetchall()
 
     whales = []
     for r in rows:
+        # 1.5b feature extraction
+        features = _parse_json_field(r["wp_features_json"], {})
+        cat = (features.get("category_specialization", {}) or {}).get("value") or {}
+        ts = (features.get("time_slice_consistency", {}) or {}).get("value") or {}
+        cat_conf = (features.get("category_specialization", {}) or {}).get("confidence")
+        ts_conf = (features.get("time_slice_consistency", {}) or {}).get("confidence")
+
+        is_consistent = ts.get("consistent") if ts_conf == "ok" else None
+        win_rate_std = ts.get("win_rate_std") if ts_conf == "ok" else None
+
         whales.append(
             {
+                # Phase 1 fields
                 "wallet_address": r["wallet_address"],
                 "tier": r["tier"],
                 "trade_count_90d": r["trade_count_90d"],
@@ -211,10 +244,73 @@ def list_whales(
                 "resolved_count": r["resolved_count"],
                 "last_trade_at": r["last_trade_at"],
                 "last_computed_at": r["last_computed_at"],
+                # 1.5b fields (null/[] when wallet_profile absent)
+                "scanner_version": r["wp_scanner_version"],
+                "primary_category": cat.get("primary_category"),
+                "specialist_categories": cat.get("specialist_categories", []) or [],
+                "category_count": int(cat.get("category_count", 0)),
+                "is_consistent": is_consistent,
+                "win_rate_std": win_rate_std,
+                "valid_segments": int(ts.get("valid_segments", 0)),
+                "archetypes": _parse_json_field(r["wp_archetypes_json"], []),
+                "risk_flags": _parse_json_field(r["wp_risk_flags_json"], []),
+                "features_confidence": {
+                    "category_specialization": cat_conf,
+                    "time_slice_consistency": ts_conf,
+                },
             }
         )
 
     result = {"count": len(whales), "whales": whales}
+    _cache_set(cache_key, result)
+    return result
+
+
+# ─────────────────────────────────────────────────────────────────────
+# GET /api/polymarket/profiles/{wallet}/history?limit=30
+# 單一錢包的 profile 時序變化（畫像如何演進）
+# ─────────────────────────────────────────────────────────────────────
+@router.get("/profiles/{wallet}/history")
+def wallet_profile_history(
+    wallet: str,
+    limit: int = Query(default=30, ge=1, le=200),
+) -> dict:
+    cache_key = f"wp_history:{wallet}:{limit}"
+    if cached := _cache_get(cache_key):
+        return cached
+
+    with _connect() as conn:
+        rows = conn.execute(
+            "SELECT wallet_address, scanner_version, scanned_at, tier, "
+            "trade_count_90d, resolved_count, win_rate, cumulative_pnl, "
+            "features_json, archetypes_json "
+            "FROM wallet_profiles WHERE wallet_address=? "
+            "ORDER BY scanned_at DESC LIMIT ?",
+            (wallet, limit),
+        ).fetchall()
+
+    profiles = []
+    for r in rows:
+        features = _parse_json_field(r["features_json"], {})
+        cat = (features.get("category_specialization", {}) or {}).get("value") or {}
+        ts = (features.get("time_slice_consistency", {}) or {}).get("value") or {}
+        profiles.append(
+            {
+                "scanner_version": r["scanner_version"],
+                "scanned_at": r["scanned_at"],
+                "tier": r["tier"],
+                "trade_count_90d": r["trade_count_90d"],
+                "resolved_count": r["resolved_count"],
+                "win_rate": r["win_rate"],
+                "cumulative_pnl": r["cumulative_pnl"],
+                "primary_category": cat.get("primary_category"),
+                "specialist_categories": cat.get("specialist_categories", []) or [],
+                "is_consistent": ts.get("consistent"),
+                "archetypes": _parse_json_field(r["archetypes_json"], []),
+            }
+        )
+
+    result = {"wallet_address": wallet, "count": len(profiles), "profiles": profiles}
     _cache_set(cache_key, result)
     return result
 
@@ -238,22 +334,76 @@ def list_alerts(
         tiers = [t.strip() for t in tier.split(",") if t.strip()]
         if tiers:
             placeholders = ",".join("?" * len(tiers))
-            tier_clause = f" AND tier IN ({placeholders})"
+            tier_clause = f" AND a.tier IN ({placeholders})"
             params.extend(tiers)
     params.append(limit)
 
+    # 1.5b: 一併 JOIN 出該錢包最新的 specialist 資訊與該交易市場的 category
     with _connect() as conn:
         rows = conn.execute(
-            f"SELECT wallet_address, tx_hash, event_index, tier, condition_id, "
-            f"market_question, side, outcome, size, price, notional, match_time, alerted_at "
-            f"FROM whale_trade_alerts "
-            f"WHERE match_time >= datetime('now', ?)"
-            f"{tier_clause} "
-            f"ORDER BY match_time DESC LIMIT ?",
+            f"""
+            SELECT
+              a.wallet_address, a.tx_hash, a.event_index, a.tier, a.condition_id,
+              a.market_question, a.side, a.outcome, a.size, a.price, a.notional,
+              a.match_time, a.alerted_at,
+              m.category AS market_category,
+              wp.features_json AS wp_features_json
+            FROM whale_trade_alerts a
+            LEFT JOIN markets m ON m.condition_id = a.condition_id
+            LEFT JOIN (
+                SELECT wp_inner.* FROM wallet_profiles wp_inner
+                INNER JOIN (
+                    SELECT wallet_address, MAX(scanned_at) AS latest
+                    FROM wallet_profiles GROUP BY wallet_address
+                ) latest
+                  ON wp_inner.wallet_address = latest.wallet_address
+                 AND wp_inner.scanned_at = latest.latest
+            ) wp ON wp.wallet_address = a.wallet_address
+            WHERE a.match_time >= datetime('now', ?)
+            {tier_clause}
+            ORDER BY a.match_time DESC LIMIT ?
+            """,
             params,
         ).fetchall()
 
-    result = {"count": len(rows), "alerts": _rows_to_dicts(rows), "window_hours": hours}
+    alerts = []
+    for r in rows:
+        feats = _parse_json_field(r["wp_features_json"], {})
+        cat = (feats.get("category_specialization", {}) or {}).get("value") or {}
+        ts = (feats.get("time_slice_consistency", {}) or {}).get("value") or {}
+        ts_conf = (feats.get("time_slice_consistency", {}) or {}).get("confidence")
+
+        specialists = cat.get("specialist_categories", []) or []
+        market_cat = r["market_category"] or ""
+        match_specialist: bool | None = None
+        if specialists:
+            match_specialist = market_cat in specialists if market_cat else False
+
+        alerts.append(
+            {
+                "wallet_address": r["wallet_address"],
+                "tx_hash": r["tx_hash"],
+                "event_index": r["event_index"],
+                "tier": r["tier"],
+                "condition_id": r["condition_id"],
+                "market_question": r["market_question"],
+                "market_category": market_cat,
+                "side": r["side"],
+                "outcome": r["outcome"],
+                "size": r["size"],
+                "price": r["price"],
+                "notional": r["notional"],
+                "match_time": r["match_time"],
+                "alerted_at": r["alerted_at"],
+                # 1.5b additions
+                "specialist_categories": specialists,
+                "primary_category": cat.get("primary_category"),
+                "match_specialist": match_specialist,
+                "is_consistent": ts.get("consistent") if ts_conf == "ok" else None,
+            }
+        )
+
+    result = {"count": len(alerts), "alerts": alerts, "window_hours": hours}
     _cache_set(cache_key, result)
     return result
 

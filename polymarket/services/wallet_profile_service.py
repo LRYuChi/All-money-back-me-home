@@ -19,7 +19,7 @@
 from __future__ import annotations
 
 import logging
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Any
 
@@ -33,8 +33,11 @@ class ProfileView:
     """對外暴露的合成型畫像。融合 wallet_profiles + whale_stats 的最佳資料.
 
     `data_source` 標示這份畫像主要來自哪張表，方便下游記錄歸因。
+    1.5b 欄位（specialist / consistency）僅在 wallet_profiles 來源時填值，
+    whale_stats fallback 時為 None / 空 list。
     """
 
+    # 基礎欄位（兩表共有）
     wallet_address: str
     tier: str
     trade_count_90d: int
@@ -48,7 +51,20 @@ class ProfileView:
     last_trade_at: str | None
     last_computed_at: str
     scanner_version: str | None  # None 表示來自 whale_stats
-    data_source: str  # 'wallet_profiles' | 'whale_stats' | 'merged'
+    data_source: str  # 'wallet_profiles' | 'whale_stats'
+
+    # 1.5b 新增：領域專精
+    primary_category: str | None = None
+    specialist_categories: list[str] = field(default_factory=list)
+    category_count: int = 0
+
+    # 1.5b 新增：時間切片一致性
+    is_consistent: bool | None = None  # None = low_samples 或無資料
+    win_rate_std: float | None = None
+    valid_segments: int = 0
+
+    # 1.5b 新增：feature 信心度（讓 UI 知道哪個欄位可信）
+    features_confidence: dict[str, str] = field(default_factory=dict)
 
 
 class WalletProfileService:
@@ -115,6 +131,23 @@ class WalletProfileService:
     @staticmethod
     def _from_wallet_profile_row(row: dict) -> ProfileView:
         wp = WalletProfile.from_db_row(row)
+
+        # 1.5b feature 抽取
+        cat = wp.features.get("category_specialization")
+        cat_value = (cat.value or {}) if cat else {}
+        primary_category = cat_value.get("primary_category")
+        specialist_categories = cat_value.get("specialist_categories", []) or []
+        category_count = int(cat_value.get("category_count", 0))
+
+        ts = wp.features.get("time_slice_consistency")
+        ts_value = (ts.value or {}) if ts else {}
+        # consistent 為 None 代表 low_samples，回傳 None 而非 False（保留語意）
+        is_consistent = ts_value.get("consistent") if ts and ts.confidence == "ok" else None
+        win_rate_std = ts_value.get("win_rate_std") if ts and ts.confidence == "ok" else None
+        valid_segments = int(ts_value.get("valid_segments", 0))
+
+        features_confidence = {name: fr.confidence for name, fr in wp.features.items()}
+
         return ProfileView(
             wallet_address=wp.wallet_address,
             tier=wp.tier,
@@ -130,6 +163,13 @@ class WalletProfileService:
             last_computed_at=wp.scanned_at.isoformat(),
             scanner_version=wp.scanner_version,
             data_source="wallet_profiles",
+            primary_category=primary_category,
+            specialist_categories=specialist_categories,
+            category_count=category_count,
+            is_consistent=is_consistent,
+            win_rate_std=win_rate_std,
+            valid_segments=valid_segments,
+            features_confidence=features_confidence,
         )
 
     @staticmethod

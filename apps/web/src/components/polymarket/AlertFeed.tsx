@@ -3,6 +3,7 @@
 import { borderColor, fg, layer, semantic } from '@/lib/polymarket/tokens';
 import { Card, CardHeader } from './Card';
 import { TierBadge } from './TierBadge';
+import { ConsistencyTag, SpecialistTag } from './SpecialistTag';
 import { parseServerDateStr } from './FreshnessIndicator';
 
 interface Alert {
@@ -12,6 +13,7 @@ interface Alert {
   tier: string;
   condition_id: string;
   market_question: string;
+  market_category?: string;
   side: 'BUY' | 'SELL' | string;
   outcome: string;
   size: number;
@@ -19,6 +21,11 @@ interface Alert {
   notional: number;
   match_time: string;
   alerted_at: string;
+  // 1.5b additions
+  specialist_categories?: string[];
+  primary_category?: string | null;
+  match_specialist?: boolean | null;
+  is_consistent?: boolean | null;
 }
 
 export function AlertFeed({ alerts, windowHours }: { alerts: Alert[]; windowHours: number }) {
@@ -62,6 +69,7 @@ function AlertRow({ alert, first }: { alert: Alert; first: boolean }) {
   const sideColor = alert.side === 'BUY' ? semantic.yes : semantic.no;
   const big = alert.notional >= 10000;
   const matchTime = parseServerDateStr(alert.match_time);
+  const specialists = alert.specialist_categories ?? [];
 
   return (
     <li
@@ -75,6 +83,7 @@ function AlertRow({ alert, first }: { alert: Alert; first: boolean }) {
       <TierBadge tier={alert.tier} size="md" />
 
       <div className="flex-1 min-w-0">
+        {/* 行 1: 方向 + 價格 + 金額 + 大額/specialist tag */}
         <div className="flex items-baseline gap-2 flex-wrap mb-1">
           <span
             style={{
@@ -121,18 +130,50 @@ function AlertRow({ alert, first }: { alert: Alert; first: boolean }) {
               大額
             </span>
           )}
+          {specialists.length > 0 && (
+            <SpecialistTag
+              specialists={specialists}
+              matched={alert.match_specialist ?? null}
+              size="xs"
+            />
+          )}
+          {alert.is_consistent !== undefined && alert.is_consistent !== null && (
+            <ConsistencyTag isConsistent={alert.is_consistent} size="xs" />
+          )}
         </div>
-        <div
-          style={{
-            color: fg.secondary,
-            fontSize: '12px',
-            overflow: 'hidden',
-            textOverflow: 'ellipsis',
-            whiteSpace: 'nowrap',
-          }}
-        >
-          {alert.market_question || '(未知市場)'}
+
+        {/* 行 2: 市場問題 + 類別 chip */}
+        <div className="flex items-center gap-2">
+          {alert.market_category && (
+            <span
+              style={{
+                color: fg.tertiary,
+                fontSize: '11px',
+                padding: '1px 6px',
+                borderRadius: '9999px',
+                border: `1px solid ${borderColor.hair}`,
+                whiteSpace: 'nowrap',
+              }}
+            >
+              {alert.market_category}
+            </span>
+          )}
+          <span
+            style={{
+              color: fg.secondary,
+              fontSize: '12px',
+              overflow: 'hidden',
+              textOverflow: 'ellipsis',
+              whiteSpace: 'nowrap',
+              minWidth: 0,
+              flex: 1,
+            }}
+          >
+            {alert.market_question || '(未知市場)'}
+          </span>
         </div>
+
+        {/* 行 3: 錢包 + 時間 */}
         <div
           className="mt-1 flex gap-3 flex-wrap"
           style={{

@@ -4,6 +4,7 @@ import { useState } from 'react';
 import { borderColor, fg, layer, semantic } from '@/lib/polymarket/tokens';
 import { Card, CardHeader } from './Card';
 import { TierBadge } from './TierBadge';
+import { ConsistencyTag, SpecialistTag } from './SpecialistTag';
 import { parseServerDateStr } from './FreshnessIndicator';
 
 interface Whale {
@@ -17,6 +18,15 @@ interface Whale {
   stability_pass: boolean;
   resolved_count: number;
   last_trade_at: string | null;
+  // 1.5b additions (null/empty when no wallet_profile yet)
+  scanner_version?: string | null;
+  primary_category?: string | null;
+  specialist_categories?: string[];
+  is_consistent?: boolean | null;
+  features_confidence?: {
+    category_specialization?: string | null;
+    time_slice_consistency?: string | null;
+  };
 }
 
 export function WhaleDirectoryTable({ whales }: { whales: Whale[] }) {
@@ -70,7 +80,8 @@ export function WhaleDirectoryTable({ whales }: { whales: Whale[] }) {
               <Th right>勝率</Th>
               <Th right>累積 PnL</Th>
               <Th right>平均尺寸</Th>
-              <Th>3 段穩定性</Th>
+              <Th>專長類別</Th>
+              <Th>一致性</Th>
               <Th>最近交易</Th>
             </tr>
           </thead>
@@ -78,7 +89,7 @@ export function WhaleDirectoryTable({ whales }: { whales: Whale[] }) {
             {filtered.length === 0 && (
               <tr>
                 <td
-                  colSpan={9}
+                  colSpan={10}
                   className="text-center"
                   style={{ color: fg.tertiary, padding: '48px 20px', fontSize: '12px' }}
                 >
@@ -116,7 +127,10 @@ export function WhaleDirectoryTable({ whales }: { whales: Whale[] }) {
                   </Td>
                   <Td right mono>${Math.round(w.avg_trade_size).toLocaleString()}</Td>
                   <Td>
-                    <StabilityBars segments={w.segment_win_rates} pass={w.stability_pass} />
+                    <SpecialtyCell whale={w} />
+                  </Td>
+                  <Td>
+                    <ConsistencyTag isConsistent={w.is_consistent ?? null} size="xs" />
                   </Td>
                   <Td style={{ color: fg.tertiary, fontSize: '11px' }}>
                     {lastTrade ? formatRelative(Date.now() - lastTrade.getTime()) : '—'}
@@ -220,46 +234,39 @@ function FilterButton({
   );
 }
 
-function StabilityBars({ segments, pass }: { segments: number[]; pass: boolean }) {
-  const safe = Array.from({ length: 3 }, (_, i) => segments[i] ?? -1);
-  return (
-    <div className="flex items-center gap-1">
-      {safe.map((rate, i) => {
-        const hasData = rate >= 0;
-        const width = hasData ? Math.max(6, Math.round(rate * 36)) : 36;
-        const color = !hasData
-          ? semantic.stale
-          : rate >= 0.5
-          ? semantic.live
-          : rate >= 0.3
-          ? semantic.warn
-          : semantic.error;
-        return (
-          <div
-            key={i}
-            title={hasData ? `段 ${i}: ${(rate * 100).toFixed(0)}%` : `段 ${i}: 樣本不足`}
-            style={{
-              width: `${width}px`,
-              height: '5px',
-              backgroundColor: color,
-              borderRadius: '1px',
-              opacity: hasData ? 0.85 : 0.25,
-            }}
-          />
-        );
-      })}
+function SpecialtyCell({ whale }: { whale: Whale }) {
+  const conf = whale.features_confidence?.category_specialization;
+  const specialists = whale.specialist_categories ?? [];
+  const primary = whale.primary_category;
+
+  if (specialists.length > 0) {
+    return <SpecialistTag specialists={specialists} size="xs" />;
+  }
+  if (primary && conf === 'ok') {
+    // 有主類別但未達 specialist
+    return (
       <span
-        className="ml-1"
         style={{
-          fontSize: '10px',
-          color: pass ? semantic.live : fg.tertiary,
+          fontSize: '11px',
+          color: fg.secondary,
           fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace',
         }}
       >
-        {pass ? '✓' : '✗'}
+        {primary}
       </span>
-    </div>
-  );
+    );
+  }
+  if (conf === 'low_samples') {
+    return (
+      <span
+        style={{ fontSize: '10px', color: fg.tertiary, fontStyle: 'italic' }}
+        title="樣本不足，無法判定"
+      >
+        — (樣本不足)
+      </span>
+    );
+  }
+  return <span style={{ color: fg.tertiary }}>—</span>;
 }
 
 function formatRelative(ms: number): string {
