@@ -45,12 +45,15 @@ logger = logging.getLogger(__name__)
 
 
 # === Pipeline 常數（此檔案的基礎設施參數，不是業務門檻） ===
-ACTIVE_MARKETS_PER_RUN = 20       # 每次掃幾個市場
-TRADES_PER_MARKET = 50            # 每市場取最近 N 筆成交
+# 1.5c.4 擴大掃描 — VPS 驗證後發現 1850 個候選錢包全 excluded，
+# 代表真鯨魚沒進池子（sparse whales 分散在更多市場、更早活動）。
+# 基礎設施參數調整，不動 §1 tier 門檻（pre-registration 不違反）。
+ACTIVE_MARKETS_PER_RUN = 60       # 20 → 60：捕捉冷門但有高價值鯨魚的市場
+TRADES_PER_MARKET = 50            # 保持；每市場 50 筆近期成交
 WALLET_REFRESH_INTERVAL_HOURS = 24  # 錢包統計的快取壽命
-WALLET_COMPUTE_CAP_PER_RUN = 30     # 每次最多重算幾個錢包（保護 API quota）
+WALLET_COMPUTE_CAP_PER_RUN = 60     # 30 → 60：配合更大候選池，每輪算更多錢包
 ALERT_TIME_WINDOW_HOURS = 24        # 推播範圍：只對過去 N 小時的鯨魚交易推播
-CANDIDATE_LOOKBACK_HOURS = 72       # 1.5b.1 擴窗：7d 活動夠稀疏的鯨魚也能被抓到
+CANDIDATE_LOOKBACK_HOURS = 168      # 72 → 168 (7d)：捕捉每週才出手一次的鯨魚
 
 
 @dataclass

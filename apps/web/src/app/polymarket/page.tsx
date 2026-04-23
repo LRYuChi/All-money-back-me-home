@@ -109,7 +109,9 @@ export default function PolymarketPage() {
           apiClient.get<OverviewPayload>('/api/polymarket/overview').catch(() => null),
           apiClient
             .get<{ count: number; whales: WhaleRow[] }>('/api/polymarket/whales', {
-              params: { tier: 'A,B,C,volatile', limit: '100' },
+              // 1.5c.4 擴大 tier 覆蓋 — 包含 emerging 讓使用者在真鯨魚累積前
+              // 也有錢包可點擊進詳情頁（驗證新的 UI）
+              params: { tier: 'A,B,C,volatile,emerging', limit: '100' },
             })
             .catch(() => ({ count: 0, whales: [] })),
           apiClient
