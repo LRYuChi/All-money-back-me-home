@@ -463,6 +463,159 @@ def wallet_profile_history(
 
 
 # ─────────────────────────────────────────────────────────────────────
+# GET /api/polymarket/tier-movers?hours=24&limit=10
+# Phase A3: 最近 N 小時晉升鯨魚（dashboard overview 強化用）
+# ─────────────────────────────────────────────────────────────────────
+@router.get("/tier-movers")
+def list_tier_movers(
+    hours: int = Query(default=24, ge=1, le=168),
+    limit: int = Query(default=10, ge=1, le=50),
+) -> dict:
+    cache_key = f"tier_movers:{hours}:{limit}"
+    if cached := _cache_get(cache_key):
+        return cached
+
+    _tier_rank = {"A": 3, "B": 2, "C": 1, "emerging": 0, "volatile": -1, "excluded": -2}
+    with _connect() as conn:
+        rows = conn.execute(
+            """
+            SELECT th.wallet_address, th.from_tier, th.to_tier, th.changed_at, th.reason,
+                   ws.cumulative_pnl, ws.win_rate, ws.trade_count_90d
+            FROM whale_tier_history th
+            LEFT JOIN whale_stats ws ON ws.wallet_address = th.wallet_address
+            WHERE th.changed_at >= datetime('now', ?)
+            ORDER BY th.id DESC LIMIT ?
+            """,
+            (f"-{hours} hours", limit * 3),  # over-fetch to filter promotions
+        ).fetchall()
+
+    movers: list[dict] = []
+    for r in rows:
+        prev_rank = _tier_rank.get(r["from_tier"] or "excluded", -2)
+        new_rank = _tier_rank.get(r["to_tier"], -2)
+        is_promotion = new_rank > prev_rank
+        if not is_promotion:
+            continue
+        movers.append({
+            "wallet_address": r["wallet_address"],
+            "from_tier": r["from_tier"],
+            "to_tier": r["to_tier"],
+            "changed_at": r["changed_at"],
+            "reason": r["reason"],
+            "cumulative_pnl": float(r["cumulative_pnl"] or 0),
+            "win_rate": float(r["win_rate"] or 0),
+            "trade_count_90d": int(r["trade_count_90d"] or 0),
+        })
+        if len(movers) >= limit:
+            break
+
+    result = {"count": len(movers), "window_hours": hours, "movers": movers}
+    _cache_set(cache_key, result, ttl=60.0)
+    return result
+
+
+# ─────────────────────────────────────────────────────────────────────
+# GET /api/polymarket/emerging-whales?limit=10
+# Phase A3: emerging tier 錢包（剛崛起但樣本短的候選）
+# ─────────────────────────────────────────────────────────────────────
+@router.get("/emerging-whales")
+def list_emerging_whales(
+    limit: int = Query(default=10, ge=1, le=50),
+) -> dict:
+    cache_key = f"emerging:{limit}"
+    if cached := _cache_get(cache_key):
+        return cached
+
+    with _connect() as conn:
+        rows = conn.execute(
+            """
+            SELECT wallet_address, tier, trade_count_90d, win_rate, cumulative_pnl,
+                   avg_trade_size, resolved_count, last_trade_at, last_computed_at
+            FROM whale_stats WHERE tier='emerging'
+            ORDER BY cumulative_pnl DESC LIMIT ?
+            """,
+            (limit,),
+        ).fetchall()
+
+    whales = [
+        {
+            "wallet_address": r["wallet_address"],
+            "tier": r["tier"],
+            "trade_count_90d": int(r["trade_count_90d"] or 0),
+            "win_rate": float(r["win_rate"] or 0),
+            "cumulative_pnl": float(r["cumulative_pnl"] or 0),
+            "avg_trade_size": float(r["avg_trade_size"] or 0),
+            "resolved_count": int(r["resolved_count"] or 0),
+            "last_trade_at": r["last_trade_at"],
+            "last_computed_at": r["last_computed_at"],
+        }
+        for r in rows
+    ]
+    result = {"count": len(whales), "whales": whales}
+    _cache_set(cache_key, result, ttl=60.0)
+    return result
+
+
+# ─────────────────────────────────────────────────────────────────────
+# GET /api/polymarket/steady-growers?limit=10
+# Phase A3: 被 steady_growth feature 標記為 is_steady_grower=true 的錢包
+# （資料來源為 wallet_profiles.features_json，需 Python 端 filter）
+# ─────────────────────────────────────────────────────────────────────
+@router.get("/steady-growers")
+def list_steady_growers(
+    limit: int = Query(default=10, ge=1, le=50),
+) -> dict:
+    cache_key = f"steady_growers:{limit}"
+    if cached := _cache_get(cache_key):
+        return cached
+
+    with _connect() as conn:
+        # 只取最新掃描；features_json LIKE 過濾 is_steady_grower=true 作粗篩，
+        # Python 端再 parse 精確過濾
+        rows = conn.execute(
+            """
+            SELECT wp.wallet_address, wp.tier, wp.scanned_at, wp.features_json,
+                   wp.cumulative_pnl, wp.win_rate, wp.trade_count_90d, wp.resolved_count
+            FROM wallet_profiles wp
+            INNER JOIN (
+                SELECT wallet_address, MAX(scanned_at) AS latest
+                FROM wallet_profiles GROUP BY wallet_address
+            ) latest
+              ON wp.wallet_address = latest.wallet_address
+             AND wp.scanned_at = latest.latest
+            WHERE wp.features_json LIKE '%"is_steady_grower": true%'
+            ORDER BY wp.cumulative_pnl DESC LIMIT ?
+            """,
+            (limit * 2,),  # over-fetch in case of false positives from LIKE
+        ).fetchall()
+
+    growers: list[dict] = []
+    for r in rows:
+        features = _parse_json_field(r["features_json"], {})
+        sg = features.get("steady_growth") or {}
+        sg_value = sg.get("value") or {}
+        if not sg_value.get("is_steady_grower"):
+            continue
+        growers.append({
+            "wallet_address": r["wallet_address"],
+            "tier": r["tier"],
+            "scanned_at": r["scanned_at"],
+            "cumulative_pnl": float(r["cumulative_pnl"] or 0),
+            "win_rate": float(r["win_rate"] or 0),
+            "trade_count_90d": int(r["trade_count_90d"] or 0),
+            "resolved_count": int(r["resolved_count"] or 0),
+            "smoothness_score": float(sg_value.get("smoothness_score") or 0),
+            "max_drawdown_ratio": float(sg_value.get("max_drawdown_ratio") or 0),
+        })
+        if len(growers) >= limit:
+            break
+
+    result = {"count": len(growers), "growers": growers}
+    _cache_set(cache_key, result, ttl=60.0)
+    return result
+
+
+# ─────────────────────────────────────────────────────────────────────
 # GET /api/polymarket/alerts?hours=24&limit=50&tier=A,B,C
 # ─────────────────────────────────────────────────────────────────────
 @router.get("/alerts")

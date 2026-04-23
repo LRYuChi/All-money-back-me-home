@@ -9,6 +9,8 @@ import { Card, CardHeader, CardBody } from '@/components/polymarket/Card';
 import { TierBadge } from '@/components/polymarket/TierBadge';
 import { ConsistencyTag } from '@/components/polymarket/SpecialistTag';
 import { EquityCurveChart, type CurvePoint, type CurveEvent } from '@/components/polymarket/EquityCurveChart';
+import { CategoryBreakdownChart } from '@/components/polymarket/CategoryBreakdownChart';
+import { TimeSliceBarChart } from '@/components/polymarket/TimeSliceBarChart';
 
 interface WalletDetailPayload {
   wallet_address: string;
@@ -159,7 +161,10 @@ export default function WalletDetailPage() {
           marginTop: '16px',
         }}
       >
-        <CategoryPanel feature={data.features.category_specialization} />
+        <CategoryPanel
+          feature={data.features.category_specialization}
+          baselineWinRate={data.stats.win_rate}
+        />
         <TimeSlicePanel feature={data.features.time_slice_consistency} />
       </div>
 
@@ -348,7 +353,7 @@ function SmoothnessPanel({ feature }: { feature: Feature | null }) {
   );
 }
 
-function CategoryPanel({ feature }: { feature: Feature | null }) {
+function CategoryPanel({ feature, baselineWinRate }: { feature: Feature | null; baselineWinRate: number }) {
   if (!feature || !feature.value) {
     return (
       <Card>
@@ -360,13 +365,11 @@ function CategoryPanel({ feature }: { feature: Feature | null }) {
     );
   }
   const v = feature.value as {
-    categories?: Record<string, { trades?: number; resolved?: number; win_rate?: number; is_specialist?: boolean }>;
+    categories?: Record<string, { trades?: number; resolved: number; win_rate?: number; is_specialist?: boolean }>;
     primary_category?: string | null;
     specialist_categories?: string[];
     category_count?: number;
   };
-  const cats = v.categories ?? {};
-  const entries = Object.entries(cats).sort(([, a], [, b]) => (b?.resolved ?? 0) - (a?.resolved ?? 0));
 
   return (
     <Card>
@@ -377,16 +380,10 @@ function CategoryPanel({ feature }: { feature: Feature | null }) {
         divider
       />
       <CardBody>
-        {entries.length === 0 && (
-          <div style={{ color: fg.tertiary, fontSize: '13px' }}>無類別資料</div>
-        )}
-        {entries.slice(0, 6).map(([cat, stats]) => (
-          <Row
-            key={cat}
-            label={`${stats?.is_specialist ? '⭐ ' : ''}${cat}`}
-            value={`${((stats?.win_rate ?? 0) * 100).toFixed(0)}% · ${stats?.resolved ?? 0} 筆`}
-          />
-        ))}
+        <CategoryBreakdownChart
+          categories={v.categories ?? {}}
+          baselineWinRate={baselineWinRate}
+        />
       </CardBody>
     </Card>
   );
@@ -421,17 +418,11 @@ function TimeSlicePanel({ feature }: { feature: Feature | null }) {
         divider
       />
       <CardBody>
-        {(v.segments ?? []).map((s) => (
-          <Row
-            key={s.index}
-            label={`段 ${s.index}（${s.days_back ? `${s.days_back[0]}-${s.days_back[1]}天前` : '-'}）`}
-            value={
-              s.win_rate !== undefined && s.resolved >= 3
-                ? `${(s.win_rate * 100).toFixed(0)}% · ${s.resolved} 筆`
-                : `— (樣本 ${s.resolved})`
-            }
-          />
-        ))}
+        <TimeSliceBarChart
+          segments={v.segments ?? []}
+          meanWinRate={v.win_rate_mean}
+          isConsistent={v.consistent ?? null}
+        />
       </CardBody>
     </Card>
   );

@@ -1,5 +1,7 @@
 'use client';
 
+import Link from 'next/link';
+import { useMemo, useState } from 'react';
 import { borderColor, fg, layer, semantic } from '@/lib/polymarket/tokens';
 import { Card, CardHeader } from './Card';
 import { TierBadge } from './TierBadge';
@@ -28,24 +30,207 @@ interface Alert {
   is_consistent?: boolean | null;
 }
 
+type TierFilter = 'all' | 'A' | 'B' | 'C' | 'emerging';
+type SpecialtyFilter = 'all' | 'specialist' | 'big';
+
 export function AlertFeed({ alerts, windowHours }: { alerts: Alert[]; windowHours: number }) {
+  const [tierFilter, setTierFilter] = useState<TierFilter>('all');
+  const [categoryFilter, setCategoryFilter] = useState<string>('all');
+  const [specialtyFilter, setSpecialtyFilter] = useState<SpecialtyFilter>('all');
+
+  const categories = useMemo(() => {
+    const set = new Set<string>();
+    for (const a of alerts) {
+      if (a.market_category) set.add(a.market_category);
+    }
+    return Array.from(set).sort();
+  }, [alerts]);
+
+  const filtered = useMemo(() => {
+    return alerts.filter((a) => {
+      if (tierFilter !== 'all' && a.tier !== tierFilter) return false;
+      if (categoryFilter !== 'all' && a.market_category !== categoryFilter) return false;
+      if (specialtyFilter === 'specialist' && !(a.specialist_categories?.length ?? 0)) return false;
+      if (specialtyFilter === 'big' && a.notional < 10000) return false;
+      return true;
+    });
+  }, [alerts, tierFilter, categoryFilter, specialtyFilter]);
+
   return (
     <Card>
       <CardHeader
         eyebrow="鯨魚交易推播"
-        subtitle={`過去 ${windowHours} 小時 · 共 ${alerts.length} 筆`}
+        subtitle={`過去 ${windowHours} 小時 · 顯示 ${filtered.length}/${alerts.length} 筆`}
         divider
       />
-      {alerts.length === 0 && <EmptyAlertState />}
-      {alerts.length > 0 && (
+      <FilterBar
+        tierFilter={tierFilter}
+        onTierChange={setTierFilter}
+        categoryFilter={categoryFilter}
+        onCategoryChange={setCategoryFilter}
+        specialtyFilter={specialtyFilter}
+        onSpecialtyChange={setSpecialtyFilter}
+        categories={categories}
+        allCounts={_computeFilterCounts(alerts)}
+      />
+      {filtered.length === 0 && alerts.length === 0 && <EmptyAlertState />}
+      {filtered.length === 0 && alerts.length > 0 && (
+        <div style={{ padding: '24px', textAlign: 'center', color: fg.tertiary, fontSize: 13 }}>
+          當前過濾條件下無符合推播
+        </div>
+      )}
+      {filtered.length > 0 && (
         <ul style={{ listStyle: 'none' }}>
-          {alerts.slice(0, 30).map((a, i) => (
-            <AlertRow key={`${a.wallet_address}-${a.tx_hash}-${a.event_index}`} alert={a} first={i === 0} />
+          {filtered.slice(0, 30).map((a, i) => (
+            <AlertRow
+              key={`${a.wallet_address}-${a.tx_hash}-${a.event_index}`}
+              alert={a}
+              first={i === 0}
+            />
           ))}
         </ul>
       )}
     </Card>
   );
+}
+
+function FilterBar({
+  tierFilter,
+  onTierChange,
+  categoryFilter,
+  onCategoryChange,
+  specialtyFilter,
+  onSpecialtyChange,
+  categories,
+  allCounts,
+}: {
+  tierFilter: TierFilter;
+  onTierChange: (t: TierFilter) => void;
+  categoryFilter: string;
+  onCategoryChange: (c: string) => void;
+  specialtyFilter: SpecialtyFilter;
+  onSpecialtyChange: (s: SpecialtyFilter) => void;
+  categories: string[];
+  allCounts: { tier: Record<string, number>; specialty: Record<string, number> };
+}) {
+  return (
+    <div
+      style={{
+        padding: '10px 20px',
+        borderBottom: `1px solid ${borderColor.hair}`,
+        display: 'flex',
+        flexWrap: 'wrap',
+        gap: 12,
+        alignItems: 'center',
+        fontSize: 11,
+      }}
+    >
+      <span style={{ color: fg.tertiary, letterSpacing: '0.1em', textTransform: 'uppercase' }}>
+        Tier
+      </span>
+      <Chips
+        value={tierFilter}
+        options={[
+          { key: 'all', label: `全部 (${Object.values(allCounts.tier).reduce((a, b) => a + b, 0)})` },
+          { key: 'A', label: `A (${allCounts.tier.A ?? 0})` },
+          { key: 'B', label: `B (${allCounts.tier.B ?? 0})` },
+          { key: 'C', label: `C (${allCounts.tier.C ?? 0})` },
+          { key: 'emerging', label: `Emerging (${allCounts.tier.emerging ?? 0})` },
+        ]}
+        onChange={(v) => onTierChange(v as TierFilter)}
+      />
+
+      {categories.length > 0 && (
+        <>
+          <span style={{ color: fg.tertiary, letterSpacing: '0.1em', textTransform: 'uppercase' }}>
+            類別
+          </span>
+          <select
+            value={categoryFilter}
+            onChange={(e) => onCategoryChange(e.target.value)}
+            style={{
+              fontSize: 11,
+              padding: '3px 8px',
+              borderRadius: 4,
+              border: `1px solid ${borderColor.hair}`,
+              backgroundColor: layer['02'],
+              color: fg.primary,
+              fontFamily: 'inherit',
+            }}
+          >
+            <option value="all">全部</option>
+            {categories.map((c) => (
+              <option key={c} value={c}>
+                {c}
+              </option>
+            ))}
+          </select>
+        </>
+      )}
+
+      <span style={{ color: fg.tertiary, letterSpacing: '0.1em', textTransform: 'uppercase' }}>
+        快篩
+      </span>
+      <Chips
+        value={specialtyFilter}
+        options={[
+          { key: 'all', label: '全部' },
+          { key: 'specialist', label: `專家 (${allCounts.specialty.specialist ?? 0})` },
+          { key: 'big', label: `大額 (${allCounts.specialty.big ?? 0})` },
+        ]}
+        onChange={(v) => onSpecialtyChange(v as SpecialtyFilter)}
+      />
+    </div>
+  );
+}
+
+function Chips({
+  value,
+  options,
+  onChange,
+}: {
+  value: string;
+  options: Array<{ key: string; label: string }>;
+  onChange: (v: string) => void;
+}) {
+  return (
+    <div style={{ display: 'flex', gap: 4 }}>
+      {options.map((opt) => {
+        const active = value === opt.key;
+        return (
+          <button
+            key={opt.key}
+            type="button"
+            onClick={() => onChange(opt.key)}
+            style={{
+              fontSize: 11,
+              padding: '3px 8px',
+              borderRadius: 4,
+              border: `1px solid ${active ? semantic.live : borderColor.hair}`,
+              backgroundColor: active ? semantic.liveBg : 'transparent',
+              color: active ? semantic.live : fg.secondary,
+              cursor: 'pointer',
+              fontFamily: 'inherit',
+            }}
+          >
+            {opt.label}
+          </button>
+        );
+      })}
+    </div>
+  );
+}
+
+function _computeFilterCounts(alerts: Alert[]) {
+  const tier: Record<string, number> = {};
+  let specialist = 0;
+  let big = 0;
+  for (const a of alerts) {
+    tier[a.tier] = (tier[a.tier] ?? 0) + 1;
+    if (a.specialist_categories?.length) specialist++;
+    if (a.notional >= 10000) big++;
+  }
+  return { tier, specialty: { specialist, big } };
 }
 
 function EmptyAlertState() {
@@ -182,9 +367,12 @@ function AlertRow({ alert, first }: { alert: Alert; first: boolean }) {
             fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace',
           }}
         >
-          <span>
+          <Link
+            href={`/polymarket/wallet/${alert.wallet_address}`}
+            style={{ color: semantic.live, textDecoration: 'none' }}
+          >
             {alert.wallet_address.slice(0, 8)}…{alert.wallet_address.slice(-4)}
-          </span>
+          </Link>
           <span style={{ opacity: 0.5 }}>·</span>
           <span>{matchTime ? matchTime.toLocaleString('zh-TW', { hour12: false }) : alert.match_time}</span>
         </div>

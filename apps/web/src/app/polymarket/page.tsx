@@ -9,6 +9,12 @@ import { OverviewCards } from '@/components/polymarket/OverviewCards';
 import { WhaleDirectoryTable } from '@/components/polymarket/WhaleDirectoryTable';
 import { AlertFeed } from '@/components/polymarket/AlertFeed';
 import { ActiveMarketsTable } from '@/components/polymarket/ActiveMarketsTable';
+import {
+  HighlightCards,
+  type TierMover,
+  type EmergingWhale,
+  type SteadyGrower,
+} from '@/components/polymarket/HighlightCards';
 
 interface StatusPayload {
   last_run_start: string | null;
@@ -82,6 +88,9 @@ interface PageData {
   whales: { count: number; whales: WhaleRow[] } | null;
   alerts: { count: number; alerts: AlertRow[]; window_hours: number } | null;
   markets: { count: number; markets: MarketRow[] } | null;
+  movers: { count: number; window_hours: number; movers: TierMover[] } | null;
+  emerging: { count: number; whales: EmergingWhale[] } | null;
+  growers: { count: number; growers: SteadyGrower[] } | null;
 }
 
 const REFRESH_INTERVAL_MS = 30_000;
@@ -94,26 +103,43 @@ export default function PolymarketPage() {
 
   const fetchAll = useCallback(async () => {
     try {
-      const [status, overview, whales, alerts, markets] = await Promise.all([
-        apiClient.get<StatusPayload>('/api/polymarket/status'),
-        apiClient.get<OverviewPayload>('/api/polymarket/overview').catch(() => null),
-        apiClient
-          .get<{ count: number; whales: WhaleRow[] }>('/api/polymarket/whales', {
-            params: { tier: 'A,B,C,volatile', limit: '100' },
-          })
-          .catch(() => ({ count: 0, whales: [] })),
-        apiClient
-          .get<{ count: number; alerts: AlertRow[]; window_hours: number }>('/api/polymarket/alerts', {
-            params: { hours: '24', limit: '50' },
-          })
-          .catch(() => ({ count: 0, alerts: [], window_hours: 24 })),
-        apiClient
-          .get<{ count: number; markets: MarketRow[] }>('/api/polymarket/markets', {
-            params: { active: 'true', limit: '20' },
-          })
-          .catch(() => ({ count: 0, markets: [] })),
-      ]);
-      setData({ status, overview, whales, alerts, markets });
+      const [status, overview, whales, alerts, markets, movers, emerging, growers] =
+        await Promise.all([
+          apiClient.get<StatusPayload>('/api/polymarket/status'),
+          apiClient.get<OverviewPayload>('/api/polymarket/overview').catch(() => null),
+          apiClient
+            .get<{ count: number; whales: WhaleRow[] }>('/api/polymarket/whales', {
+              params: { tier: 'A,B,C,volatile', limit: '100' },
+            })
+            .catch(() => ({ count: 0, whales: [] })),
+          apiClient
+            .get<{ count: number; alerts: AlertRow[]; window_hours: number }>('/api/polymarket/alerts', {
+              params: { hours: '24', limit: '50' },
+            })
+            .catch(() => ({ count: 0, alerts: [], window_hours: 24 })),
+          apiClient
+            .get<{ count: number; markets: MarketRow[] }>('/api/polymarket/markets', {
+              params: { active: 'true', limit: '20' },
+            })
+            .catch(() => ({ count: 0, markets: [] })),
+          apiClient
+            .get<{ count: number; window_hours: number; movers: TierMover[] }>(
+              '/api/polymarket/tier-movers',
+              { params: { hours: '24', limit: '10' } }
+            )
+            .catch(() => ({ count: 0, window_hours: 24, movers: [] })),
+          apiClient
+            .get<{ count: number; whales: EmergingWhale[] }>('/api/polymarket/emerging-whales', {
+              params: { limit: '10' },
+            })
+            .catch(() => ({ count: 0, whales: [] })),
+          apiClient
+            .get<{ count: number; growers: SteadyGrower[] }>('/api/polymarket/steady-growers', {
+              params: { limit: '10' },
+            })
+            .catch(() => ({ count: 0, growers: [] })),
+        ]);
+      setData({ status, overview, whales, alerts, markets, movers, emerging, growers });
       setLastUpdate(new Date());
       setError(null);
     } catch (e: unknown) {
@@ -148,6 +174,12 @@ export default function PolymarketPage() {
           <div className="flex flex-col gap-4">
             <PipelineStatusCard status={data.status} />
             <OverviewCards overview={data.overview} />
+            <HighlightCards
+              movers={data.movers?.movers ?? []}
+              emerging={data.emerging?.whales ?? []}
+              growers={data.growers?.growers ?? []}
+              windowHours={data.movers?.window_hours ?? 24}
+            />
             <WhaleDirectoryTable whales={data.whales?.whales ?? []} />
             <AlertFeed
               alerts={data.alerts?.alerts ?? []}

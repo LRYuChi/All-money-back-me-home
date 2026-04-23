@@ -203,3 +203,101 @@ class TestWalletDetail:
         assert t["condition_id"] == "0x1"
         assert t["market_question"] == "Will X happen?"
         assert t["market_category"] == "Politics"
+
+
+# ─────────────────────────────────────────────────────────────────────
+# Phase A3 endpoints — tier-movers / emerging-whales / steady-growers
+# ─────────────────────────────────────────────────────────────────────
+
+class TestTierMovers:
+    def test_empty_when_no_history(self, client):
+        c, _ = client
+        resp = c.get("/api/polymarket/tier-movers?hours=24&limit=10")
+        assert resp.status_code == 200
+        assert resp.json()["count"] == 0
+
+    def test_promotions_only(self, client):
+        c, db_path = client
+        conn = sqlite3.connect(db_path)
+        # 2 個變動：1 升階（C→A）+ 1 降階（A→B）→ 只應回升階那筆
+        conn.execute(
+            "INSERT INTO whale_stats (wallet_address, tier, trade_count_90d, win_rate, "
+            "cumulative_pnl, avg_trade_size, stability_pass, resolved_count, last_computed_at) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            ("0xUP", "A", 30, 0.7, 5000, 300, 1, 20, "2026-04-23T00:00:00+00:00"),
+        )
+        conn.execute(
+            "INSERT INTO whale_stats (wallet_address, tier, trade_count_90d, win_rate, "
+            "cumulative_pnl, avg_trade_size, stability_pass, resolved_count, last_computed_at) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            ("0xDOWN", "B", 20, 0.55, 3000, 200, 1, 15, "2026-04-23T00:00:00+00:00"),
+        )
+        now_iso = "2026-04-23T00:00:00+00:00"
+        conn.execute(
+            "INSERT INTO whale_tier_history (wallet_address, from_tier, to_tier, changed_at, reason) VALUES (?, ?, ?, ?, ?)",
+            ("0xUP", "C", "A", now_iso, "promoted"),
+        )
+        conn.execute(
+            "INSERT INTO whale_tier_history (wallet_address, from_tier, to_tier, changed_at, reason) VALUES (?, ?, ?, ?, ?)",
+            ("0xDOWN", "A", "B", now_iso, "demoted"),
+        )
+        conn.commit()
+        conn.close()
+
+        resp = c.get("/api/polymarket/tier-movers?hours=168&limit=10")
+        data = resp.json()
+        assert data["count"] == 1
+        assert data["movers"][0]["wallet_address"] == "0xUP"
+        assert data["movers"][0]["to_tier"] == "A"
+
+
+class TestEmergingWhales:
+    def test_filters_to_emerging_tier(self, client):
+        c, db_path = client
+        _seed_wallet(db_path, "0xA1", tier="A")
+        _seed_wallet(db_path, "0xEM1", tier="emerging", with_curve=False)
+        _seed_wallet(db_path, "0xEM2", tier="emerging", with_curve=False)
+        resp = c.get("/api/polymarket/emerging-whales?limit=10")
+        data = resp.json()
+        assert data["count"] == 2
+        assert {w["wallet_address"] for w in data["whales"]} == {"0xEM1", "0xEM2"}
+
+
+class TestSteadyGrowers:
+    def test_filters_by_is_steady_grower(self, client):
+        c, db_path = client
+        _seed_wallet(db_path, "0xSG1", tier="A", with_curve=True)  # has is_steady_grower=True
+        _seed_wallet(db_path, "0xREG", tier="A", with_curve=False)  # no steady_growth feature
+
+        # seed 一個 with_curve=True 但改 is_steady_grower=False
+        conn = sqlite3.connect(db_path)
+        conn.execute(
+            "INSERT INTO whale_stats (wallet_address, tier, trade_count_90d, win_rate, "
+            "cumulative_pnl, avg_trade_size, stability_pass, resolved_count, last_computed_at) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            ("0xFAKE", "A", 30, 0.7, 5000, 300, 1, 20, "2026-04-23T00:00:00+00:00"),
+        )
+        features = {
+            "steady_growth": {
+                "feature_version": "1.1",
+                "value": {"is_steady_grower": False, "smoothness_score": 0.5},
+                "confidence": "ok",
+            }
+        }
+        conn.execute(
+            """INSERT INTO wallet_profiles (wallet_address, scanner_version, scanned_at,
+               passed_coarse_filter, coarse_filter_reasons, trade_count_90d, resolved_count,
+               cumulative_pnl, avg_trade_size, win_rate, features_json, tier,
+               archetypes_json, risk_flags_json, sample_size_warning, raw_features_json)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            ("0xFAKE", "1.5b.1", "2026-04-23T00:00:00+00:00", 1, "[]",
+             30, 20, 5000, 300, 0.7, json.dumps(features), "A", "[]", "[]", 0, "{}"),
+        )
+        conn.commit()
+        conn.close()
+
+        resp = c.get("/api/polymarket/steady-growers?limit=10")
+        data = resp.json()
+        assert data["count"] == 1
+        assert data["growers"][0]["wallet_address"] == "0xSG1"
+        assert data["growers"][0]["smoothness_score"] > 0

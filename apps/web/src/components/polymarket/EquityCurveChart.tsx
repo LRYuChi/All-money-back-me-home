@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useRef } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import {
   createChart,
   LineSeries,
@@ -14,7 +14,6 @@ import {
   type AreaData,
   type SeriesMarker,
   type Time,
-  type UTCTimestamp,
 } from 'lightweight-charts';
 import { borderColor, fg, layer, semantic } from '@/lib/polymarket/tokens';
 
@@ -32,12 +31,22 @@ export interface CurveEvent {
   outcome?: string;
 }
 
+type RangeKey = '7d' | '30d' | '90d' | 'all';
+
 interface EquityCurveChartProps {
   curve: CurvePoint[];
   events?: CurveEvent[];
   height?: number;
   showDrawdown?: boolean;
+  defaultRange?: RangeKey;
 }
+
+const RANGE_DAYS: Record<RangeKey, number | null> = {
+  '7d': 7,
+  '30d': 30,
+  '90d': 90,
+  all: null,
+};
 
 /**
  * 錢包資金曲線圖 — 已實現 PnL 90 天走勢.
@@ -52,13 +61,31 @@ export function EquityCurveChart({
   events = [],
   height = 320,
   showDrawdown = true,
+  defaultRange = 'all',
 }: EquityCurveChartProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const chartRef = useRef<IChartApi | null>(null);
+  const [range, setRange] = useState<RangeKey>(defaultRange);
+
+  // Filter curve/events by selected range
+  const { filteredCurve, filteredEvents } = useMemo(() => {
+    const days = RANGE_DAYS[range];
+    if (days === null || curve.length === 0) {
+      return { filteredCurve: curve, filteredEvents: events };
+    }
+    const lastDate = new Date(curve[curve.length - 1].date);
+    const cutoff = new Date(lastDate);
+    cutoff.setDate(cutoff.getDate() - days);
+    const cutoffIso = cutoff.toISOString().slice(0, 10);
+    return {
+      filteredCurve: curve.filter((p) => p.date >= cutoffIso),
+      filteredEvents: events.filter((e) => e.date >= cutoffIso),
+    };
+  }, [curve, events, range]);
 
   useEffect(() => {
     if (!containerRef.current) return;
-    if (curve.length === 0) return;
+    if (filteredCurve.length === 0) return;
 
     const chart = createChart(containerRef.current, {
       height,
@@ -93,7 +120,7 @@ export function EquityCurveChart({
       lastValueVisible: true,
       crosshairMarkerRadius: 4,
     });
-    const lineData: LineData[] = curve.map((p) => ({
+    const lineData: LineData[] = filteredCurve.map((p) => ({
       time: p.date as Time,
       value: p.value,
     }));
@@ -101,8 +128,8 @@ export function EquityCurveChart({
 
     // 2. Drawdown underwater area (peak - current, negative shading)
     if (showDrawdown) {
-      let peak = curve[0]?.value ?? 0;
-      const ddData: AreaData[] = curve.map((p) => {
+      let peak = filteredCurve[0]?.value ?? 0;
+      const ddData: AreaData[] = filteredCurve.map((p) => {
         peak = Math.max(peak, p.value);
         const underwater = p.value - peak; // <= 0
         return { time: p.date as Time, value: underwater };
@@ -125,8 +152,8 @@ export function EquityCurveChart({
     }
 
     // 3. 贏輸事件標記
-    if (events.length > 0) {
-      const markers: SeriesMarker<Time>[] = events.map((e) => ({
+    if (filteredEvents.length > 0) {
+      const markers: SeriesMarker<Time>[] = filteredEvents.map((e) => ({
         time: e.date as Time,
         position: e.won ? 'aboveBar' : 'belowBar',
         color: e.won ? semantic.yes : semantic.error,
@@ -158,7 +185,7 @@ export function EquityCurveChart({
       chart.remove();
       chartRef.current = null;
     };
-  }, [curve, events, height, showDrawdown]);
+  }, [filteredCurve, filteredEvents, height, showDrawdown]);
 
   if (curve.length === 0) {
     return (
@@ -179,7 +206,79 @@ export function EquityCurveChart({
     );
   }
 
-  return <div ref={containerRef} style={{ width: '100%', height }} />;
+  return (
+    <div>
+      <RangeSelector current={range} onChange={setRange} counts={_rangeCounts(curve)} />
+      <div ref={containerRef} style={{ width: '100%', height }} />
+    </div>
+  );
+}
+
+function RangeSelector({
+  current,
+  onChange,
+  counts,
+}: {
+  current: RangeKey;
+  onChange: (r: RangeKey) => void;
+  counts: Record<RangeKey, number>;
+}) {
+  const options: Array<{ key: RangeKey; label: string }> = [
+    { key: '7d', label: '7 天' },
+    { key: '30d', label: '30 天' },
+    { key: '90d', label: '90 天' },
+    { key: 'all', label: '全部' },
+  ];
+  return (
+    <div style={{ display: 'flex', gap: 4, marginBottom: 10, justifyContent: 'flex-end' }}>
+      {options.map((opt) => {
+        const active = current === opt.key;
+        const hasData = counts[opt.key] >= 2;
+        return (
+          <button
+            key={opt.key}
+            type="button"
+            onClick={() => hasData && onChange(opt.key)}
+            disabled={!hasData}
+            style={{
+              fontSize: 11,
+              padding: '4px 10px',
+              borderRadius: 4,
+              border: `1px solid ${active ? semantic.live : borderColor.hair}`,
+              backgroundColor: active ? semantic.liveBg : 'transparent',
+              color: active ? semantic.live : hasData ? fg.secondary : fg.tertiary,
+              cursor: hasData ? 'pointer' : 'not-allowed',
+              opacity: hasData ? 1 : 0.5,
+              fontFamily: 'inherit',
+            }}
+          >
+            {opt.label}
+            {counts[opt.key] > 0 && (
+              <span style={{ marginLeft: 4, fontSize: 10, color: fg.tertiary }}>
+                ({counts[opt.key]})
+              </span>
+            )}
+          </button>
+        );
+      })}
+    </div>
+  );
+}
+
+function _rangeCounts(curve: CurvePoint[]): Record<RangeKey, number> {
+  if (curve.length === 0) {
+    return { '7d': 0, '30d': 0, '90d': 0, all: 0 };
+  }
+  const lastDate = new Date(curve[curve.length - 1].date);
+  const counts: Record<RangeKey, number> = { '7d': 0, '30d': 0, '90d': 0, all: curve.length };
+  for (const key of ['7d', '30d', '90d'] as const) {
+    const days = RANGE_DAYS[key]!;
+    const cutoff = new Date(lastDate);
+    cutoff.setDate(cutoff.getDate() - days);
+    const cutoffIso = cutoff.toISOString().slice(0, 10);
+    counts[key] = curve.filter((p) => p.date >= cutoffIso).length;
+  }
+  return counts;
 }
 
 function _markerSize(notional: number): number {
