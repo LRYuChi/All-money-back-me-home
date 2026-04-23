@@ -3,6 +3,7 @@ name: Deploy to VPS
 on:
   push:
     branches: [main]
+  workflow_dispatch:  # 允許手動觸發，方便 debug / 補跑
 
 jobs:
   deploy:
