@@ -6,12 +6,16 @@
   1.5c: archetype 啟用 — 從現有 features 產出 multi-label 畫像
   1.5d+: risk_flags（concentration_high / loss_loading 等）
 
-Archetype 定義（1.5c.0）— 彼此不互斥、可共存：
-  steady_grower       來自 steady_growth.value.is_steady_grower=True
-  domain_specialist   來自 category_specialization.value.specialist_categories 非空
-  consistent_trader   來自 time_slice_consistency.value.consistent=True
+Archetype 定義 — 彼此不互斥、可共存：
+  1.5c.0:
+    steady_grower       steady_growth.is_steady_grower=True
+    domain_specialist   category_specialization.specialist_categories 非空
+    consistent_trader   time_slice_consistency.consistent=True
+  1.5c.1:
+    alpha_hunter        brier_calibration.market_edge ≥ 閾值 + 樣本充分
 
 所有判定都要求 feature confidence='ok'；low_samples / unknown 的 feature 不貢獻 tag。
+門檻值讀自 pre_registered.yaml §0.3.1.<feature>.archetype_<name>.
 """
 
 from __future__ import annotations
@@ -32,11 +36,13 @@ logger = logging.getLogger(__name__)
 ARCHETYPE_STEADY_GROWER = "steady_grower"
 ARCHETYPE_DOMAIN_SPECIALIST = "domain_specialist"
 ARCHETYPE_CONSISTENT_TRADER = "consistent_trader"
+ARCHETYPE_ALPHA_HUNTER = "alpha_hunter"
 
 _ARCHETYPE_ORDER = (
     ARCHETYPE_STEADY_GROWER,
     ARCHETYPE_DOMAIN_SPECIALIST,
     ARCHETYPE_CONSISTENT_TRADER,
+    ARCHETYPE_ALPHA_HUNTER,
 )
 
 
@@ -91,8 +97,46 @@ def classify_archetypes(
     if _is_ok_feature_positive(features.get("time_slice_consistency"), key="consistent"):
         tags.append(ARCHETYPE_CONSISTENT_TRADER)
 
+    if _is_alpha_hunter(features.get("brier_calibration"), pre_reg):
+        tags.append(ARCHETYPE_ALPHA_HUNTER)
+
     # 保證固定順序（便於 diff 與展示）
     return [t for t in _ARCHETYPE_ORDER if t in tags]
+
+
+def _is_alpha_hunter(
+    feature: FeatureResult | None, pre_reg: dict[str, Any]
+) -> bool:
+    """brier_calibration feature 指示錢包有顯著 market edge.
+
+    門檻：
+      - feature.confidence == 'ok'
+      - value.market_edge ≥ min_market_edge (default 0.08)
+      - value.n_analyzed ≥ min_n_analyzed (default 30)
+    """
+    if feature is None or feature.confidence != "ok":
+        return False
+    value = feature.value or {}
+    if not isinstance(value, dict):
+        return False
+    edge = value.get("market_edge")
+    n_analyzed = value.get("n_analyzed")
+    if edge is None or n_analyzed is None:
+        return False
+
+    try:
+        cfg = (
+            pre_reg["scanner"]["features"]["thresholds"]["brier_calibration"]
+            ["archetype_alpha_hunter"]
+        )
+        min_edge = float(cfg["min_market_edge"]["value"])
+        min_n = int(cfg["min_n_analyzed"]["value"])
+    except (KeyError, TypeError):
+        # 安全預設：門檻 yaml 遺失時使用保守值
+        min_edge = 0.08
+        min_n = 30
+
+    return float(edge) >= min_edge and int(n_analyzed) >= min_n
 
 
 def _is_ok_feature_positive(feature: FeatureResult | None, *, key: str) -> bool:

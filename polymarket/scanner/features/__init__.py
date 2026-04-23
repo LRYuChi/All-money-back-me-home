@@ -7,6 +7,7 @@ Scanner.scan() 透過 pre_registered.yaml 的 enabled_in_version 決定要跑哪
 from __future__ import annotations
 
 from polymarket.scanner.features.base import BaseFeature, ScanContext
+from polymarket.scanner.features.brier_calibration import BrierCalibrationFeature
 from polymarket.scanner.features.category_specialization import CategorySpecializationFeature
 from polymarket.scanner.features.core import CoreStatsFeature
 from polymarket.scanner.features.steady_growth import SteadyGrowthFeature
@@ -20,6 +21,7 @@ REGISTRY: dict[str, BaseFeature] = {
     CategorySpecializationFeature.name: CategorySpecializationFeature(),
     TimeSliceConsistencyFeature.name: TimeSliceConsistencyFeature(),
     SteadyGrowthFeature.name: SteadyGrowthFeature(),
+    BrierCalibrationFeature.name: BrierCalibrationFeature(),
 }
 
 
