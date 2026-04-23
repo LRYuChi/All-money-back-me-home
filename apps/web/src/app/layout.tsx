@@ -34,21 +34,34 @@ export default function RootLayout({
               <a href="/" className="text-xl font-bold text-white font-[family-name:var(--font-geist-sans)]">
                 All Money Back Me Home
               </a>
-              <div className="flex space-x-4 font-[family-name:var(--font-geist-sans)]">
-                <a href="/market/tw" className="text-gray-300 hover:text-white transition-colors">
+              <div className="flex items-center space-x-5 font-[family-name:var(--font-geist-sans)] text-sm">
+                <a href="/market/tw" className="text-gray-400 hover:text-white transition-colors">
                   台股
                 </a>
-                <a href="/market/us" className="text-gray-300 hover:text-white transition-colors">
+                <a href="/market/us" className="text-gray-400 hover:text-white transition-colors">
                   美股
                 </a>
-                <a href="/market/crypto" className="text-gray-300 hover:text-white transition-colors">
+                <a href="/market/crypto" className="text-gray-400 hover:text-white transition-colors">
                   加密貨幣
                 </a>
-                <a href="/trades" className="text-gray-300 hover:text-white transition-colors">
+                <a href="/trades" className="text-gray-400 hover:text-white transition-colors">
                   交易紀錄
                 </a>
-                <a href="/backtest" className="text-gray-300 hover:text-white transition-colors">
+                <a href="/backtest" className="text-gray-400 hover:text-white transition-colors">
                   回測
+                </a>
+                <a href="/polymarket" className="inline-flex items-center gap-1.5 text-gray-300 hover:text-white transition-colors">
+                  <span>Polymarket</span>
+                  <span
+                    className="rounded-full px-1.5 py-0.5 text-[10px] font-mono"
+                    style={{
+                      color: 'oklch(70% 0.18 290)',
+                      backgroundColor: 'oklch(25% 0.08 290)',
+                      border: '1px solid color-mix(in oklab, oklch(70% 0.18 290) 35%, transparent)',
+                    }}
+                  >
+                    1.5b
+                  </span>
                 </a>
               </div>
             </div>

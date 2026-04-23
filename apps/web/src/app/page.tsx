@@ -12,6 +12,7 @@ import { HeatMap } from '@/components/charts/HeatMap';
 import { CryptoEnvPanel } from '@/components/dashboard/CryptoEnvPanel';
 import EquityCurve from '@/components/dashboard/EquityCurve';
 import SupertrendSignals from '@/components/dashboard/SupertrendSignals';
+import { SystemHealthBar } from '@/components/dashboard/SystemHealthBar';
 
 interface DashboardData {
   timestamp: string;
@@ -68,8 +69,19 @@ export default function DashboardPage() {
 
   if (loading && !data) {
     return (
-      <div className="flex items-center justify-center min-h-[60vh]">
-        <div className="text-gray-500 animate-pulse">載入儀表板...</div>
+      <div className="-mx-4 -mt-4">
+        <div className="h-8 bg-gray-900/50 border-b border-gray-800 animate-pulse" />
+        <div className="px-4 py-3 space-y-3 max-w-7xl mx-auto">
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+            <SkeletonCard />
+            <SkeletonCard />
+          </div>
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+            <div className="md:col-span-2"><SkeletonCard tall /></div>
+            <SkeletonCard tall />
+          </div>
+          <div className="text-center text-xs text-gray-600 pt-4 animate-pulse">載入儀表板…</div>
+        </div>
       </div>
     );
   }
@@ -120,27 +132,44 @@ export default function DashboardPage() {
       {/* Ticker Tape */}
       <TickerTape items={tickerItems} />
 
-      <div className="px-4 py-3 space-y-3 max-w-7xl mx-auto">
-        {/* Alert Banners */}
-        {alerts.map((a, i) => (
-          <div key={i} className={`rounded-lg px-4 py-2 text-sm flex items-center gap-2 ${
-            a.level === 'danger' ? 'bg-red-500/15 border border-red-500/30 text-red-400' :
-            a.level === 'warning' ? 'bg-yellow-500/15 border border-yellow-500/30 text-yellow-400' :
-            'bg-blue-500/15 border border-blue-500/30 text-blue-400'
-          }`}>
-            <span>{a.level === 'danger' ? '🚨' : a.level === 'warning' ? '⚠️' : 'ℹ️'}</span>
-            <span>{a.msg}</span>
-          </div>
-        ))}
-
+      <div className="px-4 py-4 space-y-4 max-w-7xl mx-auto">
         {/* Header */}
-        <div className="flex justify-between items-center">
-          <h1 className="text-lg font-semibold text-white">Trading Dashboard</h1>
-          <div className="flex items-center gap-3 text-xs text-gray-500">
-            <span>{lastUpdate}</span>
-            <button onClick={fetchData} className="text-blue-400 hover:text-blue-300 transition-colors">↻</button>
+        <header className="flex items-end justify-between flex-wrap gap-2">
+          <div>
+            <h1 className="text-2xl font-semibold text-white tracking-tight">Trading Dashboard</h1>
+            <div className="text-xs text-gray-500 mt-1">
+              加密期貨交易引擎 · Polymarket 鯨魚情報 · 多市場宏觀監控
+            </div>
           </div>
-        </div>
+          <div className="flex items-center gap-3 text-xs text-gray-500 font-mono">
+            {lastUpdate && <span>更新 {lastUpdate}</span>}
+            <button
+              onClick={fetchData}
+              className="px-2.5 py-1 rounded-md border border-gray-800 hover:border-gray-700 hover:text-gray-300 transition-colors"
+            >
+              ↻ 刷新
+            </button>
+          </div>
+        </header>
+
+        {/* Row 0: System Health Bar (NEW — 雙系統並列) */}
+        <SystemHealthBar
+          crypto={{
+            botState: data.freqtrade.state,
+            openPositions: data.trading.open_positions,
+            totalPnlPct: data.trading.total_pnl_pct,
+            totalTrades: data.trading.total_trades,
+          }}
+        />
+
+        {/* Alert Banners */}
+        {alerts.length > 0 && (
+          <div className="space-y-2">
+            {alerts.map((a, i) => (
+              <AlertBanner key={i} level={a.level} msg={a.msg} />
+            ))}
+          </div>
+        )}
 
         {/* Row 1: Confidence + Bot Status */}
         <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
@@ -164,30 +193,86 @@ export default function DashboardPage() {
           <EquityCurve />
         </div>
 
-        {/* Row 4: Crypto Environment + Correlations */}
+        {/* Row 4: Crypto Environment + Correlations + Quick Links */}
         <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
           <CryptoEnvPanel data={data.crypto_env || {}} />
           <div className="rounded-lg border border-gray-800 bg-gray-900/50 p-3">
-            <h3 className="text-sm font-medium text-gray-400 mb-2">跨市場相關性 (30日)</h3>
+            <h3 className="text-xs font-medium text-gray-400 mb-2 uppercase tracking-wider">跨市場相關性 (30日)</h3>
             <HeatMap data={heatmapData} />
           </div>
-          <div className="grid grid-cols-1 gap-1.5">
-            {[
-              { href: '/market/crypto', label: '₿ 加密貨幣', color: 'from-orange-600/80 to-orange-900/80' },
-              { href: '/market/us', label: '🇺🇸 美股', color: 'from-emerald-600/80 to-emerald-900/80' },
-              { href: '/market/tw', label: '🇹🇼 台股', color: 'from-blue-600/80 to-blue-900/80' },
-              { href: '/trades', label: '💰 交易紀錄', color: 'from-purple-600/80 to-purple-900/80' },
-              { href: '/backtest', label: '📊 回測', color: 'from-pink-600/80 to-pink-900/80' },
-            ].map((link) => (
-              <Link key={link.href} href={link.href}>
-                <div className={`rounded-lg p-2 bg-gradient-to-br ${link.color} text-center text-white text-xs font-medium hover:shadow-lg hover:scale-105 transition-all border border-white/5`}>
-                  {link.label}
-                </div>
-              </Link>
-            ))}
-          </div>
+          <QuickLinks />
         </div>
       </div>
     </div>
+  );
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// Sub-components
+// ─────────────────────────────────────────────────────────────────────
+
+function AlertBanner({ level, msg }: { level: 'danger' | 'warning' | 'info'; msg: string }) {
+  const styles = {
+    danger: { bg: 'rgba(220, 38, 38, 0.10)', border: 'rgba(220, 38, 38, 0.35)', text: 'rgb(248, 113, 113)' },
+    warning: { bg: 'rgba(217, 119, 6, 0.10)', border: 'rgba(217, 119, 6, 0.35)', text: 'rgb(251, 191, 36)' },
+    info: { bg: 'rgba(37, 99, 235, 0.10)', border: 'rgba(37, 99, 235, 0.35)', text: 'rgb(96, 165, 250)' },
+  }[level];
+  return (
+    <div
+      className="rounded-lg px-4 py-2.5 text-sm flex items-center gap-2.5"
+      style={{ backgroundColor: styles.bg, border: `1px solid ${styles.border}`, color: styles.text }}
+    >
+      <span
+        className="inline-block rounded-full"
+        style={{ width: '8px', height: '8px', backgroundColor: styles.text, flexShrink: 0 }}
+      />
+      <span>{msg}</span>
+    </div>
+  );
+}
+
+function QuickLinks() {
+  const links = [
+    { href: '/polymarket', label: 'Polymarket 情報', sub: 'Phase 1.5b · 鯨魚追蹤', accent: 'oklch(70% 0.18 290)' },
+    { href: '/market/crypto', label: '加密貨幣', sub: 'BTC / ETH / SOL', accent: 'oklch(70% 0.16 50)' },
+    { href: '/market/us', label: '美股', sub: 'S&P / Nasdaq', accent: 'oklch(65% 0.18 155)' },
+    { href: '/market/tw', label: '台股', sub: '加權指數 / 半導體', accent: 'oklch(65% 0.16 250)' },
+    { href: '/trades', label: '交易紀錄', sub: '已平倉 / 未平倉', accent: 'oklch(70% 0.10 320)' },
+    { href: '/backtest', label: '回測', sub: 'WFO · 多策略', accent: 'oklch(70% 0.13 350)' },
+  ];
+  return (
+    <div className="rounded-lg border border-gray-800 bg-gray-900/50 p-3">
+      <h3 className="text-xs font-medium text-gray-400 mb-2 uppercase tracking-wider">快速連結</h3>
+      <div className="grid grid-cols-2 gap-1.5">
+        {links.map((link) => (
+          <Link key={link.href} href={link.href}>
+            <div
+              className="rounded-md px-2.5 py-2 transition-all hover:bg-gray-800/50 group"
+              style={{
+                backgroundColor: 'rgba(255,255,255,0.02)',
+                border: '1px solid rgba(255,255,255,0.05)',
+                borderLeft: `2px solid ${link.accent}`,
+              }}
+            >
+              <div className="text-xs font-medium text-gray-200 group-hover:text-white transition-colors">
+                {link.label}
+              </div>
+              <div className="text-[10px] text-gray-500 mt-0.5 font-mono">
+                {link.sub}
+              </div>
+            </div>
+          </Link>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function SkeletonCard({ tall }: { tall?: boolean }) {
+  return (
+    <div
+      className="rounded-lg border border-gray-800 bg-gray-900/40 animate-pulse"
+      style={{ height: tall ? '180px' : '108px' }}
+    />
   );
 }
