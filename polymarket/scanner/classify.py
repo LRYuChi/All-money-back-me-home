@@ -4,7 +4,7 @@
   1.5a: tier 重用 features.whales.classify_tier；archetype/risk 為 stub
   1.5b: 加 emerging tier（whales.py 側）；archetype/risk 仍 stub
   1.5c: archetype 啟用 — 從現有 features 產出 multi-label 畫像
-  1.5d+: risk_flags（concentration_high / loss_loading 等）
+  1.5c.2: risk_flags 啟用（concentration_high / loss_loading / wash_trade_suspicion）
 
 Archetype 定義 — 彼此不互斥、可共存：
   1.5c.0:
@@ -14,8 +14,15 @@ Archetype 定義 — 彼此不互斥、可共存：
   1.5c.1:
     alpha_hunter        brier_calibration.market_edge ≥ 閾值 + 樣本充分
 
-所有判定都要求 feature confidence='ok'；low_samples / unknown 的 feature 不貢獻 tag。
-門檻值讀自 pre_registered.yaml §0.3.1.<feature>.archetype_<name>.
+Risk flags（告警 — 跟單前的警示訊號）：
+  1.5c.2:
+    concentration_high  單一類別佔總 notional > 80%（過度集中）
+    loss_loading        最近 30d 段 PnL 顯著比前兩段差（策略正在失效）
+    wash_trade_suspicion category_specialization 揭示同一類別下多倉對敲跡象
+
+所有 archetype 判定都要求 feature confidence='ok'。
+Risk flags 比較寬鬆：只要 feature value 有足夠資訊就可觸發（為了不遺漏警示）。
+門檻值讀自 pre_registered.yaml §0.3.1.<feature>.archetype_<name> / risk_<name>.
 """
 
 from __future__ import annotations
@@ -43,6 +50,17 @@ _ARCHETYPE_ORDER = (
     ARCHETYPE_DOMAIN_SPECIALIST,
     ARCHETYPE_CONSISTENT_TRADER,
     ARCHETYPE_ALPHA_HUNTER,
+)
+
+# Risk flag 常數
+RISK_CONCENTRATION_HIGH = "concentration_high"
+RISK_LOSS_LOADING = "loss_loading"
+RISK_WASH_TRADE_SUSPICION = "wash_trade_suspicion"
+
+_RISK_ORDER = (
+    RISK_CONCENTRATION_HIGH,
+    RISK_LOSS_LOADING,
+    RISK_WASH_TRADE_SUSPICION,
 )
 
 
@@ -164,5 +182,164 @@ def detect_risk_flags(
     features: dict[str, FeatureResult],
     pre_reg: dict[str, Any],
 ) -> list[str]:
-    """1.5a 階段不啟用，回傳空。1.5c 起會偵測 concentration_high、loss_loading 等."""
-    return []
+    """依 features 輸出 risk flags. 多標籤、彼此獨立."""
+    tags: list[str] = []
+
+    if _is_concentration_high(features.get("category_specialization"), pre_reg):
+        tags.append(RISK_CONCENTRATION_HIGH)
+
+    if _is_loss_loading(features.get("steady_growth"), pre_reg):
+        tags.append(RISK_LOSS_LOADING)
+
+    if _is_wash_trade_suspicion(features.get("category_specialization"), pre_reg):
+        tags.append(RISK_WASH_TRADE_SUSPICION)
+
+    return [t for t in _RISK_ORDER if t in tags]
+
+
+def _is_concentration_high(
+    feature: FeatureResult | None, pre_reg: dict[str, Any]
+) -> bool:
+    """單一類別 notional 佔比 > 閾值（預設 80%）→ 集中度過高.
+
+    使用 category_specialization.value.categories[*].notional.
+    confidence=low_samples 時跳過（類別資料不足以判斷）.
+    """
+    if feature is None or feature.confidence != "ok":
+        return False
+    value = feature.value or {}
+    if not isinstance(value, dict):
+        return False
+    cats = value.get("categories") or {}
+    if not isinstance(cats, dict) or not cats:
+        return False
+
+    threshold = _get_risk_threshold(
+        pre_reg, "category_specialization", "risk_concentration_high", "max_share", 0.80
+    )
+
+    # 用 notional 算佔比；排除 unknown category 的貢獻（分母與分子都排除）
+    known_notional = 0.0
+    max_notional = 0.0
+    for name, stat in cats.items():
+        if not isinstance(stat, dict):
+            continue
+        if name == "(unknown)":
+            continue
+        n = float(stat.get("notional") or 0)
+        known_notional += n
+        if n > max_notional:
+            max_notional = n
+    if known_notional <= 0:
+        return False
+    return (max_notional / known_notional) > threshold
+
+
+def _is_loss_loading(
+    feature: FeatureResult | None, pre_reg: dict[str, Any]
+) -> bool:
+    """最近 30d segment PnL 顯著比前兩段差 → 策略失效中.
+
+    觸發條件：segment_pnls[0] 負值 且 |segment_pnls[0]| ≥ max(segment_pnls[1], segment_pnls[2]) × 閾值.
+    或更簡：segment_pnls[0] < 0 AND 其他兩段皆正.
+    """
+    if feature is None or feature.confidence not in ("ok", "low_samples"):
+        return False
+    value = feature.value or {}
+    if not isinstance(value, dict):
+        return False
+    segs = value.get("segment_pnls_usdc")
+    if not isinstance(segs, list) or len(segs) < 3:
+        return False
+
+    try:
+        s0, s1, s2 = float(segs[0]), float(segs[1]), float(segs[2])
+    except (TypeError, ValueError):
+        return False
+
+    _ = _get_risk_threshold(
+        pre_reg, "steady_growth", "risk_loss_loading", "min_prior_positive_count", 2
+    )  # threshold currently unused in simple rule but registered
+
+    # 規則：最近一段虧損，且前兩段中至少兩段為正值
+    if s0 >= 0:
+        return False
+    prior_positive = sum(1 for s in (s1, s2) if s > 0)
+    return prior_positive >= 2
+
+
+def _is_wash_trade_suspicion(
+    feature: FeatureResult | None, pre_reg: dict[str, Any]
+) -> bool:
+    """category_specialization 顯示某類別的 resolved 多但 win_rate ≈ 0.5 且 notional 集中.
+
+    粗略啟發：單一類別 resolved ≥ N 且 win_rate 落在 [0.45, 0.55] 且佔比高.
+    """
+    if feature is None or feature.confidence != "ok":
+        return False
+    value = feature.value or {}
+    if not isinstance(value, dict):
+        return False
+    cats = value.get("categories") or {}
+    if not isinstance(cats, dict):
+        return False
+
+    min_resolved = int(_get_risk_threshold(
+        pre_reg, "category_specialization", "risk_wash_trade_suspicion",
+        "min_category_resolved", 20
+    ))
+    lo = float(_get_risk_threshold(
+        pre_reg, "category_specialization", "risk_wash_trade_suspicion",
+        "win_rate_lower", 0.45
+    ))
+    hi = float(_get_risk_threshold(
+        pre_reg, "category_specialization", "risk_wash_trade_suspicion",
+        "win_rate_upper", 0.55
+    ))
+    min_share = float(_get_risk_threshold(
+        pre_reg, "category_specialization", "risk_wash_trade_suspicion",
+        "min_notional_share", 0.60
+    ))
+
+    total_notional = sum(
+        float(s.get("notional") or 0) for s in cats.values()
+        if isinstance(s, dict)
+    )
+    if total_notional <= 0:
+        return False
+
+    for name, stat in cats.items():
+        if not isinstance(stat, dict) or name == "(unknown)":
+            continue
+        if int(stat.get("resolved") or 0) < min_resolved:
+            continue
+        wr = float(stat.get("win_rate") or 0)
+        if not (lo <= wr <= hi):
+            continue
+        notional = float(stat.get("notional") or 0)
+        if notional / total_notional >= min_share:
+            return True
+    return False
+
+
+def _get_risk_threshold(
+    pre_reg: dict[str, Any],
+    feature_name: str,
+    risk_name: str,
+    field_name: str,
+    default: Any,
+) -> Any:
+    """讀 pre_reg.scanner.features.thresholds[feature].risk_[name].[field].value.
+
+    yaml 缺失時回 default（保守預設）。
+    """
+    try:
+        node = (
+            pre_reg["scanner"]["features"]["thresholds"][feature_name][risk_name]
+            [field_name]
+        )
+        if isinstance(node, dict) and "value" in node:
+            return node["value"]
+        return node
+    except (KeyError, TypeError):
+        return default

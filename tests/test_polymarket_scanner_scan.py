@@ -63,7 +63,7 @@ class TestScanWallet:
         assert profile.features["core_stats"].confidence == "ok"
 
     def test_features_only_includes_enabled(self):
-        # 1.5c.1 啟用 core_stats + category + time_slice + steady_growth + brier_calibration
+        # 1.5c.2 feature 集合與 1.5c.1 相同（只差 classify 層）
         trades = [_trade(f"0x{i}", i) for i in range(10)]
         profile = scan_wallet("0xw", trades, [_resolved(100)], now=NOW)
         assert set(profile.features.keys()) == {

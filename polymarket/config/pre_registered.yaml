@@ -27,9 +27,9 @@ meta:
 # -----------------------------------------------------------------------------
 scanner:
   version:
-    value: "1.5c.1"
+    value: "1.5c.2"
     set_at: "2026-04-23"
-    rationale: "Phase 1.5c.1 — brier_calibration feature + alpha_hunter archetype (market edge quantification)"
+    rationale: "Phase 1.5c.2 — risk_flags enabled (concentration_high / loss_loading / wash_trade_suspicion)"
     next_review: "2026-07-23"
 
   # § 0.1 第一階段：Discovery — 候選錢包池
@@ -98,6 +98,13 @@ scanner:
         - "time_slice_consistency"
         - "steady_growth"
         - "brier_calibration"
+      # 1.5c.2 feature 集合不變，新增 classify 層的 risk_flags 輸出
+      "1.5c.2":
+        - "core_stats"
+        - "category_specialization"
+        - "time_slice_consistency"
+        - "steady_growth"
+        - "brier_calibration"
       "1.5b.2":
         - "core_stats"
         - "category_specialization"
@@ -135,6 +142,34 @@ scanner:
           set_at: "2026-04-22"
           rationale: "若 > 50% 的倉位 category 無法判定 (markets 表未涵蓋)，confidence 降為 low_samples"
           next_review: "2026-07-22"
+        # 1.5c.2 risk flags using category_specialization output
+        risk_concentration_high:
+          max_share:
+            value: 0.80
+            set_at: "2026-04-23"
+            rationale: "單一類別 notional 佔 > 80% 視為集中度過高；跟單風險放大"
+            next_review: "2026-07-23"
+        risk_wash_trade_suspicion:
+          min_category_resolved:
+            value: 20
+            set_at: "2026-04-23"
+            rationale: "該類別至少 20 筆 resolved 才有統計意義"
+            next_review: "2026-07-23"
+          win_rate_lower:
+            value: 0.45
+            set_at: "2026-04-23"
+            rationale: "勝率落在 0.45-0.55 中間區且注重度高，可能是對敲或無 edge"
+            next_review: "2026-07-23"
+          win_rate_upper:
+            value: 0.55
+            set_at: "2026-04-23"
+            rationale: "對應 win_rate_lower"
+            next_review: "2026-07-23"
+          min_notional_share:
+            value: 0.60
+            set_at: "2026-04-23"
+            rationale: "該類別 notional 佔比 ≥ 60%（搭配 50% 勝率）強化可疑訊號"
+            next_review: "2026-07-23"
 
       time_slice_consistency:
         segment_days:
@@ -197,6 +232,13 @@ scanner:
           r_squared: 0.40            # 線性回歸擬合度 — 曲線是否呈單調趨勢
           gain_to_pain: 0.30         # 獲利/回撤比 — 上漲是否比下跌更顯著
           new_high_frequency: 0.30   # 創新高頻率 — 曲線是否持續突破前高
+        # 1.5c.2 risk_loading flag thresholds
+        risk_loss_loading:
+          min_prior_positive_count:
+            value: 2
+            set_at: "2026-04-23"
+            rationale: "seg_0 虧損時，若前兩段皆正（前期穩定） → 最近 30d 在失效中"
+            next_review: "2026-07-23"
 
       # brier_calibration (1.5c.1)：機率校準與 alpha 量化
       # 與 §2 strategy_promotion.brier_score 的門檻語義相反 — 此處測市場對錢包下注位置

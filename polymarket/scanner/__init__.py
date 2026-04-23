@@ -27,4 +27,4 @@ from __future__ import annotations
 
 # 由 polymarket.config.load_pre_registered() 讀取後與此處對齊
 # 若不一致應引發 startup error（避免 yaml 與代碼漂移）
-SCANNER_VERSION = "1.5c.1"
+SCANNER_VERSION = "1.5c.2"

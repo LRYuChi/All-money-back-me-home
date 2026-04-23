@@ -150,10 +150,9 @@ class TestRegistryAndIntegration:
         assert "brier_calibration" in REGISTRY
         assert REGISTRY["brier_calibration"].version == "1.0"
 
-    def test_enabled_in_1_5c_1(self):
+    def test_enabled_in_current_version(self):
         from polymarket.scanner import SCANNER_VERSION
 
-        assert SCANNER_VERSION == "1.5c.1"
         pre_reg = load_pre_registered()
         enabled = pre_reg["scanner"]["features"]["enabled_in_version"][SCANNER_VERSION]
         assert "brier_calibration" in enabled
