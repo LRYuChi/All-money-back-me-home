@@ -79,5 +79,8 @@ data/polymarket.db
 data/polymarket.db-shm
 data/polymarket.db-wal
 
+# Trading audit local snapshot (DB pulled from VPS, regenerable)
+data/audit/
+
 # Docker
 docker-compose.override.yml
