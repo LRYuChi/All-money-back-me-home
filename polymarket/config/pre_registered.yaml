@@ -27,9 +27,9 @@ meta:
 # -----------------------------------------------------------------------------
 scanner:
   version:
-    value: "1.5b.1"
+    value: "1.5c.0"
     set_at: "2026-04-23"
-    rationale: "Phase 1.5b.1 — adds steady_growth feature (equity curve smoothness for strategy-executor archetype)"
+    rationale: "Phase 1.5c.0 — archetype classifier enabled (steady_grower / domain_specialist / consistent_trader); feature set unchanged"
     next_review: "2026-07-23"
 
   # § 0.1 第一階段：Discovery — 候選錢包池
@@ -85,6 +85,12 @@ scanner:
         - "category_specialization"
         - "time_slice_consistency"
         - "steady_growth"            # 資產曲線平滑度（策略執行者識別）
+      # 1.5c.0 啟用 archetype 分類器；feature 集合與 1.5b.1 相同，classify 層才是差異
+      "1.5c.0":
+        - "core_stats"
+        - "category_specialization"
+        - "time_slice_consistency"
+        - "steady_growth"
       "1.5b.2":
         - "core_stats"
         - "category_specialization"
