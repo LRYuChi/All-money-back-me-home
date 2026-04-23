@@ -11,6 +11,8 @@ import { ConsistencyTag } from '@/components/polymarket/SpecialistTag';
 import { EquityCurveChart, type CurvePoint, type CurveEvent } from '@/components/polymarket/EquityCurveChart';
 import { CategoryBreakdownChart } from '@/components/polymarket/CategoryBreakdownChart';
 import { TimeSliceBarChart } from '@/components/polymarket/TimeSliceBarChart';
+import { ProfileTimeline, type TimelineEvent } from '@/components/polymarket/ProfileTimeline';
+import { MetricSparklineGrid, type HistoryEntry } from '@/components/polymarket/MetricSparklineGrid';
 
 interface WalletDetailPayload {
   wallet_address: string;
@@ -70,11 +72,25 @@ interface TierHistoryRow {
   reason: string | null;
 }
 
+interface HistoryPayload {
+  wallet_address: string;
+  count: number;
+  profiles: HistoryEntry[];
+}
+
+interface TimelinePayload {
+  wallet_address: string;
+  event_count: number;
+  events: TimelineEvent[];
+}
+
 export default function WalletDetailPage() {
   const params = useParams<{ address: string }>();
   const address = params?.address ?? '';
 
   const [data, setData] = useState<WalletDetailPayload | null>(null);
+  const [history, setHistory] = useState<HistoryEntry[]>([]);
+  const [timeline, setTimeline] = useState<TimelineEvent[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
@@ -83,10 +99,22 @@ export default function WalletDetailPage() {
     setLoading(true);
     setError(null);
     try {
-      const resp = await apiClient.get<WalletDetailPayload>(
-        `/api/polymarket/wallet/${address}`
-      );
-      setData(resp);
+      const [detail, hist, tl] = await Promise.all([
+        apiClient.get<WalletDetailPayload>(`/api/polymarket/wallet/${address}`),
+        apiClient
+          .get<HistoryPayload>(`/api/polymarket/profiles/${address}/history`, {
+            params: { limit: '60' },
+          })
+          .catch(() => ({ wallet_address: address, count: 0, profiles: [] })),
+        apiClient
+          .get<TimelinePayload>(`/api/polymarket/profiles/${address}/timeline`, {
+            params: { limit: '100' },
+          })
+          .catch(() => ({ wallet_address: address, event_count: 0, events: [] })),
+      ]);
+      setData(detail);
+      setHistory(hist.profiles ?? []);
+      setTimeline(tl.events ?? []);
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e);
       setError(msg);
@@ -168,17 +196,27 @@ export default function WalletDetailPage() {
         <TimeSlicePanel feature={data.features.time_slice_consistency} />
       </div>
 
-      {/* Recent trades + tier history */}
+      {/* Phase B.2: 指標演進 sparklines */}
+      <div style={{ marginTop: '16px' }}>
+        <MetricSparklineGrid history={history} />
+      </div>
+
+      {/* Phase B.2: 畫像時間線 + tier history（並排） */}
       <div
         style={{
           display: 'grid',
-          gridTemplateColumns: '2fr 1fr',
+          gridTemplateColumns: '1fr 1fr',
           gap: '16px',
           marginTop: '16px',
         }}
       >
-        <RecentTradesCard trades={data.recent_trades} />
+        <ProfileTimeline events={timeline} />
         <TierHistoryCard history={data.tier_history} />
+      </div>
+
+      {/* Recent trades — 獨占一行因為資訊量大 */}
+      <div style={{ marginTop: '16px' }}>
+        <RecentTradesCard trades={data.recent_trades} />
       </div>
     </main>
   );
