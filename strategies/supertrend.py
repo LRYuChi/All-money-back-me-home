@@ -269,9 +269,18 @@ class SupertrendStrategy(IStrategy):
         dataframe.loc[mask_confirmed_short, "enter_tag"] = "confirmed"
 
         # === Phase 1 (scout): 3-layer aligned + quality, 15m NOT yet flipped ===
-        # Scout fires whenever conditions are met (Freqtrade handles dedup via open trades)
-        three_bull = dataframe["all_bullish"] & (dataframe["st_trend"] == -1)
-        three_bear = dataframe["all_bearish"] & (dataframe["st_trend"] == 1)
+        # P0-3 (2026-04-23): Edge-trigger only — scout fires on the candle the
+        # 3-layer alignment first forms, NOT every candle while it remains.
+        # Reverts behaviour from commit 4ae76e4. Backtest evidence (200d):
+        #   continuous trigger → 673 trades, -7.62%
+        #   edge trigger only  → 129 trades, +28.80%
+        # The strategy's edge depends on letting confirmed/daily_reversal exits
+        # develop; over-firing scout dilutes those into noise.
+        bull_just_formed = dataframe["all_bullish"] & (~dataframe["all_bullish"].shift(1).fillna(False))
+        bear_just_formed = dataframe["all_bearish"] & (~dataframe["all_bearish"].shift(1).fillna(False))
+
+        three_bull = bull_just_formed & (dataframe["st_trend"] == -1)
+        three_bear = bear_just_formed & (dataframe["st_trend"] == 1)
 
         mask_scout_long = three_bull & quality & dataframe["fr_ok_long"] & ~mask_confirmed_long
         dataframe.loc[mask_scout_long, "enter_long"] = 1
@@ -391,11 +400,55 @@ class SupertrendStrategy(IStrategy):
         full_kelly = max(0, wr - (1 - wr) / wl)
         return full_kelly * self._KELLY_FRAC
 
+    # P0-4: account-level circuit breaker — pause new entries after 3 consecutive losses
+    _CB_LOSS_STREAK = 3
+    _CB_COOLDOWN_HOURS = 12
+
+    def _circuit_breaker_active(self, current_time: datetime) -> bool:
+        """Return True if last N closed trades were all losses within cooldown window.
+
+        Live observation 2026-04-23: 12 consecutive losses went undetected.
+        This breaker forces a 12h pause after 3 losses in a row, giving the
+        operator a chance to investigate or for market regime to shift.
+        """
+        try:
+            recent = sorted(
+                Trade.get_trades_proxy(is_open=False),
+                key=lambda x: x.close_date or current_time,
+                reverse=True,
+            )[: self._CB_LOSS_STREAK]
+        except Exception:
+            return False
+        if len(recent) < self._CB_LOSS_STREAK:
+            return False
+        if not all(t.close_profit is not None and t.close_profit < 0 for t in recent):
+            return False
+        last_close = max((t.close_date for t in recent if t.close_date), default=None)
+        if last_close is None:
+            return False
+        # Freqtrade trade close_date is naive UTC; current_time may be tz-aware
+        if last_close.tzinfo is None and current_time.tzinfo is not None:
+            from datetime import timezone as _tz
+            last_close = last_close.replace(tzinfo=_tz.utc)
+        elapsed = (current_time - last_close).total_seconds()
+        return elapsed < self._CB_COOLDOWN_HOURS * 3600
+
     def custom_stake_amount(self, current_time: datetime, current_rate: float,
                             proposed_stake: float, min_stake: float | None,
                             max_stake: float, leverage: float,
                             entry_tag: str | None, side: str, **kwargs) -> float:
-        """Rolling Kelly × trend quality. Scout = 25%, Confirmed = 75%."""
+        """Rolling Kelly × trend quality. Scout = 25%, Confirmed = 75%.
+
+        P0-4: bail out early if account-level circuit breaker is tripped.
+        Returning 0 causes Freqtrade to skip this entry attempt.
+        """
+        if self._circuit_breaker_active(current_time):
+            logger.warning(
+                "Circuit breaker active — last %d closed trades all losses within %dh cooldown. "
+                "Skipping new entry.", self._CB_LOSS_STREAK, self._CB_COOLDOWN_HOURS,
+            )
+            return 0.0
+
         target_pct = self._calc_rolling_kelly()
         target_pct = max(0.03, min(target_pct, 0.20))
 

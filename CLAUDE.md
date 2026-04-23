@@ -20,8 +20,8 @@ ruff check . --fix                    # Auto-fix lint issues
 
 ### Freqtrade
 ```bash
-freqtrade backtesting --strategy SMCTrend -c config/freqtrade/config_dry.json
-freqtrade trade --strategy SMCTrend -c config/freqtrade/config_dry.json   # Dry run
+freqtrade backtesting --strategy SupertrendStrategy -c config/freqtrade/config_dry.json
+freqtrade trade --strategy SupertrendStrategy -c config/freqtrade/config_dry.json   # Dry run
 freqtrade test-pairlist -c config/freqtrade/config_dry.json               # Verify exchange connection
 ```
 
@@ -67,7 +67,7 @@ OKX Exchange ←→ Freqtrade (CCXT) ←→ Strategies ←→ Guard Pipeline →
 
 ### Key Subsystems
 
-- **strategies/**: Freqtrade strategy classes. `SMCTrend` is the sole active strategy, inherits `StrategyMixin` from `base_mixin.py` for shared risk params and logging. Hyperopt params in `smc_trend.json`.
+- **strategies/**: Freqtrade strategy classes. **`SupertrendStrategy` (in `supertrend.py`) is the sole active strategy** — runs in production via `--strategy SupertrendStrategy` in the freqtrade container. Earlier `SMCTrend` (2501 lines) was archived to `archive/strategies/` after 2026-04-23 backtest showed -10.71% / 3.3% win rate vs Supertrend +28.80% on the same 200-day data. See `docs/reports/strategy_comparison_2026Q2.md`.
 
 - **guards/**: Declarative risk control pipeline. `guards/base.py` defines `GuardPipeline` + `Guard` base class. `guards/guards.py` has concrete guards. `guards/pipeline.py` has `create_default_pipeline()` factory. Every order must pass all guards.
 
