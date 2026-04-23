@@ -63,13 +63,14 @@ class TestScanWallet:
         assert profile.features["core_stats"].confidence == "ok"
 
     def test_features_only_includes_enabled(self):
-        # 1.5b.0 啟用 core_stats + category_specialization + time_slice_consistency
+        # 1.5b.1 啟用 core_stats + category_specialization + time_slice_consistency + steady_growth
         trades = [_trade(f"0x{i}", i) for i in range(10)]
         profile = scan_wallet("0xw", trades, [_resolved(100)], now=NOW)
         assert set(profile.features.keys()) == {
             "core_stats",
             "category_specialization",
             "time_slice_consistency",
+            "steady_growth",
         }
 
     def test_archetypes_empty_until_15c(self):

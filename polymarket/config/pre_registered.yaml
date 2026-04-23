@@ -27,10 +27,10 @@ meta:
 # -----------------------------------------------------------------------------
 scanner:
   version:
-    value: "1.5b.0"
-    set_at: "2026-04-22"
-    rationale: "Phase 1.5b — adds category_specialization + time_slice_consistency features; enables specialist tagging"
-    next_review: "2026-07-22"
+    value: "1.5b.1"
+    set_at: "2026-04-23"
+    rationale: "Phase 1.5b.1 — adds steady_growth feature (equity curve smoothness for strategy-executor archetype)"
+    next_review: "2026-07-23"
 
   # § 0.1 第一階段：Discovery — 候選錢包池
   discovery:
@@ -84,13 +84,20 @@ scanner:
         - "core_stats"
         - "category_specialization"
         - "time_slice_consistency"
-        - "brier_calibration"        # Brier + 機率校準
+        - "steady_growth"            # 資產曲線平滑度（策略執行者識別）
       "1.5b.2":
         - "core_stats"
         - "category_specialization"
         - "time_slice_consistency"
+        - "steady_growth"
+        - "brier_calibration"        # Brier + 機率校準（原 1.5b.1，插入 steady_growth 後順延）
+      "1.5b.3":
+        - "core_stats"
+        - "category_specialization"
+        - "time_slice_consistency"
+        - "steady_growth"
         - "brier_calibration"
-        - "position_confidence"      # 倉位-信心一致性
+        - "position_confidence"      # 倉位-信心一致性（原 1.5b.2，順延）
 
     # § 0.3.1 各 feature 的閾值——用於 archetype 判定 (1.5c) 與 specialist tag
     thresholds:
@@ -137,6 +144,46 @@ scanner:
           set_at: "2026-04-22"
           rationale: "段間勝率標準差 ≤ 0.15 視為穩定。0.15 = 段勝率波動約 ±15%；超出可能是少數爆發撐場"
           next_review: "2026-07-22"
+
+      # steady_growth (1.5b.1)：資產曲線平滑度
+      # 目標：辨識「階梯式穩定向上」的策略執行者型錢包
+      # 計算基礎：Position.cash_pnl + end_date 重建已實現 PnL 曲線（90 天窗口）
+      steady_growth:
+        min_resolved_positions:
+          value: 20
+          set_at: "2026-04-23"
+          rationale: "equity curve 重建至少需 20 個 resolved 倉位；低於此數 R² / drawdown 統計不穩"
+          next_review: "2026-07-23"
+        min_smoothness_score:
+          value: 0.70
+          set_at: "2026-04-23"
+          rationale: "綜合 R² + gain/pain + new-high-freq 的組合指標下限；0.70 過濾約七成曲線"
+          next_review: "2026-07-23"
+        max_drawdown_ratio:
+          value: 0.15
+          set_at: "2026-04-23"
+          rationale: "最大回撤 ≤ 15% 對「穩健」的通俗定義；真正 smooth 曲線通常 < 10%"
+          next_review: "2026-07-23"
+        max_longest_losing_streak:
+          value: 5
+          set_at: "2026-04-23"
+          rationale: "連敗 5 場以上已是明顯策略失靈，排除崩壞型"
+          next_review: "2026-07-23"
+        require_all_segments_positive:
+          value: true
+          set_at: "2026-04-23"
+          rationale: "三段 30d PnL 皆為正，排除「單期爆贏平均其餘」的假穩健"
+          next_review: "2026-07-23"
+        gain_to_pain_cap:
+          value: 3.0
+          set_at: "2026-04-23"
+          rationale: "gain/pain 超過 3.0 視為頂標；避免少數極端樣本主宰平滑度分數"
+          next_review: "2026-07-23"
+        smoothness_weights:
+          # 三個組件的權重，總和自動 normalize；調整時需保持邏輯一致性
+          r_squared: 0.40            # 線性回歸擬合度 — 曲線是否呈單調趨勢
+          gain_to_pain: 0.30         # 獲利/回撤比 — 上漲是否比下跌更顯著
+          new_high_frequency: 0.30   # 創新高頻率 — 曲線是否持續突破前高
 
 # -----------------------------------------------------------------------------
 # § 1. 白名單門檻 — 鯨魚分層（A/B/C：量的閘門，不代表跟單優先序）

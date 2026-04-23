@@ -9,6 +9,7 @@ from __future__ import annotations
 from polymarket.scanner.features.base import BaseFeature, ScanContext
 from polymarket.scanner.features.category_specialization import CategorySpecializationFeature
 from polymarket.scanner.features.core import CoreStatsFeature
+from polymarket.scanner.features.steady_growth import SteadyGrowthFeature
 from polymarket.scanner.features.time_slice_consistency import TimeSliceConsistencyFeature
 
 # 註冊表：feature name → BaseFeature 實例
@@ -18,6 +19,7 @@ REGISTRY: dict[str, BaseFeature] = {
     CoreStatsFeature.name: CoreStatsFeature(),
     CategorySpecializationFeature.name: CategorySpecializationFeature(),
     TimeSliceConsistencyFeature.name: TimeSliceConsistencyFeature(),
+    SteadyGrowthFeature.name: SteadyGrowthFeature(),
 }
 
 
