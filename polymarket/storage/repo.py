@@ -400,6 +400,55 @@ class SqliteRepo:
             row = conn.execute("SELECT COUNT(*) AS c FROM whale_trade_alerts").fetchone()
         return int(row["c"])
 
+    def mark_alert_sent(
+        self, wallet_address: str, tx_hash: str, event_index: int
+    ) -> bool:
+        """標記某筆 alert 為已成功推播。回傳 True=有更新，False=找不到.
+
+        Pipeline 在 Telegram 送成功後呼叫；送失敗時不呼叫（留 0 供下次重試）.
+        """
+        conn = self._connect()
+        cur = conn.execute(
+            """
+            UPDATE whale_trade_alerts SET telegram_sent = 1
+            WHERE wallet_address=? AND tx_hash=? AND event_index=?
+            """,
+            (wallet_address, tx_hash, event_index),
+        )
+        conn.commit()
+        return cur.rowcount > 0
+
+    def get_unsent_alerts(
+        self, *, hours: int = 24, limit: int = 100
+    ) -> list[dict[str, Any]]:
+        """取回 telegram_sent=0 且落在過去 N 小時內的 alerts，供 pipeline 重試.
+
+        僅回傳 N 小時內的 alert；更久的不重試（避免推播過期資訊）。
+        結果含市場 category（JOIN markets）便於重新格式化訊息。
+
+        注意：alerted_at 以 Python isoformat（含 T 與 +00:00）存入，
+        SQLite 內建 `datetime()` 使用空格分隔，直接比較會因格式差異失效。
+        改用 `strftime('%Y-%m-%dT%H:%M:%S', ...)` 產生匹配前綴。
+        """
+        conn = self._connect()
+        rows = conn.execute(
+            """
+            SELECT
+                a.wallet_address, a.tx_hash, a.event_index, a.tier, a.condition_id,
+                a.market_question, a.side, a.outcome, a.size, a.price, a.notional,
+                a.match_time, a.alerted_at,
+                m.category AS market_category
+            FROM whale_trade_alerts a
+            LEFT JOIN markets m ON m.condition_id = a.condition_id
+            WHERE a.telegram_sent = 0
+              AND a.alerted_at >= strftime('%Y-%m-%dT%H:%M:%S', 'now', ?)
+            ORDER BY a.alerted_at ASC
+            LIMIT ?
+            """,
+            (f"-{hours} hours", limit),
+        ).fetchall()
+        return [dict(r) for r in rows]
+
 
     # === wallet_profiles (Phase 1.5+, append-only time-series) ===
 

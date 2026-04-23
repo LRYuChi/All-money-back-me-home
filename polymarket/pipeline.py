@@ -62,6 +62,8 @@ class RunStats:
     profiles_written: int = 0  # Phase 1.5+: append-only count
     tier_changes: int = 0
     alerts_sent: int = 0
+    alerts_retried: int = 0  # E.1: Telegram 重試成功數
+    alerts_retry_failed: int = 0  # E.1: Telegram 重試仍失敗數（下次再試）
     alerts_skipped_dup: int = 0
     errors: list[str] = field(default_factory=list)
 
@@ -70,8 +72,9 @@ class RunStats:
             f"markets={self.markets_scanned} trades={self.trades_ingested} "
             f"wallets={self.unique_wallets_seen} recomputed={self.wallets_recomputed} "
             f"profiles={self.profiles_written} tier_changes={self.tier_changes} "
-            f"alerts_sent={self.alerts_sent} alerts_dup={self.alerts_skipped_dup} "
-            f"errors={len(self.errors)}"
+            f"alerts_sent={self.alerts_sent} alerts_retried={self.alerts_retried} "
+            f"alerts_retry_failed={self.alerts_retry_failed} "
+            f"alerts_dup={self.alerts_skipped_dup} errors={len(self.errors)}"
         )
 
 
@@ -294,7 +297,42 @@ def run_once(
                     dry_run=dry_run,
                 )
                 if ok:
+                    # E.1: 標記成功推播，避免下次重試
+                    repo.mark_alert_sent(wallet, alert["tx_hash"], alert["event_index"])
                     stats.alerts_sent += 1
+
+        # --- Step 5b: E.1 retry backlog — 重送 telegram_sent=0 且 <24h 的 alerts ---
+        # 這些通常是上一輪 Telegram 失敗（429 限流 / 網路問題）留下的。
+        # 本輪結束前再試一次；仍失敗則留待下次。超過 24h 不重試（避免推過期訊息）.
+        if not dry_run:
+            unsent = repo.get_unsent_alerts(hours=ALERT_TIME_WINDOW_HOURS, limit=100)
+            for u in unsent:
+                w = u["wallet_address"]
+                # 跳過剛在本輪 Step 5 已嘗試發送的 alert（alerted_at 在過去 60 秒內）
+                alerted_dt = _parse_iso(u["alerted_at"])
+                if alerted_dt and (now - alerted_dt).total_seconds() < 60:
+                    continue
+
+                wallet_stats = repo.get_whale_stats(w) or {}
+                ok_retry, _ = send_whale_alert(
+                    tier=u["tier"],
+                    wallet_address=w,
+                    market_question=u["market_question"] or "(未知市場)",
+                    market_category=u.get("market_category") or "",
+                    side=u["side"],
+                    outcome=u["outcome"] or "",
+                    price=u["price"],
+                    size=u["size"],
+                    notional=u["notional"],
+                    match_time=_parse_iso(u["match_time"]),
+                    wallet_stats=wallet_stats,
+                    dry_run=False,
+                )
+                if ok_retry:
+                    repo.mark_alert_sent(w, u["tx_hash"], int(u["event_index"]))
+                    stats.alerts_retried += 1
+                else:
+                    stats.alerts_retry_failed += 1
 
         # --- Step 6: 結算 paper trades (resolve when market closed) ---
         try:
