@@ -6,6 +6,20 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 Crypto futures auto-trading system (OKX via Freqtrade) with multi-market indicator monitoring (TW/US stocks, macro). Includes a Next.js dashboard, FastAPI backend, MCP server for AI-assisted analysis, and a confidence engine that aggregates macro/sentiment/capital/haven signals into a 0-1 score driving position sizing.
 
+### ⚠️ Active Migration — Smart Money 跟單系統
+
+**Status**: Phase 0 in progress on branch `feat/smart-money-v1` (started 2026-04-19).
+
+Pivoting from TA strategies (SMCTrend / Supertrend / ML prediction) to **Hyperliquid 鯨魚錢包掃描 → 排名 → OKX 跟單** architecture. See [`docs/SMART_MONEY_MIGRATION.md`](docs/SMART_MONEY_MIGRATION.md) for the full 7-phase plan.
+
+**Deprecated (kept running on main until Phase 5 cutover — do not build new features on these)**:
+- `strategies/smc_trend.py`, `smc_scalp.py`, `supertrend.py`, `supertrend_scout.py`, `bb_squeeze.py`, `volty_expan.py`, `meta_strategy.py`, `base_mixin.py`
+- `market_monitor/ml/`, `market_monitor/signals/`, `market_monitor/confidence_engine.py`
+- `market_monitor/tw_advisor.py`, `tw_predictor.py`
+- Freqtrade container (entire execution layer)
+
+**New module** (`smart_money/`): Phase 0 skeleton in place — `scanner/`, `ranking/`, `backtest/`, `shadow/`, `execution/`, `store/`, `cli/`. CLI stubs respond to `--help`; full implementation rolls out from Phase 1. Central config: `smart_money/config.py` (env prefix `SM_`).
+
 ## Commands
 
 ### Python (trading engine, strategies, guards, market monitor)
