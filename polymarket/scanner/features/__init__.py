@@ -10,6 +10,7 @@ from polymarket.scanner.features.base import BaseFeature, ScanContext
 from polymarket.scanner.features.brier_calibration import BrierCalibrationFeature
 from polymarket.scanner.features.category_specialization import CategorySpecializationFeature
 from polymarket.scanner.features.core import CoreStatsFeature
+from polymarket.scanner.features.position_confidence import PositionConfidenceFeature
 from polymarket.scanner.features.steady_growth import SteadyGrowthFeature
 from polymarket.scanner.features.time_slice_consistency import TimeSliceConsistencyFeature
 
@@ -22,6 +23,7 @@ REGISTRY: dict[str, BaseFeature] = {
     TimeSliceConsistencyFeature.name: TimeSliceConsistencyFeature(),
     SteadyGrowthFeature.name: SteadyGrowthFeature(),
     BrierCalibrationFeature.name: BrierCalibrationFeature(),
+    PositionConfidenceFeature.name: PositionConfidenceFeature(),
 }
 
 

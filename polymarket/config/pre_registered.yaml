@@ -27,9 +27,9 @@ meta:
 # -----------------------------------------------------------------------------
 scanner:
   version:
-    value: "1.5c.2"
+    value: "1.5c.3"
     set_at: "2026-04-23"
-    rationale: "Phase 1.5c.2 — risk_flags enabled (concentration_high / loss_loading / wash_trade_suspicion)"
+    rationale: "Phase 1.5c.3 — position_confidence feature (winner/loser notional ratio, sizing discipline)"
     next_review: "2026-07-23"
 
   # § 0.1 第一階段：Discovery — 候選錢包池
@@ -105,6 +105,14 @@ scanner:
         - "time_slice_consistency"
         - "steady_growth"
         - "brier_calibration"
+      # 1.5c.3 新增 position_confidence feature（倉位大小 vs 勝率耦合）
+      "1.5c.3":
+        - "core_stats"
+        - "category_specialization"
+        - "time_slice_consistency"
+        - "steady_growth"
+        - "brier_calibration"
+        - "position_confidence"
       "1.5b.2":
         - "core_stats"
         - "category_specialization"
@@ -239,6 +247,30 @@ scanner:
             set_at: "2026-04-23"
             rationale: "seg_0 虧損時，若前兩段皆正（前期穩定） → 最近 30d 在失效中"
             next_review: "2026-07-23"
+
+      # position_confidence (1.5c.3)：倉位大小 vs 勝率的耦合分析
+      # 衡量「下大注是否押在贏的倉位」— proxy for sizing discipline / conviction sizing.
+      position_confidence:
+        min_resolved_positions:
+          value: 30
+          set_at: "2026-04-23"
+          rationale: "Winner/loser 平均值對比需要足夠樣本；少於 30 筆 ratio 震盪大"
+          next_review: "2026-07-23"
+        min_winners:
+          value: 10
+          set_at: "2026-04-23"
+          rationale: "winner_avg 的穩定需 ≥ 10 個樣本（排除極端值主導）"
+          next_review: "2026-07-23"
+        min_losers:
+          value: 10
+          set_at: "2026-04-23"
+          rationale: "loser_avg 的穩定需 ≥ 10 個樣本；對稱於 min_winners"
+          next_review: "2026-07-23"
+        size_ratio_threshold:
+          value: 1.2
+          set_at: "2026-04-23"
+          rationale: "winners/losers notional 比 ≥ 1.2 視為 conviction sized；< 0.83 (=1/1.2) 反向視為 martingale 疑似"
+          next_review: "2026-07-23"
 
       # brier_calibration (1.5c.1)：機率校準與 alpha 量化
       # 與 §2 strategy_promotion.brier_score 的門檻語義相反 — 此處測市場對錢包下注位置

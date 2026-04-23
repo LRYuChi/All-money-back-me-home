@@ -225,10 +225,16 @@ class TestMultipleFlags:
 
 
 class TestScanIntegration:
-    def test_scanner_version_bumped(self):
+    def test_scanner_version_current(self):
         from polymarket.scanner import SCANNER_VERSION
 
-        assert SCANNER_VERSION == "1.5c.2"
+        # Risk flags 從 1.5c.2 啟用；之後版本（1.5c.3+）仍應保有
+        from polymarket.config import load_pre_registered
+
+        pre_reg = load_pre_registered()
+        # classify.detect_risk_flags 不依版本開關，所以只要 scanner 還存在即可
+        assert "enabled_in_version" in pre_reg["scanner"]["features"]
+        assert SCANNER_VERSION in pre_reg["scanner"]["features"]["enabled_in_version"]
 
     def test_scan_wallet_populates_risk_flags(self):
         from datetime import datetime, timedelta, timezone
