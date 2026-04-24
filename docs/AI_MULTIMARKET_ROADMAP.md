@@ -33,7 +33,7 @@
 | Phase | 狀態 | 當前 sub-task | 備註 |
 |---|---|---|---|
 | **A. SM P4/P5 收斂** | 🟡 | P4a-c ✅；**Notifier 抽象 ✅ (QD P0-3)**；P4 Gate 🔁 等 14d shadow；P5a-c ⬜ | migration 015 ⏸ 手動 |
-| **B. 基礎設施** | 🟡 | UniversalSignal ✅；signal_history migration ✅；SM adapter ✅；dual-write ✅；persistence helper ✅；Notifier 抽象 ✅；Reflection validator core ✅；**Supabase/PG IO + CLI ✅**；HL price fetcher / Redis / Snapshot / Credential ⬜ | 103 新 tests 全綠 |
+| **B. 基礎設施** | 🟡 | UniversalSignal ✅；signal_history migration ✅；SM adapter ✅；dual-write ✅；persistence helper ✅；Notifier 抽象 ✅；Reflection validator core ✅；Supabase/PG IO + CLI ✅；**Strategy Snapshot 表 + writer + SM CLI 接入 ✅**；HL price fetcher / Redis / Credential ⬜ | 119 新 tests 全綠 |
 | **C. Kronos 整合** | ⬜ | — | 需 R1 拍板 |
 | **D. AI + 融合** | ⬜ | — | 需 R2 拍板 |
 | **E. 策略 DSL** | ⬜ | — | 需 R5 拍板 |
@@ -56,7 +56,8 @@
 | 2026-04-25 01:37 UTC | #3 | QD P0-3 — Notifier 抽象 (Telegram + MultiChannel + factory + 15 tests) | ✅ 完成 |
 | 2026-04-25 02:07 UTC | #4 | Phase B — Reflection validator core (verdict 矩陣 + InMemoryPriceFetcher + 32 tests) | ✅ 完成 |
 | 2026-04-25 02:37 UTC | #5 | Phase B — Supabase/Postgres reader+updater + CLI (cron-ready) + 11 tests | ✅ 完成 |
-| — | — | **下輪待辦**：Strategy Snapshot 表 (QD P1-4) OR Credential 加密 OR Redis | ⬜ |
+| 2026-04-25 03:07 UTC | #6 | QD P1-4 — Strategy Snapshot (migration 017 + writer × 4 + git provenance + SM backtest CLI 接入 + 16 tests) | ✅ 完成 |
+| — | — | **下輪待辦**：Credential 加密 (QD P2-8) OR Redis compose OR HL PriceFetcher (Phase C) | ⬜ |
 
 ---
 
