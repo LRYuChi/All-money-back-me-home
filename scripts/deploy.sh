@@ -44,6 +44,13 @@ fi
 echo "[4/5] Applying changes (reconcile, only recreate what changed)..."
 docker compose -f docker-compose.prod.yml up -d --build --remove-orphans
 
+# After web/api get recreated their IPs change; nginx's upstream DNS cache
+# becomes stale → 502 until next resolve. Force nginx to refresh by reloading
+# (cheap, sub-second; doesn't restart the whole container).
+echo "  Reloading nginx to refresh upstream DNS..."
+docker compose -f docker-compose.prod.yml exec -T nginx nginx -s reload 2>/dev/null || \
+    docker compose -f docker-compose.prod.yml restart nginx
+
 # 6. Health check
 echo "[5/5] Waiting for services..."
 sleep 5
