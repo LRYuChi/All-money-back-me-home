@@ -42,11 +42,13 @@ fi
 # full restart wipes its in-memory signal history. We used to `down && up -d`
 # which disturbed freqtrade on every unrelated deploy and cost trades.
 echo "[4/5] Applying changes (reconcile, only recreate what changed)..."
-docker compose -f docker-compose.prod.yml up -d --build --remove-orphans
+# --wait blocks until all services reach their healthy state (or timeout).
+# This guarantees nginx reload below sees the *final* upstream IPs.
+docker compose -f docker-compose.prod.yml up -d --build --remove-orphans --wait --wait-timeout 120
 
 # After web/api get recreated their IPs change; nginx's upstream DNS cache
-# becomes stale → 502 until next resolve. Force nginx to refresh by reloading
-# (cheap, sub-second; doesn't restart the whole container).
+# becomes stale → 502 until next resolve. Force nginx to refresh.
+# `nginx -s reload` is sub-second and keeps the container alive.
 echo "  Reloading nginx to refresh upstream DNS..."
 docker compose -f docker-compose.prod.yml exec -T nginx nginx -s reload 2>/dev/null || \
     docker compose -f docker-compose.prod.yml restart nginx
