@@ -33,8 +33,8 @@
 | Phase | 狀態 | 當前 sub-task | 備註 |
 |---|---|---|---|
 | **A. SM P4/P5 收斂** | 🟡 | P4a-c ✅；**Notifier 抽象 ✅ (QD P0-3)**；P4 Gate 🔁 等 14d shadow；P5a-c ⬜ | migration 015 ⏸ 手動 |
-| **B. 基礎設施** | 🟡 | UniversalSignal ✅；signal_history migration ✅；SM adapter ✅；dual-write ✅；persistence helper ✅；Notifier 抽象 ✅；Reflection validator core ✅；Supabase/PG IO + CLI ✅；Strategy Snapshot ✅；**Credential 加密 ✅**；HL price fetcher / Redis ⬜ | 144 新 tests 全綠 |
-| **C. Kronos 整合** | ⬜ | — | 需 R1 拍板 |
+| **B. 基礎設施** | ✅ (基本完成) | UniversalSignal ✅；signal_history migration ✅；SM adapter ✅；dual-write ✅；persistence helper ✅；Notifier 抽象 ✅；Reflection validator core ✅；Supabase/PG IO + CLI ✅；Strategy Snapshot ✅；Credential 加密 ✅；Redis ⬜（暫緩，動 prod 部署） | 144 新 tests 全綠 |
+| **C. Kronos 整合** | 🟡 | **HL PriceFetcher ✅（reflection 真能用）**；Kronos predictor / signal converter / dashboard ⬜ | 需 R1 拍板才能進 Kronos 預測 |
 | **D. AI + 融合** | ⬜ | — | 需 R2 拍板 |
 | **E. 策略 DSL** | ⬜ | — | 需 R5 拍板 |
 | **F. 跨市場** | ⬜ | — | 需 R3/R4 拍板 |
@@ -58,7 +58,8 @@
 | 2026-04-25 02:37 UTC | #5 | Phase B — Supabase/Postgres reader+updater + CLI (cron-ready) + 11 tests | ✅ 完成 |
 | 2026-04-25 03:07 UTC | #6 | QD P1-4 — Strategy Snapshot (migration 017 + writer × 4 + git provenance + SM backtest CLI 接入 + 16 tests) | ✅ 完成 |
 | 2026-04-25 03:37 UTC | #7 | QD P2-8 — Credential 加密 (Fernet + 4 stores + key rotation grace + migration 018 + gen_key CLI + 25 tests) | ✅ 完成 |
-| — | — | **下輪待辦**：Redis compose（會動 prod 部署）OR HL PriceFetcher (Phase C 起步) OR migrate legacy callers 用 Notifier | ⬜ |
+| 2026-04-25 04:07 UTC | #8 | Phase C 起步 — HLPriceFetcher (HL candles_snapshot + interval picker + cache + symbol parser + 20 tests) + validate CLI 接入 | ✅ 完成 |
+| — | — | **下輪待辦**：Kronos predictor wrapper (需 R1 拍板) OR Strategy DSL 起步 (Phase E) OR audit log hook to credential store | ⬜ |
 
 ---
 

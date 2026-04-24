@@ -21,7 +21,8 @@ import argparse
 import logging
 import sys
 
-from reflection.price import InMemoryPriceFetcher
+from reflection.hl_price import build_hl_fetcher
+from reflection.price import InMemoryPriceFetcher, PriceFetcher
 from reflection.supabase_io import build_reader_updater
 from reflection.validator import (
     DEFAULT_CORRECTNESS_THRESHOLD,
@@ -53,6 +54,12 @@ def build_parser() -> argparse.ArgumentParser:
         "--dry-run", action="store_true",
         help="Run validator with InMemory IO so nothing is written. "
              "Useful as a smoke check before enabling the cron.",
+    )
+    p.add_argument(
+        "--price-source",
+        choices=["hl", "inmemory"],
+        default="hl",
+        help="Price backend (default hl). Use 'inmemory' for offline smoke.",
     )
     p.add_argument(
         "--log-level", default="INFO",
@@ -90,18 +97,22 @@ def main(argv: list[str] | None = None) -> int:
             logger.error("validate: IO setup failed: %s", e)
             return 1
 
-    # Phase B: PriceFetcher is still InMemory placeholder. Phase C will
-    # swap to HLPriceFetcher / OKXPriceFetcher / market_bars.
-    # For now, an empty InMemory fetcher means EVERY validation returns
-    # MISSING_PRICE — that's fine, validator framework runs end-to-end
-    # and proves the IO layer works; verdicts start landing once Phase C
-    # lands a real fetcher.
-    prices = InMemoryPriceFetcher()
-    if not args.dry_run:
-        logger.warning(
-            "validate: PriceFetcher is InMemory placeholder (Phase C work). "
-            "All rows will be MISSING_PRICE until HL/OKX fetcher lands.",
-        )
+    # Price source — defaults to HL (Phase C round 8). Use --price-source
+    # inmemory for offline smoke.
+    prices: PriceFetcher
+    if args.price_source == "inmemory":
+        prices = InMemoryPriceFetcher()
+        if not args.dry_run:
+            logger.warning(
+                "validate: --price-source inmemory → all rows will be "
+                "MISSING_PRICE (no candles preloaded).",
+            )
+    else:
+        try:
+            prices = build_hl_fetcher()
+        except Exception as e:
+            logger.error("validate: HL fetcher init failed: %s", e)
+            return 1
 
     try:
         stats = validate_signals(
