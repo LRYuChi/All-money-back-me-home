@@ -88,3 +88,8 @@ data/audit/
 
 # Docker
 docker-compose.override.yml
+
+# Smart Money per-host manual whitelist override (include/exclude lists).
+# Each deployment may include/exclude specific wallets without touching
+# ranking logic; this file is gitignored so hosts can diverge.
+config/smart_money/whitelist_manual.yaml

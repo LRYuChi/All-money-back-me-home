@@ -171,6 +171,48 @@ services:
         max-size: "10m"
         max-file: "3"
 
+  # ----------------------------------------------------------------
+  # Shadow daemon (P4c): subscribe HL userFills for whitelisted whales,
+  # classify signals, aggregate, write paper trades to sm_paper_trades.
+  # Separate service from one-shot smart-money above so it can be
+  # restarted/scaled independently.
+  # ----------------------------------------------------------------
+  smart-money-shadow:
+    build: ./apps/smart-money
+    command: >
+      python -u -m smart_money.cli.shadow
+      --aggregation-mode ${SM_SHADOW_AGGREGATION_MODE:-aggregated}
+      --aggregation-window-sec ${SM_SHADOW_AGGREGATION_WINDOW_SEC:-300}
+      --min-wallets-for-signal ${SM_SHADOW_MIN_WALLETS:-2}
+      --whitelist-size ${SM_SHADOW_WHITELIST_SIZE:-10}
+      --freshness-days ${SM_SHADOW_FRESHNESS_DAYS:-14}
+      --reconciler-interval 60
+      --reconciler-lookback 300
+      --symbol-map /app/config/smart_money/symbol_map.yaml
+      --whitelist /app/config/smart_money/whitelist_manual.yaml
+      --log-level ${SM_SHADOW_LOG_LEVEL:-INFO}
+    volumes:
+      - ./smart_money:/app/smart_money:ro
+      - ./config/smart_money:/app/config/smart_money:ro
+    environment:
+      - PYTHONUNBUFFERED=1
+      - DATABASE_URL=${SM_DATABASE_URL:-}
+      - SUPABASE_URL=${SUPABASE_URL}
+      - SUPABASE_SERVICE_KEY=${SUPABASE_SERVICE_ROLE_KEY}
+      - SM_HL_API_URL=${HL_API_URL:-https://api.hyperliquid.xyz}
+      # Shadow daemon needs a wide stop timeout so it can flush the queue,
+      # unsubscribe cleanly, and close its WS connection.
+    stop_grace_period: 30s
+    restart: unless-stopped
+    # No HTTP healthcheck yet (daemon has no HTTP surface in P4). The supervisor
+    # loop logs "Bot heartbeat" equivalents; `docker logs` is the ground truth.
+    # P5 will add a signal-health endpoint for proper healthcheck.
+    logging:
+      driver: json-file
+      options:
+        max-size: "20m"
+        max-file: "5"
+
 volumes:
   trade-data:
   ft-data:
