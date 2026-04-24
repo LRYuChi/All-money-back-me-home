@@ -7,10 +7,16 @@ caller's asyncio queue via `run_coroutine_threadsafe`.
 Reconnection strategy
 ---------------------
 The HL SDK does NOT auto-reconnect on disconnect. We supervise the `Info`
-instance externally: if `ws.connected` flips false (or we detect no pongs
-for `heartbeat_timeout_sec`), we tear down and recreate the Info object,
+instance externally via a silence timer: if no userFills messages have
+arrived for `heartbeat_timeout_sec`, we tear down and recreate Info,
 then re-subscribe all addresses. Exponential backoff capped at
 `reconnect_backoff_max_sec`.
+
+**Heartbeat caveat**: userFills is event-driven — idle whales legitimately
+go hours without trading, so the timeout MUST be large. Default 30min.
+Do NOT treat short silences (seconds-minutes) as liveness signals. Future
+improvement (P5): subscribe to `allMids` as a keep-alive or call
+`send_ping()` on the WS to verify the transport.
 
 Snapshot handling
 -----------------
@@ -65,7 +71,7 @@ class HLFillsListener:
         *,
         api_url: str = HL_MAINNET_API_URL,
         reconnect_backoff_max_sec: int = 60,
-        heartbeat_timeout_sec: int = 60,
+        heartbeat_timeout_sec: int = 1800,   # 30 min — whales can genuinely idle
         info_factory: Any = None,  # Callable[[str], Info]; if None, real HL SDK used
         on_dispatch: Any = None,   # Callable[[RawFillEvent], None]; called after each enqueue
     ) -> None:
@@ -217,9 +223,11 @@ class HLFillsListener:
             if silence_sec < self._heartbeat_timeout_sec:
                 continue
 
-            # Stall detected: most wallets should produce *something* (at least
-            # periodic allMids-adjacent noise) in a minute. If userFills channel
-            # has been silent for > heartbeat_timeout_sec, we assume the WS is dead.
+            # Stall: userFills silent for >> heartbeat_timeout_sec. At 30min+
+            # default this is long enough that either the WS is truly dead or
+            # every whitelisted whale has gone idle — the latter is fine
+            # (reconnecting is cheap; the reconciler has been covering us via
+            # REST during any real gap).
             logger.warning(
                 "WS stall detected: %.0fs silence. Reconnecting (backoff=%ds)",
                 silence_sec, backoff_sec,
