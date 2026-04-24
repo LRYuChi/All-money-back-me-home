@@ -901,3 +901,417 @@ def pipeline_history(limit: int = Query(default=20, ge=1, le=200)) -> dict:
     result = {"count": len(rows), "changes": _rows_to_dicts(rows)}
     _cache_set(cache_key, result)
     return result
+
+
+# ─────────────────────────────────────────────────────────────────────
+# Paper Trades — 紙上跟單視圖
+#
+# 資料源：paper_trades 表（由 polymarket.followers.paper_book 寫入）。
+# 對 open 倉位，用 tokens.price 估算 mark-to-market 未實現 PnL。
+# ─────────────────────────────────────────────────────────────────────
+
+PAPER_INITIAL_CAPITAL_USDC = 1000.0  # 同 polymarket.followers.paper_book
+
+
+def _paper_trade_row_to_dict(r: sqlite3.Row, *, current_token_price: float | None = None) -> dict:
+    """paper_trades row → JSON-friendly dict with mark-to-market for open positions."""
+    d = dict(r)
+    # mark-to-market for open positions
+    if d.get("status") == "open" and current_token_price is not None and d.get("entry_price"):
+        mark_value = float(current_token_price) * float(d["entry_size"])
+        cost_basis = float(d["entry_notional"])
+        d["mark_price"] = float(current_token_price)
+        d["mark_value"] = mark_value
+        d["unrealized_pnl"] = mark_value - cost_basis
+        d["unrealized_pnl_pct"] = (
+            (mark_value - cost_basis) / cost_basis if cost_basis else 0.0
+        )
+    else:
+        d["mark_price"] = None
+        d["mark_value"] = None
+        d["unrealized_pnl"] = None
+        d["unrealized_pnl_pct"] = None
+    return d
+
+
+@router.get("/paper-trades")
+def list_paper_trades(
+    status: str = Query(
+        default="all",
+        description="Filter by status: open | closed | all (default all).",
+    ),
+    tier: str | None = Query(
+        default=None,
+        description="Comma-separated source_tier filter (A,B,C,emerging,volatile).",
+    ),
+    follower: str | None = Query(
+        default=None,
+        description="Filter by follower_name (e.g. 'copy_whale').",
+    ),
+    source_wallet: str | None = Query(
+        default=None,
+        description="Filter by source whale wallet address.",
+    ),
+    limit: int = Query(default=100, ge=1, le=500),
+    offset: int = Query(default=0, ge=0),
+    order_by: str = Query(
+        default="entry_time",
+        description="entry_time | exit_time | realized_pnl | unrealized_pnl",
+    ),
+) -> dict:
+    """分頁列出紙上跟單交易.
+
+    open 倉位會即時計算未實現 PnL（以 tokens.price 作 mark-to-market）。
+    """
+    if status not in {"open", "closed", "all"}:
+        raise HTTPException(status_code=400, detail="status must be open|closed|all")
+
+    allowed_orders = {"entry_time", "exit_time", "realized_pnl", "unrealized_pnl"}
+    if order_by not in allowed_orders:
+        raise HTTPException(status_code=400, detail=f"order_by must be one of {sorted(allowed_orders)}")
+
+    tiers = (
+        [t.strip() for t in tier.split(",") if t.strip()]
+        if tier
+        else None
+    )
+
+    cache_key = (
+        f"paper_trades:{status}:{','.join(sorted(tiers)) if tiers else 'all'}:"
+        f"{follower or 'all'}:{source_wallet or 'all'}:{limit}:{offset}:{order_by}"
+    )
+    if cached := _cache_get(cache_key):
+        return cached
+
+    where_clauses: list[str] = []
+    params: list[Any] = []
+    if status != "all":
+        where_clauses.append("pt.status = ?")
+        params.append(status)
+    if tiers:
+        placeholders = ",".join("?" * len(tiers))
+        where_clauses.append(f"pt.source_tier IN ({placeholders})")
+        params.extend(tiers)
+    if follower:
+        where_clauses.append("pt.follower_name = ?")
+        params.append(follower)
+    if source_wallet:
+        where_clauses.append("pt.source_wallet = ?")
+        params.append(source_wallet)
+
+    where_sql = f"WHERE {' AND '.join(where_clauses)}" if where_clauses else ""
+
+    # unrealized_pnl is computed in Python post-fetch, so if order_by=unrealized_pnl
+    # we fall back to entry_time for SQL-level ORDER BY then re-sort after.
+    sql_order = order_by if order_by != "unrealized_pnl" else "entry_time"
+
+    with _connect() as conn:
+        total = conn.execute(
+            f"SELECT COUNT(*) AS c FROM paper_trades pt {where_sql}", params
+        ).fetchone()["c"]
+
+        rows = conn.execute(
+            f"""
+            SELECT pt.*,
+                   t.price AS current_token_price,
+                   m.closed AS market_closed,
+                   m.end_date_iso AS market_end_date,
+                   m.active AS market_active
+            FROM paper_trades pt
+            LEFT JOIN tokens t   ON t.token_id = pt.token_id
+            LEFT JOIN markets m  ON m.condition_id = pt.condition_id
+            {where_sql}
+            ORDER BY pt.{sql_order} DESC
+            LIMIT ? OFFSET ?
+            """,
+            (*params, limit, offset),
+        ).fetchall()
+
+    trades = []
+    for r in rows:
+        price = r["current_token_price"]
+        d = _paper_trade_row_to_dict(r, current_token_price=price)
+        d["market_closed"] = bool(r["market_closed"]) if r["market_closed"] is not None else None
+        d["market_end_date"] = r["market_end_date"]
+        d["market_active"] = bool(r["market_active"]) if r["market_active"] is not None else None
+        trades.append(d)
+
+    # Secondary sort for unrealized_pnl (only applies when status=open)
+    if order_by == "unrealized_pnl":
+        trades.sort(
+            key=lambda t: (t.get("unrealized_pnl") if t.get("unrealized_pnl") is not None else -1e18),
+            reverse=True,
+        )
+
+    result = {
+        "count": len(trades),
+        "total": total,
+        "limit": limit,
+        "offset": offset,
+        "trades": trades,
+    }
+    _cache_set(cache_key, result, ttl=15.0)  # shorter TTL because mark-to-market can move
+    return result
+
+
+@router.get("/paper-trades/stats")
+def paper_trades_stats(
+    follower: str | None = Query(default=None, description="Filter by follower_name"),
+) -> dict:
+    """紙上跟單總覽統計：整體 PnL / 勝率 / 按 tier 拆分 / top 來源鯨魚 / 近況.
+
+    UI 主頁 HighlightCards 的 `Paper Book` 卡片以及 /polymarket/paper-trades
+    頁面的 stats header 都吃這個端點。
+    """
+    cache_key = f"paper_trades_stats:{follower or 'all'}"
+    if cached := _cache_get(cache_key):
+        return cached
+
+    follower_where = "WHERE follower_name = ?" if follower else ""
+    follower_params: tuple = (follower,) if follower else ()
+
+    with _connect() as conn:
+        # 整體
+        row = conn.execute(
+            f"""
+            SELECT COUNT(*) AS n,
+                   SUM(CASE WHEN status='open' THEN 1 ELSE 0 END) AS open_n,
+                   SUM(CASE WHEN status='closed' THEN 1 ELSE 0 END) AS closed_n,
+                   SUM(CASE WHEN status='closed' THEN COALESCE(realized_pnl, 0) ELSE 0 END) AS realized_pnl,
+                   SUM(CASE WHEN status='closed' AND realized_pnl > 0 THEN 1 ELSE 0 END) AS wins,
+                   SUM(CASE WHEN status='closed' THEN entry_notional ELSE 0 END) AS total_closed_stake,
+                   SUM(CASE WHEN status='open' THEN entry_notional ELSE 0 END) AS total_open_stake
+            FROM paper_trades
+            {follower_where}
+            """,
+            follower_params,
+        ).fetchone()
+
+        n = int(row["n"] or 0)
+        open_n = int(row["open_n"] or 0)
+        closed_n = int(row["closed_n"] or 0)
+        wins = int(row["wins"] or 0)
+        realized_pnl = float(row["realized_pnl"] or 0)
+        closed_stake = float(row["total_closed_stake"] or 0)
+        open_stake = float(row["total_open_stake"] or 0)
+
+        # 未實現 PnL（open 倉位 mark-to-market）
+        open_rows = conn.execute(
+            f"""
+            SELECT pt.entry_price, pt.entry_size, pt.entry_notional, t.price
+            FROM paper_trades pt
+            LEFT JOIN tokens t ON t.token_id = pt.token_id
+            WHERE pt.status = 'open' {('AND pt.follower_name = ?' if follower else '')}
+            """,
+            follower_params,
+        ).fetchall()
+        unrealized_pnl = 0.0
+        for r in open_rows:
+            if r["price"] is None:
+                continue
+            unrealized_pnl += (float(r["price"]) - float(r["entry_price"])) * float(r["entry_size"])
+
+        # 按 tier 拆分
+        tier_rows = conn.execute(
+            f"""
+            SELECT COALESCE(source_tier, '(unknown)') AS tier,
+                   COUNT(*) AS n,
+                   SUM(CASE WHEN status='closed' THEN 1 ELSE 0 END) AS closed_n,
+                   SUM(CASE WHEN status='closed' AND realized_pnl > 0 THEN 1 ELSE 0 END) AS wins,
+                   SUM(CASE WHEN status='closed' THEN COALESCE(realized_pnl, 0) ELSE 0 END) AS pnl,
+                   SUM(CASE WHEN status='closed' THEN entry_notional ELSE 0 END) AS stake
+            FROM paper_trades
+            {follower_where}
+            GROUP BY source_tier
+            ORDER BY pnl DESC
+            """,
+            follower_params,
+        ).fetchall()
+        by_tier = [
+            {
+                "tier": r["tier"],
+                "total": int(r["n"] or 0),
+                "closed": int(r["closed_n"] or 0),
+                "wins": int(r["wins"] or 0),
+                "win_rate": (int(r["wins"] or 0) / int(r["closed_n"] or 0)) if r["closed_n"] else 0.0,
+                "realized_pnl": float(r["pnl"] or 0),
+                "realized_pnl_pct": (float(r["pnl"] or 0) / float(r["stake"] or 1))
+                if r["stake"]
+                else 0.0,
+            }
+            for r in tier_rows
+        ]
+
+        # 按 follower 拆分（當未指定 follower 時才有意義）
+        by_follower: list[dict] = []
+        if not follower:
+            fo_rows = conn.execute(
+                """
+                SELECT follower_name,
+                       COUNT(*) AS n,
+                       SUM(CASE WHEN status='open' THEN 1 ELSE 0 END) AS open_n,
+                       SUM(CASE WHEN status='closed' THEN 1 ELSE 0 END) AS closed_n,
+                       SUM(CASE WHEN status='closed' AND realized_pnl > 0 THEN 1 ELSE 0 END) AS wins,
+                       SUM(CASE WHEN status='closed' THEN COALESCE(realized_pnl, 0) ELSE 0 END) AS pnl
+                FROM paper_trades
+                GROUP BY follower_name
+                ORDER BY pnl DESC
+                """
+            ).fetchall()
+            by_follower = [
+                {
+                    "follower_name": r["follower_name"],
+                    "total": int(r["n"] or 0),
+                    "open": int(r["open_n"] or 0),
+                    "closed": int(r["closed_n"] or 0),
+                    "wins": int(r["wins"] or 0),
+                    "win_rate": (int(r["wins"] or 0) / int(r["closed_n"] or 0))
+                    if r["closed_n"]
+                    else 0.0,
+                    "realized_pnl": float(r["pnl"] or 0),
+                }
+                for r in fo_rows
+            ]
+
+        # Top source wallets
+        top_sources = conn.execute(
+            f"""
+            SELECT source_wallet, source_tier,
+                   COUNT(*) AS n,
+                   SUM(CASE WHEN status='closed' THEN 1 ELSE 0 END) AS closed_n,
+                   SUM(CASE WHEN status='closed' AND realized_pnl > 0 THEN 1 ELSE 0 END) AS wins,
+                   SUM(CASE WHEN status='closed' THEN COALESCE(realized_pnl, 0) ELSE 0 END) AS pnl
+            FROM paper_trades
+            {follower_where}
+            GROUP BY source_wallet, source_tier
+            ORDER BY pnl DESC
+            LIMIT 10
+            """,
+            follower_params,
+        ).fetchall()
+        top_source_wallets = [
+            {
+                "source_wallet": r["source_wallet"],
+                "source_tier": r["source_tier"],
+                "trades": int(r["n"] or 0),
+                "closed": int(r["closed_n"] or 0),
+                "wins": int(r["wins"] or 0),
+                "realized_pnl": float(r["pnl"] or 0),
+            }
+            for r in top_sources
+        ]
+
+        # 最近 10 筆 (含 open / closed)
+        recent_rows = conn.execute(
+            f"""
+            SELECT id, follower_name, source_wallet, source_tier, market_question,
+                   side, outcome, entry_price, entry_size, entry_notional,
+                   entry_time, status, realized_pnl, realized_pnl_pct, exit_time, exit_reason
+            FROM paper_trades
+            {follower_where}
+            ORDER BY entry_time DESC
+            LIMIT 10
+            """,
+            follower_params,
+        ).fetchall()
+        recent = _rows_to_dicts(recent_rows)
+
+        # 最近一次 follower 觸發時間（健康度指標）
+        last_fire_row = conn.execute(
+            f"SELECT MAX(entry_time) AS last_fire FROM paper_trades {follower_where}",
+            follower_params,
+        ).fetchone()
+        last_follower_fire_at = last_fire_row["last_fire"] if last_fire_row else None
+
+    total_stake_all = closed_stake + open_stake
+    combined_pnl = realized_pnl + unrealized_pnl
+
+    result = {
+        "initial_capital_usdc": PAPER_INITIAL_CAPITAL_USDC,
+        "summary": {
+            "total": n,
+            "open": open_n,
+            "closed": closed_n,
+            "wins": wins,
+            "losses": closed_n - wins,
+            "win_rate": (wins / closed_n) if closed_n else 0.0,
+            "realized_pnl_usdc": realized_pnl,
+            "realized_pnl_pct": (realized_pnl / closed_stake) if closed_stake else 0.0,
+            "unrealized_pnl_usdc": unrealized_pnl,
+            "combined_pnl_usdc": combined_pnl,
+            "combined_pnl_pct_of_capital": combined_pnl / PAPER_INITIAL_CAPITAL_USDC,
+            "closed_stake_usdc": closed_stake,
+            "open_stake_usdc": open_stake,
+            "total_stake_usdc": total_stake_all,
+            "capital_utilization_pct": open_stake / PAPER_INITIAL_CAPITAL_USDC,
+        },
+        "by_tier": by_tier,
+        "by_follower": by_follower,
+        "top_source_wallets": top_source_wallets,
+        "recent": recent,
+        "last_follower_fire_at": last_follower_fire_at,
+    }
+    _cache_set(cache_key, result, ttl=20.0)
+    return result
+
+
+@router.get("/paper-trades/{trade_id}")
+def get_paper_trade(trade_id: int) -> dict:
+    """單筆紙上單細節：含關聯市場快照、關聯 alert、關聯 follower_decision."""
+    cache_key = f"paper_trade:{trade_id}"
+    if cached := _cache_get(cache_key):
+        return cached
+
+    with _connect() as conn:
+        pt_row = conn.execute(
+            """
+            SELECT pt.*,
+                   t.price AS current_token_price,
+                   t.winner AS token_winner,
+                   m.closed AS market_closed,
+                   m.active AS market_active,
+                   m.end_date_iso AS market_end_date,
+                   m.market_slug AS market_slug
+            FROM paper_trades pt
+            LEFT JOIN tokens t   ON t.token_id = pt.token_id
+            LEFT JOIN markets m  ON m.condition_id = pt.condition_id
+            WHERE pt.id = ?
+            """,
+            (trade_id,),
+        ).fetchone()
+
+        if pt_row is None:
+            raise HTTPException(status_code=404, detail=f"paper_trade {trade_id} not found")
+
+        trade = _paper_trade_row_to_dict(pt_row, current_token_price=pt_row["current_token_price"])
+        trade["market_closed"] = (
+            bool(pt_row["market_closed"]) if pt_row["market_closed"] is not None else None
+        )
+        trade["market_active"] = (
+            bool(pt_row["market_active"]) if pt_row["market_active"] is not None else None
+        )
+        trade["market_end_date"] = pt_row["market_end_date"]
+        trade["market_slug"] = pt_row["market_slug"]
+        trade["token_winner"] = (
+            bool(pt_row["token_winner"]) if pt_row["token_winner"] is not None else None
+        )
+
+        # 關聯 follower_decision
+        decision_row = conn.execute(
+            "SELECT * FROM follower_decisions WHERE paper_trade_id = ? ORDER BY id DESC LIMIT 1",
+            (trade_id,),
+        ).fetchone()
+
+        # 關聯來源鯨魚的 whale_stats
+        whale_row = conn.execute(
+            "SELECT * FROM whale_stats WHERE wallet_address = ?",
+            (trade["source_wallet"],),
+        ).fetchone()
+
+    result = {
+        "trade": trade,
+        "decision": dict(decision_row) if decision_row else None,
+        "source_whale": dict(whale_row) if whale_row else None,
+    }
+    _cache_set(cache_key, result, ttl=15.0)
+    return result

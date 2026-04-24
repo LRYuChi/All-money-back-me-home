@@ -15,6 +15,10 @@ import {
   type EmergingWhale,
   type SteadyGrower,
 } from '@/components/polymarket/HighlightCards';
+import {
+  PaperBookCard,
+  type PaperBookSummary,
+} from '@/components/polymarket/PaperBookCard';
 
 interface StatusPayload {
   last_run_start: string | null;
@@ -91,6 +95,7 @@ interface PageData {
   movers: { count: number; window_hours: number; movers: TierMover[] } | null;
   emerging: { count: number; whales: EmergingWhale[] } | null;
   growers: { count: number; growers: SteadyGrower[] } | null;
+  paperBook: PaperBookSummary | null;
 }
 
 const REFRESH_INTERVAL_MS = 30_000;
@@ -103,7 +108,7 @@ export default function PolymarketPage() {
 
   const fetchAll = useCallback(async () => {
     try {
-      const [status, overview, whales, alerts, markets, movers, emerging, growers] =
+      const [status, overview, whales, alerts, markets, movers, emerging, growers, paperBook] =
         await Promise.all([
           apiClient.get<StatusPayload>('/api/polymarket/status'),
           apiClient.get<OverviewPayload>('/api/polymarket/overview').catch(() => null),
@@ -140,8 +145,11 @@ export default function PolymarketPage() {
               params: { limit: '10' },
             })
             .catch(() => ({ count: 0, growers: [] })),
+          apiClient
+            .get<PaperBookSummary>('/api/polymarket/paper-trades/stats')
+            .catch(() => null),
         ]);
-      setData({ status, overview, whales, alerts, markets, movers, emerging, growers });
+      setData({ status, overview, whales, alerts, markets, movers, emerging, growers, paperBook });
       setLastUpdate(new Date());
       setError(null);
     } catch (e: unknown) {
@@ -182,6 +190,7 @@ export default function PolymarketPage() {
               growers={data.growers?.growers ?? []}
               windowHours={data.movers?.window_hours ?? 24}
             />
+            <PaperBookCard data={data.paperBook} />
             <WhaleDirectoryTable whales={data.whales?.whales ?? []} />
             <AlertFeed
               alerts={data.alerts?.alerts ?? []}
