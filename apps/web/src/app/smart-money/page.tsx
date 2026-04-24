@@ -33,25 +33,41 @@ interface LeaderboardPayload {
   rankings?: Ranking[];
 }
 
+interface SignalHealthPayload {
+  configured: boolean;
+  reason?: string;
+  checked_at?: string;
+  health?: 'green' | 'yellow' | 'red';
+  health_reason?: string | null;
+  last_activity_at?: string | null;
+  density?: Record<string, { paper_open: number; paper_closed: number; skipped: number }>;
+  latency_24h?: { n: number; p50_ms: number | null; p95_ms: number | null; p99_ms: number | null };
+  skipped_by_reason_24h?: Record<string, number>;
+  positions?: { long: number; short: number; flat: number; distinct_wallets: number };
+}
+
 const REFRESH_MS = 60_000;
 
 export default function SmartMoneyPage() {
   const [status, setStatus] = useState<StatusPayload | null>(null);
   const [leaderboard, setLeaderboard] = useState<LeaderboardPayload | null>(null);
+  const [signalHealth, setSignalHealth] = useState<SignalHealthPayload | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [lastUpdate, setLastUpdate] = useState<Date | null>(null);
 
   const fetchAll = useCallback(async () => {
     try {
-      const [s, lb] = await Promise.all([
+      const [s, lb, sh] = await Promise.all([
         apiClient.get<StatusPayload>('/api/smart-money/status').catch(() => null),
         apiClient
           .get<LeaderboardPayload>('/api/smart-money/leaderboard', { params: { limit: '50' } })
           .catch(() => null),
+        apiClient.get<SignalHealthPayload>('/api/smart-money/signal-health').catch(() => null),
       ]);
       setStatus(s);
       setLeaderboard(lb);
+      setSignalHealth(sh);
       setLastUpdate(new Date());
       setError(null);
     } catch (e) {
@@ -78,6 +94,7 @@ export default function SmartMoneyPage() {
 
         <div className="flex flex-col" style={{ gap: 12 }}>
           <StatusCard status={status} />
+          <SignalHealthCard sh={signalHealth} />
           <LeaderboardTable lb={leaderboard} />
         </div>
 
@@ -146,6 +163,224 @@ function StatusCard({ status }: { status: StatusPayload | null }) {
         </div>
       </CardBody>
     </Card>
+  );
+}
+
+function SignalHealthCard({ sh }: { sh: SignalHealthPayload | null }) {
+  if (!sh) {
+    return null;
+  }
+  if (!sh.configured) {
+    return (
+      <Card accentColor={semantic.warn}>
+        <CardHeader eyebrow="Shadow 訊號管線" title="未配置" divider />
+        <CardBody>
+          <div style={{ color: fg.tertiary, fontSize: 13 }}>
+            {sh.reason ?? 'API 層看不到 Supabase — 檢查 SUPABASE_URL / SUPABASE_KEY'}
+          </div>
+        </CardBody>
+      </Card>
+    );
+  }
+
+  const healthColor = sh.health === 'green'
+    ? semantic.live
+    : sh.health === 'yellow'
+    ? semantic.warn
+    : semantic.error;
+  const healthDot: Record<string, string> = {
+    green: '🟢',
+    yellow: '🟡',
+    red: '🔴',
+  };
+  const healthLabel = sh.health
+    ? `${healthDot[sh.health]} ${sh.health.toUpperCase()}`
+    : 'UNKNOWN';
+
+  const d1 = sh.density?.['1h'];
+  const d6 = sh.density?.['6h'];
+  const d24 = sh.density?.['24h'];
+  const lat = sh.latency_24h;
+  const pos = sh.positions;
+  const reasons = sh.skipped_by_reason_24h ?? {};
+  const reasonEntries = Object.entries(reasons).sort((a, b) => b[1] - a[1]);
+
+  const lastActivity = sh.last_activity_at ? new Date(sh.last_activity_at) : null;
+  const lastActivityMin = lastActivity
+    ? Math.round((Date.now() - lastActivity.getTime()) / 60_000)
+    : null;
+
+  return (
+    <Card accentColor={healthColor}>
+      <CardHeader
+        eyebrow="Shadow 訊號管線"
+        title={healthLabel}
+        subtitle={
+          sh.health_reason
+            ? sh.health_reason
+            : lastActivityMin !== null
+            ? `最近活動 ${lastActivityMin} 分鐘前`
+            : '尚無資料'
+        }
+        divider
+      />
+      <CardBody>
+        <div
+          style={{
+            display: 'grid',
+            gridTemplateColumns: 'repeat(auto-fit, minmax(110px, 1fr))',
+            gap: 12,
+            fontVariantNumeric: 'tabular-nums',
+            marginBottom: 16,
+          }}
+        >
+          <Stat label="1h 開倉" value={`${d1?.paper_open ?? 0}`} />
+          <Stat label="1h 平倉" value={`${d1?.paper_closed ?? 0}`} />
+          <Stat label="1h 跳過" value={`${d1?.skipped ?? 0}`} />
+          <Stat
+            label="6h 活動"
+            value={`${(d6?.paper_open ?? 0) + (d6?.paper_closed ?? 0) + (d6?.skipped ?? 0)}`}
+          />
+          <Stat
+            label="24h 活動"
+            value={`${(d24?.paper_open ?? 0) + (d24?.paper_closed ?? 0) + (d24?.skipped ?? 0)}`}
+          />
+        </div>
+
+        <div
+          style={{
+            display: 'grid',
+            gridTemplateColumns: '1fr 1fr',
+            gap: 16,
+          }}
+        >
+          {/* Latency */}
+          <div>
+            <div
+              style={{
+                fontSize: 11,
+                color: fg.tertiary,
+                letterSpacing: '0.06em',
+                textTransform: 'uppercase',
+                marginBottom: 8,
+              }}
+            >
+              24h 延遲 (n={lat?.n ?? 0})
+            </div>
+            {lat && lat.n > 0 ? (
+              <div
+                style={{
+                  display: 'grid',
+                  gridTemplateColumns: 'repeat(3, 1fr)',
+                  gap: 8,
+                  fontVariantNumeric: 'tabular-nums',
+                }}
+              >
+                <LatencyStat label="p50" ms={lat.p50_ms} budget={10_000} />
+                <LatencyStat label="p95" ms={lat.p95_ms} budget={10_000} />
+                <LatencyStat label="p99" ms={lat.p99_ms} budget={20_000} />
+              </div>
+            ) : (
+              <div style={{ color: fg.tertiary, fontSize: 12 }}>尚無樣本</div>
+            )}
+          </div>
+
+          {/* Positions */}
+          <div>
+            <div
+              style={{
+                fontSize: 11,
+                color: fg.tertiary,
+                letterSpacing: '0.06em',
+                textTransform: 'uppercase',
+                marginBottom: 8,
+              }}
+            >
+              追蹤錢包持倉
+            </div>
+            <div
+              style={{
+                display: 'grid',
+                gridTemplateColumns: 'repeat(4, 1fr)',
+                gap: 8,
+                fontVariantNumeric: 'tabular-nums',
+                fontSize: 12,
+              }}
+            >
+              <div>
+                <div style={{ color: fg.tertiary, fontSize: 10 }}>多</div>
+                <div style={{ color: '#22c55e', fontWeight: 600 }}>{pos?.long ?? 0}</div>
+              </div>
+              <div>
+                <div style={{ color: fg.tertiary, fontSize: 10 }}>空</div>
+                <div style={{ color: '#ef4444', fontWeight: 600 }}>{pos?.short ?? 0}</div>
+              </div>
+              <div>
+                <div style={{ color: fg.tertiary, fontSize: 10 }}>平</div>
+                <div style={{ color: fg.secondary }}>{pos?.flat ?? 0}</div>
+              </div>
+              <div>
+                <div style={{ color: fg.tertiary, fontSize: 10 }}>錢包</div>
+                <div style={{ color: fg.primary, fontWeight: 600 }}>{pos?.distinct_wallets ?? 0}</div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        {/* Skip reasons */}
+        {reasonEntries.length > 0 && (
+          <div style={{ marginTop: 16 }}>
+            <div
+              style={{
+                fontSize: 11,
+                color: fg.tertiary,
+                letterSpacing: '0.06em',
+                textTransform: 'uppercase',
+                marginBottom: 8,
+              }}
+            >
+              24h 跳過原因
+            </div>
+            <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, fontSize: 11 }}>
+              {reasonEntries.map(([r, n]) => (
+                <span
+                  key={r}
+                  style={{
+                    padding: '2px 8px',
+                    borderRadius: 4,
+                    background: layer['02'],
+                    border: `1px solid ${borderColor.hair}`,
+                    color: fg.secondary,
+                  }}
+                >
+                  {r}: <span style={{ color: fg.primary, fontWeight: 600 }}>{n}</span>
+                </span>
+              ))}
+            </div>
+          </div>
+        )}
+      </CardBody>
+    </Card>
+  );
+}
+
+function LatencyStat({ label, ms, budget }: { label: string; ms: number | null; budget: number }) {
+  if (ms === null || ms === undefined) {
+    return (
+      <div>
+        <div style={{ fontSize: 10, color: fg.tertiary }}>{label}</div>
+        <div style={{ color: fg.tertiary }}>—</div>
+      </div>
+    );
+  }
+  const over = ms > budget;
+  return (
+    <div>
+      <div style={{ fontSize: 10, color: fg.tertiary }}>{label}</div>
+      <div style={{ color: over ? '#ef4444' : fg.primary, fontWeight: 600, fontSize: 14 }}>
+        {ms.toLocaleString()}ms
+      </div>
+    </div>
   );
 }
 

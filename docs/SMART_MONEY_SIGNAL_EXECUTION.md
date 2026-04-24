@@ -510,20 +510,27 @@ API 端點：`/api/smart-money/signal-health` — 從 `sm_skipped_signals` + `sm
 
 ---
 
-## 12. 開放性決策（需使用者拍板）
+## 12. 開放性決策（拍板定案）
 
-這些是「設計選擇題」，文件先標記但**待你決定**，不同選擇會往回影響 P4/P5 模組的實作：
+**定案日期**: 2026-04-24
+**方法**: 先選保守 default、14 天 shadow 期間有資料再調；每一項都寫入 config，之後改動成本低。
 
-| # | 決策點 | 選項 | 影響範圍 |
-|---|---|---|---|
-| D1 | 訊號聚合 default | independent / aggregated / shadow-stage 並行比較 | P4c aggregator 複雜度 |
-| D2 | 出場模式 default | mirror / smart / hybrid | P5c exit 邏輯 + 重跑 P3? |
-| D3 | Warm-up 窗期 | 48h / 7d / 不 warm-up | 白名單新進流程 |
-| D4 | Correlation 判定 | 硬編碼分群 / 動態 Pearson | P5b G6 複雜度 |
-| D5 | OKX 下單 type | market / IOC limit | P5b 滑點 vs 成交率 |
-| D6 | 反手單處理 | 先平後開（兩步）/ OKX hedge mode 單步 | 帳戶 position mode 設定 |
-| D7 | Daily CB 恢復 | 自動 24h / 需人工解鎖 | 值夜班風險 |
-| D8 | Freshness 門檻 | 7d / 14d / 30d 無 fill 即降級 | 白名單穩定度 |
+| # | 決策點 | **定案** | 為什麼 | 之後改動成本 |
+|---|---|---|---|---|
+| D1 | 訊號聚合 default | **`aggregated`**（min_wallets=2, window=300s） | 單鯨魚噪音太大；至少要 2 個同向才下注。shadow 14d 期間同步記 independent 版本做對照（雙軌 sm_paper_trades `signal_mode` 欄位）。 | 低：env `SM_SHADOW_AGGREGATION_MODE` 切換 |
+| D2 | 出場模式 default | **`mirror`** | P3 backtest gate 本身就是假設「完全跟隨」，改其他模式等於回測無效。14d 期間額外 shadow 一份 `hybrid` 統計做對照，不動主路徑。 | 中：換模式要重跑 P3 gate 才能動真錢 |
+| D3 | Warm-up 窗期 | **48h** | 新入 top-N 的 wallet 短期常見拉高分又回落；48h 足以驗證是否穩態。保持 config 可調。 | 低：env `SM_SHADOW_WARMUP_HOURS` |
+| D4 | Correlation 判定 | **硬編碼分群**（v1） | 簡單、可審。初版只需防「BTC/ETH 三倍曝險」這類明顯過度集中；動態 Pearson 留 P5 v2 數據足夠後升級。 | 中：改演算法需 guards 單元測試重跑 |
+| D5 | OKX 下單 type | **market**（v1） | 優先驗證端到端通暢；market 成交率 100%，滑點在 `$1000` 規模可接受。P5 v2 再換 IOC limit (`mid ± 0.1%`)。 | 低：order.py 單點切換 |
+| D6 | 反手單處理 | **先平後開（兩步）** | OKX one-way mode 已設定；two-step 邏輯清晰、幂等鍵獨立。hedge mode 複雜度不划算於 `$1000` 規模。 | 高：要切 OKX 帳戶 position mode |
+| D7 | Daily CB 恢復 | **自動 24h**，但**連續 3 天**觸發 → 切 shadow 需**人工解鎖** | 單日小意外自動復原；連續 3 天是「策略失靈」訊號，不該自動回去。 | 低：config 參數 |
+| D8 | Freshness 門檻 | **7 天** 無 fill 即降級（watch-only） | 14d 太鬆、30d 根本不過濾；7d 對 top-10 鯨魚正常活躍度剛好。已在 shadow runtime 生效。 | 低：env `SM_SHADOW_FRESHNESS_DAYS` |
+
+### 關鍵推論
+
+- **D1 + D2 同時蒐集雙軌資料** — shadow 14 天結束後可比較 `independent vs aggregated` × `mirror vs hybrid` 四種組合（實作上只需在 `sm_paper_trades.signal_mode` + 新欄位 `exit_mode` 各加標籤，simulator 一次算兩份）。
+- **D6 先平後開** 要在 OKX 帳戶啟用 `one-way mode`（而非 hedge mode）；部署 P5 前先手動設定或在 daemon 啟動時 `set_position_mode('net')`。
+- **D7 人工解鎖** 的訊號送 Telegram alert（`[SM] 連續 3 日虧損，已切 shadow — 人工確認 /resume_live`）。
 
 ---
 

@@ -186,6 +186,7 @@ services:
       --min-wallets-for-signal ${SM_SHADOW_MIN_WALLETS:-2}
       --whitelist-size ${SM_SHADOW_WHITELIST_SIZE:-30}
       --freshness-days ${SM_SHADOW_FRESHNESS_DAYS:-7}
+      --warmup-hours ${SM_SHADOW_WARMUP_HOURS:-48}
       --reconciler-interval ${SM_SHADOW_RECONCILER_INTERVAL:-30}
       --reconciler-lookback ${SM_SHADOW_RECONCILER_LOOKBACK:-300}
       --symbol-map /app/config/smart_money/symbol_map.yaml
