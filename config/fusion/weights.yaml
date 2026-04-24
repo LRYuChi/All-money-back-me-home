@@ -1,0 +1,67 @@
+# Regime × source signal weight matrix
+# Edit by hand initially; Phase G reflection-driven calibration will
+# propose updates which you审核 (人工 approve) before merging.
+#
+# All five sources sum to 1.0 within each regime — weights are the
+# *relative* importance, not absolute probabilities. Fuser normalizes
+# automatically so off-by-a-bit is fine.
+#
+# Defaults below are conservative starts based on the prior literature
+# + intuition; expect to tune after 4 weeks of reflection data.
+
+BULL_TRENDING:
+  kronos: 0.25         # trend follower's friend; predict next bar
+  smart_money: 0.30    # whales lead in clear bull
+  ta: 0.25             # TA works in trends
+  ai_llm: 0.10
+  macro: 0.10
+
+BULL_CHOPPY:
+  kronos: 0.30         # predictor matters more in noise
+  smart_money: 0.20
+  ta: 0.15             # TA weak in choppy
+  ai_llm: 0.15
+  macro: 0.20
+
+BEAR_TRENDING:
+  kronos: 0.20
+  smart_money: 0.25    # whales shorting can be slow / illiquid
+  ta: 0.30             # TA strong in established downtrend
+  ai_llm: 0.15
+  macro: 0.10
+
+BEAR_CHOPPY:
+  kronos: 0.25
+  smart_money: 0.20
+  ta: 0.15
+  ai_llm: 0.15
+  macro: 0.25         # macro context likely driving the choppiness
+
+SIDEWAYS_LOW_VOL:
+  kronos: 0.30
+  smart_money: 0.25
+  ta: 0.15            # mean-reversion territory; TA crossovers misfire
+  ai_llm: 0.15
+  macro: 0.15
+
+SIDEWAYS_HIGH_VOL:
+  kronos: 0.25
+  smart_money: 0.15    # whales whip-saw too
+  ta: 0.10
+  ai_llm: 0.20         # qualitative interpretation valued
+  macro: 0.30
+
+CRISIS:
+  kronos: 0.10         # foundation models extrapolate poorly in tail events
+  smart_money: 0.15
+  ta: 0.20             # SL/levels matter more than thesis
+  ai_llm: 0.20         # LLM can read panic narratives
+  macro: 0.35          # macro/news drives the spike
+
+UNKNOWN:
+  # Conservative: equal weight when we can't classify
+  kronos: 0.20
+  smart_money: 0.20
+  ta: 0.20
+  ai_llm: 0.20
+  macro: 0.20

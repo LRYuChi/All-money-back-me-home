@@ -35,7 +35,7 @@
 | **A. SM P4/P5 收斂** | 🟡 | P4a-c ✅；**Notifier 抽象 ✅ (QD P0-3)**；P4 Gate 🔁 等 14d shadow；P5a-c ⬜ | migration 015 ⏸ 手動 |
 | **B. 基礎設施** | ✅ (基本完成) | UniversalSignal ✅；signal_history migration ✅；SM adapter ✅；dual-write ✅；persistence helper ✅；Notifier 抽象 ✅；Reflection validator core ✅；Supabase/PG IO + CLI ✅；Strategy Snapshot ✅；Credential 加密 ✅；Redis ⬜（暫緩，動 prod 部署） | 144 新 tests 全綠 |
 | **C. Kronos 整合** | 🟡 | **HL PriceFetcher ✅（reflection 真能用）**；Kronos predictor / signal converter / dashboard ⬜ | 需 R1 拍板才能進 Kronos 預測 |
-| **D. AI + 融合** | 🟡 | **Regime detector (7 regimes + UNKNOWN, pure rules) ✅**；Signal Fuser / fusion weights yaml / AI LLM 整合 ⬜ | R2 (LLM 供應) 仍待拍板 |
+| **D. AI + 融合** | 🟡 | Regime detector ✅；**SignalFuser + weights yaml + 衝突偵測 + 過期降權 + 端到端 ✅**；AI LLM 整合 ⬜ | R2 (LLM 供應) 仍待拍板；fuser 已可上線 |
 | **E. 策略 DSL** | 🟡 | YAML schema ✅；predicate language ✅；loader ✅；**evaluator (long/short/conflict/sizing/exit) ✅**；**registry × 4 + migration 019 ✅**；live engine integration / dashboard / first 3 strategies ⬜ | R5 用建議預設；下輪先 wire 到 fusion 層 |
 | **F. 跨市場** | ⬜ | — | 需 R3/R4 拍板 |
 | **G. 風險統一** | ⬜ | — | — |
@@ -62,7 +62,8 @@
 | 2026-04-25 04:37 UTC | #9 | Phase E 起步 — Strategy DSL (YAML schema + minimal predicate parser + evaluator + 51 tests) | ✅ 完成 |
 | 2026-04-25 05:07 UTC | #10 | Phase E 續 — evaluator (long/short/conflict/3 sizing 方法/Kelly/exit) + registry × 4 + migration 019 + 29 tests | ✅ 完成 |
 | 2026-04-25 05:37 UTC | #11 | Phase D 起點 — Regime detector (CRISIS / BULL × 2 / BEAR × 2 / SIDEWAYS × 2 + UNKNOWN, pure rules, 24 tests) | ✅ 完成 |
-| — | — | **下輪待辦**：Signal Fuser (Phase D 續) OR audit log hook OR Kronos predictor (需 R1) | ⬜ |
+| 2026-04-25 06:07 UTC | #12 | Phase D 續 — SignalFuser (regime × source 加權 + 衝突偵測 + 過期降權 + weights yaml loader + 21 tests) | ✅ 完成 |
+| — | — | **下輪待辦**：First example strategy YAML（用 fuser 真跑 SM 訊號）OR Audit log hook OR Kronos predictor (需 R1) | ⬜ |
 
 ---
 
