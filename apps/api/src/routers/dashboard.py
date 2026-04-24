@@ -498,11 +498,13 @@ def _get_next_killzone() -> dict:
 
 @router.get("/ft-trades")
 async def get_ft_trades():
-    """Freqtrade 交易數據 — open positions + closed trades + performance."""
+    """Freqtrade 交易數據 — open positions + closed trades + bot meta."""
     status = _ft_api("status") or []
     trades_resp = _ft_api("trades?limit=50") or {"trades": []}
     profit = _ft_api("profit") or {}
     balance = _ft_api("balance") or {"total": 1000}
+    cfg = _ft_api("show_config") or {}
+    whitelist = _ft_api("whitelist") or {}
 
     all_trades = trades_resp.get("trades", []) if isinstance(trades_resp, dict) else []
     open_positions = []
@@ -548,16 +550,45 @@ async def get_ft_trades():
     total_pnl = profit.get("profit_all_coin", 0)
     total_closed = profit.get("closed_trade_count", 0) or len(closed_trades)
     wins = profit.get("winning_trades", 0)
+    unrealized_pnl = sum((p.get("profit_abs") or 0) for p in open_positions)
+
+    pairs = whitelist.get("whitelist", []) if isinstance(whitelist, dict) else []
+    bot_meta = {
+        "state": cfg.get("state"),
+        "dry_run": cfg.get("dry_run"),
+        "strategy": cfg.get("strategy"),
+        "timeframe": cfg.get("timeframe"),
+        "exchange": cfg.get("exchange"),
+        "trading_mode": cfg.get("trading_mode"),
+        "max_open_trades": cfg.get("max_open_trades"),
+        "stake_amount": cfg.get("stake_amount"),
+        "stake_currency": cfg.get("stake_currency"),
+        "pairs": pairs,
+        "pairs_count": len(pairs),
+        "bot_start_timestamp": profit.get("bot_start_timestamp"),
+        "bot_start_date": profit.get("bot_start_date"),
+    }
 
     return {
         "capital": round(capital, 2),
         "initial_capital": initial,
         "total_pnl": round(total_pnl, 2),
         "total_pnl_pct": round(total_pnl / initial * 100, 2) if initial else 0,
+        "realized_pnl": round(profit.get("profit_closed_coin", 0) or 0, 2),
+        "unrealized_pnl": round(unrealized_pnl, 2),
         "open_positions": open_positions,
         "closed_trades": closed_trades,
         "win_rate": round(wins / max(total_closed, 1) * 100, 1),
         "total_trades": profit.get("trade_count", 0),
+        "winning_trades": wins,
+        "losing_trades": profit.get("losing_trades", 0),
+        "best_pair": profit.get("best_pair", ""),
+        "best_pair_pnl": round(profit.get("best_pair_profit_abs", 0) or 0, 2),
+        "max_drawdown": round(profit.get("max_drawdown", 0) or 0, 4),
+        "max_drawdown_abs": round(profit.get("max_drawdown_abs", 0) or 0, 2),
+        "profit_factor": profit.get("profit_factor"),
+        "sharpe": profit.get("sharpe"),
+        "bot": bot_meta,
         "last_updated": datetime.utcnow().isoformat(),
     }
 
