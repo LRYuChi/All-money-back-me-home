@@ -108,6 +108,20 @@ class UniversalSignal:
     def age_seconds(self) -> float:
         return (datetime.now(timezone.utc) - self.ts).total_seconds()
 
+    def to_row(self) -> dict[str, Any]:
+        """Serialise for persistence into `signal_history` table."""
+        return {
+            "source": self.source.value,
+            "symbol": self.symbol,
+            "horizon": self.horizon,
+            "direction": self.direction.value,
+            "strength": float(self.strength),
+            "reason": self.reason,
+            "details": dict(self.details),
+            "ts": self.ts.astimezone(timezone.utc).isoformat(),
+            "expires_at": self.expires_at.astimezone(timezone.utc).isoformat() if self.expires_at else None,
+        }
+
 
 @dataclass(slots=True, frozen=True)
 class FusedSignal:

@@ -25,6 +25,8 @@ import sys
 from pathlib import Path
 from uuid import UUID
 
+from shared.signals.adapters import from_smart_money
+from shared.signals.history import SignalHistoryWriter, build_writer, record_safe
 from smart_money.config import settings
 from smart_money.execution.mapper import SymbolMapper
 from smart_money.scanner.reconciler import FillsReconciler
@@ -147,6 +149,7 @@ async def _drain_loop(
     address_to_wallet: dict[str, tuple[UUID, float, bool]],  # (id, score, is_tradeable)
     aggregator: SignalAggregator,
     simulator: ShadowSimulator,
+    history_writer: SignalHistoryWriter,
     stop: asyncio.Event,
 ) -> None:
     """Full pipeline: RawFillEvent → classifier → aggregator → simulator.
@@ -195,6 +198,12 @@ async def _drain_loop(
             round(sig.size_delta, 4), round(sig.new_size, 4), sig.px,
             sig.total_latency_ms,
         )
+
+        # Dual-write to signal_history for L7 reflection loop consumption.
+        # Failure is logged but never propagated — history is observability,
+        # not the primary pipeline. Watch-only wallets still count: we want
+        # their signals in history for recovery-detection analysis.
+        record_safe(history_writer, from_smart_money(sig))
 
         if not is_tradeable:
             # Watch-only: state updated, no shadow trade
@@ -270,6 +279,10 @@ async def run_shadow_daemon(args: argparse.Namespace) -> int:
         store, mapper, signal_mode=args.aggregation_mode,
     )
 
+    # L7 observability: dual-write every classified signal to signal_history.
+    # Writer picks itself based on settings (Postgres > Supabase > NoOp).
+    history_writer = build_writer(settings)
+
     loop = asyncio.get_running_loop()
     event_queue: asyncio.Queue[RawFillEvent] = asyncio.Queue()
 
@@ -304,7 +317,8 @@ async def run_shadow_daemon(args: argparse.Namespace) -> int:
         loop.add_signal_handler(sig_, _on_signal)
 
     drain_task = asyncio.create_task(_drain_loop(
-        event_queue, store, address_to_wallet, aggregator, simulator, stop,
+        event_queue, store, address_to_wallet,
+        aggregator, simulator, history_writer, stop,
     ))
     flush_task = asyncio.create_task(_aggregator_flush_loop(aggregator, stop))
 

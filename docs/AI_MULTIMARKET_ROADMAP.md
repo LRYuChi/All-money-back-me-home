@@ -33,7 +33,7 @@
 | Phase | 狀態 | 當前 sub-task | 備註 |
 |---|---|---|---|
 | **A. SM P4/P5 收斂** | 🟡 | P4a-c ✅；P4 Gate 🔁 等 14d shadow；P5a-c ⬜ | migration 015 ⏸ 手動 |
-| **B. 基礎設施** | 🟡 | UniversalSignal schema ✅；signal_history migration ✅；SM adapter ✅；reflection/Redis/Snapshot/Credential ⬜；dual-write 🟡 | 33 新 tests 全綠 |
+| **B. 基礎設施** | 🟡 | UniversalSignal ✅；signal_history migration ✅；SM adapter ✅；**dual-write (SM→history) ✅**；persistence helper ✅；reflection/Redis/Snapshot/Credential ⬜ | 45 新 tests 全綠 |
 | **C. Kronos 整合** | ⬜ | — | 需 R1 拍板 |
 | **D. AI + 融合** | ⬜ | — | 需 R2 拍板 |
 | **E. 策略 DSL** | ⬜ | — | 需 R5 拍板 |
@@ -52,7 +52,8 @@
 | 時間 | 輪次 | 任務 | 狀態 |
 |---|---|---|---|
 | 2026-04-25 00:20 UTC | #1 | Phase B — UniversalSignal types + adapters + signal_history migration + 33 tests | ✅ 完成 |
-| — | — | **下輪待辦**：SM daemon 實際 dual-write 到 signal_history + persistence helper | ⬜ |
+| 2026-04-25 00:50 UTC | #2 | Phase B — history writer 4 實作 + SM daemon dual-write + 12 tests | ✅ 完成 |
+| — | — | **下輪待辦**：Redis compose 加入 OR Reflection validator 框架 OR Notifier 抽象（選 highest-ROI） | ⬜ |
 
 ---
 
