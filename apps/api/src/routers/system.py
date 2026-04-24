@@ -170,25 +170,10 @@ def _probe_smart_money() -> dict:
         if recent.data:
             result["last_data_at"] = recent.data[0]["last_active_at"]
 
-        # Counts (cheap via estimated planner stats; exact count requires seq scan)
         wallets_cnt = (
             client.table("sm_wallets").select("*", count="exact").limit(1).execute()
         )
         result["wallets_total"] = wallets_cnt.count or 0
-
-        # sm_wallet_trades count is EXPENSIVE without proper index; use range prefilter
-        # to keep query planner on btree. Post-014 migration this is unnecessary.
-        try:
-            trades_cnt = (
-                client.table("sm_wallet_trades")
-                .select("*", count="exact")
-                .limit(1)
-                .execute()
-            )
-            result["trades_total"] = trades_cnt.count or 0
-        except Exception as exc:
-            result["trades_total"] = None
-            result["trades_count_error"] = str(exc)[:120]
 
         # Latest snapshot date
         rankings = (
@@ -200,6 +185,13 @@ def _probe_smart_money() -> dict:
         )
         if rankings.data:
             result["latest_snapshot_date"] = rankings.data[0]["snapshot_date"]
+
+        # trades_total — 需要 014 migration 的 ts index 才快。
+        # 未加 index 前 COUNT(*) 會 seq-scan 3.2M rows → 57014 timeout。
+        # 跳過這個查詢避免拖慢 data-health probe 5+ seconds。
+        # 加 index 後可改回直接 count (留個 TODO)。
+        # TODO(sm-perf): 套用 014_smart_money_ts_index.sql 後改回直接 count
+        result["trades_total"] = None
 
         age = _age_seconds(result["last_data_at"])
         # Smart Money is manual scan — treat anything < 7d as acceptable
@@ -322,17 +314,39 @@ def _probe_freqtrade() -> dict:
 
 @router.get("/data-health")
 def get_data_health() -> dict:
-    """匯聚三條資料管線的 liveness。目標 p95 < 500ms."""
+    """匯聚三條資料管線的 liveness。目標 p95 < 500ms.
+
+    三個 probe 平行跑（ThreadPoolExecutor）— 不然 sequential 時
+    freqtrade REST 3s timeout + supabase 5s timeout 會把延遲推到 8+s。
+    """
+    import concurrent.futures as _cf
+
     cached = _cache.get("data_health")
     if cached and time.time() < cached[1]:
         return cached[0]
 
     t0 = time.time()
-    pipelines = [
-        _probe_polymarket(),
-        _probe_smart_money(),
-        _probe_freqtrade(),
-    ]
+    probes = {
+        "polymarket": _probe_polymarket,
+        "smart_money": _probe_smart_money,
+        "freqtrade": _probe_freqtrade,
+    }
+    results: dict[str, dict] = {}
+    with _cf.ThreadPoolExecutor(max_workers=len(probes)) as pool:
+        futures = {pool.submit(fn): name for name, fn in probes.items()}
+        for fut in _cf.as_completed(futures, timeout=10):
+            name = futures[fut]
+            try:
+                results[name] = fut.result()
+            except Exception as exc:
+                results[name] = {
+                    "name": name,
+                    "health": "red",
+                    "error": str(exc)[:200],
+                }
+
+    # Preserve ordering (polymarket → smart_money → freqtrade)
+    pipelines = [results.get(n, {"name": n, "health": "unknown"}) for n in probes.keys()]
     elapsed_ms = int((time.time() - t0) * 1000)
 
     # Aggregate overall health (worst of the three)
