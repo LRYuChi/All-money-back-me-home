@@ -3,553 +3,1773 @@
 # Each wallet has tags showing which HL leaderboard strategy picked it.
 #
 wallets:
-- address: '0xbdfa4f4492dd7b7cf211209c4791af8d52bf5c50'
-  tags:
-  - alltime_pnl_top
-  - month_pnl_top
-  - week_pnl_top
-  account_value_usd: 45158508.0
-  month_pnl_usd: 4971218.0
-  month_roi_pct: 9.55
-  alltime_pnl_usd: 78996645.0
-- address: '0x03b9a189e2480d1e4c3007080b29f362282130fa'
-  tags:
-  - alltime_pnl_top
-  - month_pnl_top
-  - week_pnl_top
-  account_value_usd: 44601607.0
-  month_pnl_usd: 4021382.0
-  month_roi_pct: 9.61
-  alltime_pnl_usd: 50249759.0
-- address: '0x8af700ba841f30e0a3fcb0ee4c4a9d223e1efa05'
-  tags:
-  - alltime_pnl_top
-  - month_pnl_top
-  - week_pnl_top
-  account_value_usd: 19276483.0
-  month_pnl_usd: 3476719.0
-  month_roi_pct: 16.72
-  alltime_pnl_usd: 63141025.0
-- address: '0xfc667adba8d4837586078f4fdcdc29804337ca06'
-  tags:
-  - month_pnl_top
-  - week_pnl_top
-  account_value_usd: 99275390.0
-  month_pnl_usd: 3490688.0
-  month_roi_pct: 3.64
-  alltime_pnl_usd: 18995929.0
-- address: '0x87f9cd15f5050a9283b8896300f7c8cf69ece2cf'
-  tags:
-  - alltime_pnl_top
-  - month_pnl_top
-  account_value_usd: 75860110.0
-  month_pnl_usd: 3704110.0
-  month_roi_pct: 4.49
-  alltime_pnl_usd: 53236247.0
 - address: '0xecb63caa47c7c4e77f60f1ce858cf28dc2b82b00'
   tags:
-  - alltime_pnl_top
-  - month_pnl_top
-  account_value_usd: 68562757.0
-  month_pnl_usd: 2191769.0
-  month_roi_pct: 2.52
-  alltime_pnl_usd: 203501422.0
-- address: '0xe867fbdad3291530e41530301ecb77693850c78e'
-  tags:
+  - allTime_pnl_top
   - month_pnl_top
   - week_pnl_top
-  account_value_usd: 47886525.0
-  month_pnl_usd: 4612172.0
-  month_roi_pct: 10.66
-  alltime_pnl_usd: 24300312.0
-- address: '0x9d32884370875f2960d5cc4b95be26687d69aff5'
-  tags:
-  - month_pnl_top
-  - week_pnl_top
-  account_value_usd: 46595818.0
-  month_pnl_usd: 3498630.0
-  month_roi_pct: 8.12
-  alltime_pnl_usd: 3498630.0
+  account_value_usd: 65255215.0
+  month_pnl_usd: 1594414.0
+  month_roi_pct: 1.91
+  alltime_pnl_usd: 203457097.0
 - address: '0x023a3d058020fb76cca98f01b3c48c8938a22355'
   tags:
-  - alltime_pnl_top
+  - allTime_pnl_top
+  - month_pnl_top
   - week_pnl_top
-  account_value_usd: 40913518.0
-  month_pnl_usd: 1730736.0
-  month_roi_pct: 4.28
-  alltime_pnl_usd: 67347324.0
+  account_value_usd: 40983083.0
+  month_pnl_usd: 2905281.0
+  month_roi_pct: 7.24
+  alltime_pnl_usd: 68518771.0
 - address: '0x939f95036d2e7b6d7419ec072bf9d967352204d2'
   tags:
-  - alltime_pnl_top
-  - month_pnl_top
-  account_value_usd: 38034311.0
-  month_pnl_usd: 3126485.0
-  month_roi_pct: 7.46
-  alltime_pnl_usd: 52104390.0
-- address: '0xa5b0edf6b55128e0ddae8e51ac538c3188401d41'
-  tags:
+  - allTime_pnl_top
   - month_pnl_top
   - week_pnl_top
-  account_value_usd: 37899594.0
-  month_pnl_usd: 19756455.0
-  month_roi_pct: 51.8
-  alltime_pnl_usd: 27285762.0
+  account_value_usd: 39192437.0
+  month_pnl_usd: 3962475.0
+  month_roi_pct: 9.38
+  alltime_pnl_usd: 53262515.0
 - address: '0x6c8512516ce5669d35113a11ca8b8de322fd84f6'
   tags:
+  - allTime_pnl_top
   - month_pnl_top
   - week_pnl_top
-  account_value_usd: 37003569.0
-  month_pnl_usd: 11402176.0
-  month_roi_pct: 65.25
-  alltime_pnl_usd: 17325569.0
-- address: '0x0e8bf301805df4e6ba7151297e5f7dfedc1eaab9'
-  tags:
-  - month_pnl_top
-  - week_pnl_top
-  account_value_usd: 29259609.0
-  month_pnl_usd: 2806014.0
-  month_roi_pct: 10.57
-  alltime_pnl_usd: 34505591.0
-- address: '0xeadc152ac1014ace57c6b353f89adf5faffe9d55'
-  tags:
-  - month_pnl_top
-  - week_pnl_top
-  account_value_usd: 25796581.0
-  month_pnl_usd: 6341798.0
-  month_roi_pct: 22.09
-  alltime_pnl_usd: -13952632.0
+  account_value_usd: 38921459.0
+  month_pnl_usd: 12750383.0
+  month_roi_pct: 70.66
+  alltime_pnl_usd: 19243459.0
 - address: '0xa1830e8d9f019feb448478a171bb37cc6c4c0482'
   tags:
+  - allTime_pnl_top
   - month_pnl_top
   - week_pnl_top
-  account_value_usd: 17876404.0
-  month_pnl_usd: 4574505.0
-  month_roi_pct: 34.39
-  alltime_pnl_usd: 16018739.0
+  account_value_usd: 18615217.0
+  month_pnl_usd: 5086297.0
+  month_roi_pct: 37.6
+  alltime_pnl_usd: 16757552.0
+- address: '0x932bdd2d5e21475e62d2fea8158fc5974507cb1a'
+  tags:
+  - allTime_roi_top
+  - month_pnl_top
+  - month_roi_top
+  account_value_usd: 909442.0
+  month_pnl_usd: 726161.0
+  month_roi_pct: 207.71
+  alltime_pnl_usd: 1494904.0
+- address: '0xfc667adba8d4837586078f4fdcdc29804337ca06'
+  tags:
+  - allTime_pnl_top
+  - month_pnl_top
+  account_value_usd: 83559054.0
+  month_pnl_usd: 2686165.0
+  month_roi_pct: 2.77
+  alltime_pnl_usd: 19279593.0
+- address: '0x87f9cd15f5050a9283b8896300f7c8cf69ece2cf'
+  tags:
+  - allTime_pnl_top
+  - month_pnl_top
+  account_value_usd: 73848793.0
+  month_pnl_usd: 1764426.0
+  month_roi_pct: 2.14
+  alltime_pnl_usd: 52531221.0
+- address: '0xff4cd3826ecee12acd4329aada4a2d3419fc463c'
+  tags:
+  - allTime_pnl_top
+  - month_pnl_top
+  account_value_usd: 54408919.0
+  month_pnl_usd: 1008179.0
+  month_roi_pct: 1.73
+  alltime_pnl_usd: 27479495.0
+- address: '0xd47587702a91731dc1089b5db0932cf820151a91'
+  tags:
+  - allTime_pnl_top
+  - week_pnl_top
+  account_value_usd: 46142215.0
+  month_pnl_usd: 517088.0
+  month_roi_pct: 1.03
+  alltime_pnl_usd: 81496187.0
+- address: '0xe867fbdad3291530e41530301ecb77693850c78e'
+  tags:
+  - allTime_pnl_top
+  - month_pnl_top
+  account_value_usd: 45561548.0
+  month_pnl_usd: 1382579.0
+  month_roi_pct: 3.13
+  alltime_pnl_usd: 21975335.0
+- address: '0xbdfa4f4492dd7b7cf211209c4791af8d52bf5c50'
+  tags:
+  - allTime_pnl_top
+  - month_pnl_top
+  account_value_usd: 42616355.0
+  month_pnl_usd: 956959.0
+  month_roi_pct: 2.3
+  alltime_pnl_usd: 76454491.0
+- address: '0x03b9a189e2480d1e4c3007080b29f362282130fa'
+  tags:
+  - allTime_pnl_top
+  - month_pnl_top
+  account_value_usd: 42305340.0
+  month_pnl_usd: 897515.0
+  month_roi_pct: 2.1
+  alltime_pnl_usd: 47953492.0
+- address: '0xa5b0edf6b55128e0ddae8e51ac538c3188401d41'
+  tags:
+  - allTime_pnl_top
+  - month_pnl_top
+  account_value_usd: 38156614.0
+  month_pnl_usd: 20071117.0
+  month_roi_pct: 52.7
+  alltime_pnl_usd: 27542781.0
+- address: '0x856c35038594767646266bc7fd68dc26480e910d'
+  tags:
+  - allTime_pnl_top
+  - week_pnl_top
+  account_value_usd: 37064564.0
+  month_pnl_usd: 656166.0
+  month_roi_pct: 1.8
+  alltime_pnl_usd: 39348365.0
+- address: '0x7fdafde5cfb5465924316eced2d3715494c517d1'
+  tags:
+  - allTime_pnl_top
+  - week_pnl_top
+  account_value_usd: 27455116.0
+  month_pnl_usd: -418951.0
+  month_roi_pct: -1.06
+  alltime_pnl_usd: 159577642.0
+- address: '0x45d26f28196d226497130c4bac709d808fed4029'
+  tags:
+  - allTime_pnl_top
+  - week_pnl_top
+  account_value_usd: 27445356.0
+  month_pnl_usd: -1599210.0
+  month_roi_pct: -5.51
+  alltime_pnl_usd: 79191696.0
+- address: '0x0e8bf301805df4e6ba7151297e5f7dfedc1eaab9'
+  tags:
+  - allTime_pnl_top
+  - month_pnl_top
+  account_value_usd: 25787881.0
+  month_pnl_usd: 755744.0
+  month_roi_pct: 2.79
+  alltime_pnl_usd: 32965860.0
+- address: '0x8def9f50456c6c4e37fa5d3d57f108ed23992dae'
+  tags:
+  - allTime_pnl_top
+  - month_pnl_top
+  account_value_usd: 23083648.0
+  month_pnl_usd: 754862.0
+  month_roi_pct: 2.48
+  alltime_pnl_usd: 25330334.0
+- address: '0xcac19662ec88d23fa1c81ac0e8570b0cf2ff26b3'
+  tags:
+  - allTime_pnl_top
+  - week_pnl_top
+  account_value_usd: 21362823.0
+  month_pnl_usd: -873192.0
+  month_roi_pct: -5.52
+  alltime_pnl_usd: 43831459.0
+- address: '0xb581d667c53fd8a50bf7ffd817be0e62daa16f4f'
+  tags:
+  - month_pnl_top
+  - week_pnl_top
+  account_value_usd: 19353437.0
+  month_pnl_usd: 3071574.0
+  month_roi_pct: 18.87
+  alltime_pnl_usd: -628964.0
+- address: '0x8af700ba841f30e0a3fcb0ee4c4a9d223e1efa05'
+  tags:
+  - allTime_pnl_top
+  - month_pnl_top
+  account_value_usd: 18527648.0
+  month_pnl_usd: 2645713.0
+  month_roi_pct: 13.3
+  alltime_pnl_usd: 62392190.0
+- address: '0x8607a7d180de23645db594d90621d837749408d5'
+  tags:
+  - allTime_pnl_top
+  - month_pnl_top
+  account_value_usd: 15304411.0
+  month_pnl_usd: 1069745.0
+  month_roi_pct: 7.52
+  alltime_pnl_usd: 24850238.0
+- address: '0x8ea85cbd59affca28162fc286d5c093dd0f8edbc'
+  tags:
+  - month_pnl_top
+  - week_pnl_top
+  account_value_usd: 14564338.0
+  month_pnl_usd: 3057336.0
+  month_roi_pct: 26.57
+  alltime_pnl_usd: 3316478.0
+- address: '0x469e9a7f624b04c24f0e64edf8d8a277e6bf58a5'
+  tags:
+  - month_pnl_top
+  - week_pnl_top
+  account_value_usd: 13292102.0
+  month_pnl_usd: 4423153.0
+  month_roi_pct: 49.87
+  alltime_pnl_usd: 12692892.0
+- address: '0x015354106478dda69c4aae3c0cf801290b738052'
+  tags:
+  - month_pnl_top
+  - week_pnl_top
+  account_value_usd: 12566762.0
+  month_pnl_usd: 2795968.0
+  month_roi_pct: 28.62
+  alltime_pnl_usd: 10571033.0
 - address: '0x6355f7cf36b24044cd5b089a845113327d0ee58e'
   tags:
   - month_pnl_top
   - week_pnl_top
-  account_value_usd: 14704162.0
-  month_pnl_usd: 3617782.0
-  month_roi_pct: 6.83
-  alltime_pnl_usd: 6677015.0
-- address: '0x5b5d51203a0f9079f8aeb098a6523a13f298c060'
+  account_value_usd: 11724318.0
+  month_pnl_usd: 3289472.0
+  month_roi_pct: 6.17
+  alltime_pnl_usd: 6697136.0
+- address: '0x152e41f0b83e6cad4b5dc730c1d6279b7d67c9dc'
   tags:
-  - alltime_pnl_top
+  - allTime_pnl_top
   - month_pnl_top
-  account_value_usd: 10954056.0
-  month_pnl_usd: 3887446.0
-  month_roi_pct: 7.1
-  alltime_pnl_usd: 180038967.0
-- address: '0x61ceef212ff4a86933c69fb6aca2fe35d8f2a62b'
+  account_value_usd: 11370392.0
+  month_pnl_usd: 734156.0
+  month_roi_pct: 6.9
+  alltime_pnl_usd: 22243635.0
+- address: '0x2d99fe0f36c1aebd28a1a2c0e82e8ca13c2ea351'
   tags:
   - month_pnl_top
   - week_pnl_top
-  account_value_usd: 4554111.0
-  month_pnl_usd: 8412511.0
-  month_roi_pct: 110.24
-  alltime_pnl_usd: 8454857.0
-- address: '0xa312114b5795dff9b8db50474dd57701aa78ad1e'
+  account_value_usd: 8992946.0
+  month_pnl_usd: 1366720.0
+  month_roi_pct: 17.92
+  alltime_pnl_usd: 9069787.0
+- address: '0x1e48f1007fa133f643941d58cb6b080dc621e773'
   tags:
-  - alltime_pnl_top
   - month_pnl_top
-  account_value_usd: 3989699.0
-  month_pnl_usd: 2389806.0
-  month_roi_pct: 9.85
-  alltime_pnl_usd: 96179208.0
-- address: '0x0884051c662892bfcd8a132d1404ab8a3a409cea'
-  tags:
-  - month_roi_top
-  - week_roi_top
-  account_value_usd: 509776.0
-  month_pnl_usd: 431691.0
-  month_roi_pct: 552.85
-  alltime_pnl_usd: -11454773.0
-- address: '0x6d9532075ffdde66c7ed1b0f55b46227295dff14'
-  tags:
-  - month_roi_top
-  - week_roi_top
-  account_value_usd: 416835.0
-  month_pnl_usd: 357206.0
-  month_roi_pct: 595.36
-  alltime_pnl_usd: 72931.0
-- address: '0x2f79e7993359e37091f8298c9706c75243da65a5'
-  tags:
-  - month_roi_top
-  - week_roi_top
-  account_value_usd: 15959.0
-  month_pnl_usd: 15782.0
-  month_roi_pct: 725.03
-  alltime_pnl_usd: -146420.0
-- address: '0x010461c14e146ac35fe42271bdc1134ee31c703a'
-  tags:
-  - alltime_pnl_top
-  account_value_usd: 114076959.0
-  month_pnl_usd: 33183.0
-  month_roi_pct: 0.02
-  alltime_pnl_usd: 47097832.0
-- address: '0xd47587702a91731dc1089b5db0932cf820151a91'
-  tags:
-  - alltime_pnl_top
-  account_value_usd: 43727463.0
-  month_pnl_usd: -530146.0
-  month_roi_pct: -1.06
-  alltime_pnl_usd: 80022642.0
-- address: '0x17c3c8fdbcb7d1b240ce08965e09b1fc91cba868'
-  tags:
   - week_pnl_top
-  account_value_usd: 31010893.0
-  month_pnl_usd: 2026851.0
-  month_roi_pct: 6.99
-  alltime_pnl_usd: 1197039.0
-- address: '0x7dacca323e44f168494c779bb5e7483c468ef410'
-  tags:
-  - alltime_pnl_top
-  account_value_usd: 30707489.0
-  month_pnl_usd: 1341091.0
-  month_roi_pct: 4.22
-  alltime_pnl_usd: 48534766.0
-- address: '0x7fdafde5cfb5465924316eced2d3715494c517d1'
-  tags:
-  - alltime_pnl_top
-  account_value_usd: 30206246.0
-  month_pnl_usd: -848946.0
-  month_roi_pct: -2.15
-  alltime_pnl_usd: 159328422.0
-- address: '0x880ac484a1743862989a441d6d867238c7aa311c'
-  tags:
-  - alltime_pnl_top
-  account_value_usd: 28214112.0
-  month_pnl_usd: 1110851.0
-  month_roi_pct: 3.55
-  alltime_pnl_usd: 114519578.0
-- address: '0x45d26f28196d226497130c4bac709d808fed4029'
-  tags:
-  - alltime_pnl_top
-  account_value_usd: 26995119.0
-  month_pnl_usd: -1762340.0
-  month_roi_pct: -6.13
-  alltime_pnl_usd: 78741459.0
-- address: '0x519c721de735f7c9e6146d167852e60d60496a47'
+  account_value_usd: 8933055.0
+  month_pnl_usd: 2669437.0
+  month_roi_pct: 42.62
+  alltime_pnl_usd: 3158024.0
+- address: '0xf28e1b06e00e8774c612e31ab3ac35d5a720085f'
   tags:
   - month_pnl_top
-  account_value_usd: 25289729.0
-  month_pnl_usd: 2704066.0
-  month_roi_pct: 8.61
-  alltime_pnl_usd: 16851781.0
-- address: '0xb83de012dba672c76a7dbbbf3e459cb59d7d6e36'
-  tags:
-  - alltime_pnl_top
-  account_value_usd: 24811419.0
-  month_pnl_usd: 1020320.0
-  month_roi_pct: 1.46
-  alltime_pnl_usd: 123403478.0
-- address: '0xcac19662ec88d23fa1c81ac0e8570b0cf2ff26b3'
-  tags:
-  - alltime_pnl_top
-  account_value_usd: 20789987.0
-  month_pnl_usd: -1729497.0
-  month_roi_pct: -10.75
-  alltime_pnl_usd: 43257665.0
-- address: '0x96de02546bde61e6a62e3f242ea4c55265311445'
-  tags:
-  - month_pnl_top
-  account_value_usd: 20446970.0
-  month_pnl_usd: 2224913.0
-  month_roi_pct: 12.21
-  alltime_pnl_usd: 3819438.0
-- address: '0xaefcc9cacbe0e41978bef1818358f471848de9cb'
-  tags:
-  - month_pnl_top
-  account_value_usd: 15452283.0
-  month_pnl_usd: 2240229.0
-  month_roi_pct: 11.3
-  alltime_pnl_usd: 10117120.0
-- address: '0xeee0d806e4f0a427277433d6b580619918770b53'
-  tags:
-  - month_pnl_top
-  account_value_usd: 13309081.0
-  month_pnl_usd: 2178211.0
-  month_roi_pct: 19.57
-  alltime_pnl_usd: 1142473.0
-- address: '0x469e9a7f624b04c24f0e64edf8d8a277e6bf58a5'
-  tags:
-  - month_pnl_top
-  account_value_usd: 12363937.0
-  month_pnl_usd: 3304130.0
-  month_roi_pct: 36.47
-  alltime_pnl_usd: 11764727.0
-- address: '0x936cf4fb95c30ce83f658b5bbb247e4bb381bb0f'
-  tags:
-  - month_pnl_top
-  account_value_usd: 12303229.0
-  month_pnl_usd: 2212916.0
-  month_roi_pct: 5.23
-  alltime_pnl_usd: 4720938.0
-- address: '0x015354106478dda69c4aae3c0cf801290b738052'
-  tags:
-  - month_pnl_top
-  account_value_usd: 12096024.0
-  month_pnl_usd: 2273520.0
-  month_roi_pct: 23.15
-  alltime_pnl_usd: 10100035.0
-- address: '0x985f02b19dbc062e565c981aac5614baf2cf501f'
-  tags:
-  - month_pnl_top
-  account_value_usd: 10235180.0
-  month_pnl_usd: 2768611.0
-  month_roi_pct: 12.32
-  alltime_pnl_usd: 8912037.0
-- address: '0xa9b95f2a2e7ef219021efc5c04c32761b8553bbd'
-  tags:
-  - month_pnl_top
-  account_value_usd: 8298704.0
-  month_pnl_usd: 2208317.0
-  month_roi_pct: 50.05
-  alltime_pnl_usd: 1671505.0
+  - week_pnl_top
+  account_value_usd: 8669986.0
+  month_pnl_usd: 1097499.0
+  month_roi_pct: 12.1
+  alltime_pnl_usd: 10890461.0
 - address: '0x5d2f4460ac3514ada79f5d9838916e508ab39bb7'
   tags:
-  - alltime_pnl_top
-  account_value_usd: 7407838.0
-  month_pnl_usd: 1464392.0
-  month_roi_pct: 24.64
-  alltime_pnl_usd: 62962631.0
-- address: '0x8e096995c3e4a3f0bc5b3ea1cba94de2aa4d70c9'
-  tags:
-  - alltime_pnl_top
-  account_value_usd: 5888950.0
-  month_pnl_usd: -1029562.0
-  month_roi_pct: -13.0
-  alltime_pnl_usd: 58831206.0
-- address: '0xa31441e058492bc7cfffda9aa7623c407ae83a81'
+  - allTime_pnl_top
+  - month_pnl_top
+  account_value_usd: 7751054.0
+  month_pnl_usd: 1914659.0
+  month_roi_pct: 32.81
+  alltime_pnl_usd: 63305847.0
+- address: '0x049bdc370620beab340b01072fa580fd57745e7d'
   tags:
   - month_pnl_top
-  account_value_usd: 4699319.0
-  month_pnl_usd: 6687302.0
-  month_roi_pct: 44.55
-  alltime_pnl_usd: 8831773.0
+  - week_pnl_top
+  account_value_usd: 6744120.0
+  month_pnl_usd: 3007854.0
+  month_roi_pct: 53.03
+  alltime_pnl_usd: 7095486.0
+- address: '0xa3d843b6a057504284006bef6f34a2e9bc80fb6b'
+  tags:
+  - month_pnl_top
+  - week_pnl_top
+  account_value_usd: 6635172.0
+  month_pnl_usd: 770346.0
+  month_roi_pct: 13.14
+  alltime_pnl_usd: 770346.0
+- address: '0xc179e03922afe8fa9533d3f896338b9fb87ce0c8'
+  tags:
+  - month_pnl_top
+  - week_pnl_top
+  account_value_usd: 6527854.0
+  month_pnl_usd: 1501494.0
+  month_roi_pct: 28.95
+  alltime_pnl_usd: 708926.0
+- address: '0x92b75a5bfb7be7911747276ad335b8f5da3ce0f4'
+  tags:
+  - month_pnl_top
+  - week_pnl_top
+  account_value_usd: 5949895.0
+  month_pnl_usd: 2597853.0
+  month_roi_pct: 65.77
+  alltime_pnl_usd: 2975051.0
+- address: '0xe86b057f5eb764c9738d6b0d38170befd0723664'
+  tags:
+  - allTime_pnl_top
+  - week_pnl_top
+  account_value_usd: 5424072.0
+  month_pnl_usd: 594558.0
+  month_roi_pct: 5.25
+  alltime_pnl_usd: 25032513.0
+- address: '0x0e0bf22e3595687a8756e1e9862a20944d0be57e'
+  tags:
+  - month_pnl_top
+  - week_pnl_top
+  account_value_usd: 4391584.0
+  month_pnl_usd: 833321.0
+  month_roi_pct: 21.52
+  alltime_pnl_usd: 1041896.0
+- address: '0x66466428990e0f42a4c54f64bee0db6bf2336de5'
+  tags:
+  - month_pnl_top
+  - week_pnl_top
+  account_value_usd: 4038740.0
+  month_pnl_usd: 1658963.0
+  month_roi_pct: 68.08
+  alltime_pnl_usd: 1911274.0
+- address: '0xa312114b5795dff9b8db50474dd57701aa78ad1e'
+  tags:
+  - allTime_pnl_top
+  - month_pnl_top
+  account_value_usd: 3475394.0
+  month_pnl_usd: 1962392.0
+  month_roi_pct: 8.06
+  alltime_pnl_usd: 95863533.0
 - address: '0xa6ee1ed1ae80b8352603654b39f5e7b9bedd5078'
   tags:
   - month_pnl_top
-  account_value_usd: 2847842.0
-  month_pnl_usd: 2074928.0
-  month_roi_pct: 71.59
-  alltime_pnl_usd: -1380623.0
+  - week_pnl_top
+  account_value_usd: 2327918.0
+  month_pnl_usd: 2006637.0
+  month_roi_pct: 70.13
+  alltime_pnl_usd: -1486042.0
+- address: '0x0d4c14671302e6dc71ed823f553d589a869378f5'
+  tags:
+  - month_pnl_top
+  - month_roi_top
+  account_value_usd: 1393368.0
+  month_pnl_usd: 1119651.0
+  month_roi_pct: 409.05
+  alltime_pnl_usd: 1119651.0
+- address: '0xf4f2f40ceda8da880a4f38d797cebb5950de8ecd'
+  tags:
+  - month_pnl_top
+  - month_roi_top
+  account_value_usd: 1184434.0
+  month_pnl_usd: 1015819.0
+  month_roi_pct: 596.78
+  alltime_pnl_usd: 1026034.0
+- address: '0x863b676e5e4fea0541062c32983dc8f84749ca6d'
+  tags:
+  - allTime_roi_top
+  - month_pnl_top
+  account_value_usd: 1073232.0
+  month_pnl_usd: 1321972.0
+  month_roi_pct: 105.65
+  alltime_pnl_usd: 4575169.0
+- address: '0xde8a6d588f8067e761bac811a102e0146c721e41'
+  tags:
+  - month_roi_top
+  - week_roi_top
+  account_value_usd: 556233.0
+  month_pnl_usd: 398453.0
+  month_roi_pct: 224.13
+  alltime_pnl_usd: 441156.0
+- address: '0x99b3ba1c1b7ad83d0164d996e3d271ae8c842551'
+  tags:
+  - month_pnl_top
+  - month_roi_top
+  account_value_usd: 180785.0
+  month_pnl_usd: 801756.0
+  month_roi_pct: 400.88
+  alltime_pnl_usd: 801756.0
+- address: '0x1a27499553b12458fa1e0f22860bc99c4a2f5efb'
+  tags:
+  - month_roi_top
+  - week_roi_top
+  account_value_usd: 77411.0
+  month_pnl_usd: 142296.0
+  month_roi_pct: 694.82
+  alltime_pnl_usd: 51406.0
+- address: '0xf34c48f176e548c1e7ba4525b5680ba2ba9148ad'
+  tags:
+  - month_roi_top
+  - week_roi_top
+  account_value_usd: 55388.0
+  month_pnl_usd: 40060.0
+  month_roi_pct: 261.36
+  alltime_pnl_usd: 18935.0
+- address: '0x973e5f332014f2a40bb7f176b369f303def28f7b'
+  tags:
+  - month_roi_top
+  - week_roi_top
+  account_value_usd: 10507.0
+  month_pnl_usd: 7406.0
+  month_roi_pct: 238.81
+  alltime_pnl_usd: -2356.0
+- address: '0x010461c14e146ac35fe42271bdc1134ee31c703a'
+  tags:
+  - allTime_pnl_top
+  account_value_usd: 114043589.0
+  month_pnl_usd: -72394.0
+  month_roi_pct: -0.05
+  alltime_pnl_usd: 47064462.0
+- address: '0x31ca8395cf837de08b24da3f660e77761dfb974b'
+  tags:
+  - allTime_pnl_top
+  account_value_usd: 114034272.0
+  month_pnl_usd: -326474.0
+  month_roi_pct: -0.24
+  alltime_pnl_usd: 37173681.0
+- address: '0x7dacca323e44f168494c779bb5e7483c468ef410'
+  tags:
+  - allTime_pnl_top
+  account_value_usd: 29755440.0
+  month_pnl_usd: -23899.0
+  month_roi_pct: -0.07
+  alltime_pnl_usd: 47582717.0
+- address: '0xeadc152ac1014ace57c6b353f89adf5faffe9d55'
+  tags:
+  - month_pnl_top
+  account_value_usd: 26245189.0
+  month_pnl_usd: 7110566.0
+  month_roi_pct: 25.05
+  alltime_pnl_usd: -13504173.0
+- address: '0x162cc7c861ebd0c06b3d72319201150482518185'
+  tags:
+  - allTime_pnl_top
+  account_value_usd: 25405295.0
+  month_pnl_usd: 447396.0
+  month_roi_pct: 1.01
+  alltime_pnl_usd: 42270804.0
+- address: '0xb83de012dba672c76a7dbbbf3e459cb59d7d6e36'
+  tags:
+  - allTime_pnl_top
+  account_value_usd: 25336159.0
+  month_pnl_usd: -3244633.0
+  month_roi_pct: -4.36
+  alltime_pnl_usd: 124203954.0
+- address: '0x0ddf9bae2af4b874b96d287a5ad42eb47138a902'
+  tags:
+  - allTime_pnl_top
+  account_value_usd: 24189473.0
+  month_pnl_usd: -7952955.0
+  month_roi_pct: -24.74
+  alltime_pnl_usd: 15950139.0
+- address: '0x519c721de735f7c9e6146d167852e60d60496a47'
+  tags:
+  - allTime_pnl_top
+  account_value_usd: 23945246.0
+  month_pnl_usd: 527188.0
+  month_roi_pct: 1.64
+  alltime_pnl_usd: 15507298.0
+- address: '0xfa0f450d61acd11bc0f6a986260fc25c1758ccb9'
+  tags:
+  - month_pnl_top
+  account_value_usd: 22573906.0
+  month_pnl_usd: 885269.0
+  month_roi_pct: 4.08
+  alltime_pnl_usd: 0.0
+- address: '0x6555e1cc97d3cba6eaddebbcd7ca51d75771e0b8'
+  tags:
+  - month_pnl_top
+  account_value_usd: 21280411.0
+  month_pnl_usd: 742446.0
+  month_roi_pct: 3.29
+  alltime_pnl_usd: 7796856.0
+- address: '0x57dd78cd36e76e2011e8f6dc25cabbaba994494b'
+  tags:
+  - month_pnl_top
+  account_value_usd: 19528032.0
+  month_pnl_usd: 2169389.0
+  month_roi_pct: 11.34
+  alltime_pnl_usd: -13845337.0
+- address: '0x0b8aa35c28b7c6ab18f11dc168f437a8a69fd4f8'
+  tags:
+  - week_pnl_top
+  account_value_usd: 19326352.0
+  month_pnl_usd: -47877.0
+  month_roi_pct: -0.24
+  alltime_pnl_usd: -1505017.0
+- address: '0x880ac484a1743862989a441d6d867238c7aa311c'
+  tags:
+  - allTime_pnl_top
+  account_value_usd: 17846404.0
+  month_pnl_usd: 392016.0
+  month_roi_pct: 1.31
+  alltime_pnl_usd: 113750451.0
+- address: '0x77375a8c9d13bf79afb2a87f1b0ac1dfd5f5bf66'
+  tags:
+  - allTime_pnl_top
+  account_value_usd: 17576469.0
+  month_pnl_usd: 510292.0
+  month_roi_pct: 2.99
+  alltime_pnl_usd: 28787286.0
+- address: '0x7be1cba648ebe1ab8084244d23f28d68a86480d8'
+  tags:
+  - month_pnl_top
+  account_value_usd: 17380093.0
+  month_pnl_usd: 786333.0
+  month_roi_pct: 4.74
+  alltime_pnl_usd: 12636327.0
+- address: '0x98265c164a55b7b348bc3c4ab0bf109e047fed8a'
+  tags:
+  - week_pnl_top
+  account_value_usd: 16393341.0
+  month_pnl_usd: 431430.0
+  month_roi_pct: 2.7
+  alltime_pnl_usd: -1550461.0
+- address: '0xa98143608a6846453c88f29506d64a8b85532e65'
+  tags:
+  - week_pnl_top
+  account_value_usd: 15888506.0
+  month_pnl_usd: -1424008.0
+  month_roi_pct: -7.53
+  alltime_pnl_usd: -1361275.0
+- address: '0x31dea2516beee92135b96f464eeec3cf292a13f2'
+  tags:
+  - allTime_pnl_top
+  account_value_usd: 15434493.0
+  month_pnl_usd: 99742.0
+  month_roi_pct: 0.65
+  alltime_pnl_usd: 16661551.0
+- address: '0xdcac85ecae7148886029c20e661d848a4de99ce2'
+  tags:
+  - allTime_pnl_top
+  account_value_usd: 15294294.0
+  month_pnl_usd: -292058.0
+  month_roi_pct: -3.55
+  alltime_pnl_usd: 21345872.0
+- address: '0xaefcc9cacbe0e41978bef1818358f471848de9cb'
+  tags:
+  - month_pnl_top
+  account_value_usd: 14638922.0
+  month_pnl_usd: 1078466.0
+  month_roi_pct: 5.35
+  alltime_pnl_usd: 9303758.0
+- address: '0x64a4fbb71858f681f3fa10a42b34180a9a48088d'
+  tags:
+  - month_pnl_top
+  account_value_usd: 14067126.0
+  month_pnl_usd: 1208683.0
+  month_roi_pct: 5.39
+  alltime_pnl_usd: 798134.0
+- address: '0xeee0d806e4f0a427277433d6b580619918770b53'
+  tags:
+  - month_pnl_top
+  account_value_usd: 13166074.0
+  month_pnl_usd: 1670843.0
+  month_roi_pct: 14.54
+  alltime_pnl_usd: 999465.0
+- address: '0xd8c5228c515db3043dfa0c8cd6f22450ee9a99b0'
+  tags:
+  - week_pnl_top
+  account_value_usd: 13018005.0
+  month_pnl_usd: 677572.0
+  month_roi_pct: 5.4
+  alltime_pnl_usd: 2677703.0
+- address: '0x936cf4fb95c30ce83f658b5bbb247e4bb381bb0f'
+  tags:
+  - month_pnl_top
+  account_value_usd: 12379434.0
+  month_pnl_usd: 2357829.0
+  month_roi_pct: 5.58
+  alltime_pnl_usd: 4797143.0
+- address: '0x9c89f595f5515609ad61f6fda94beff85ae6600e'
+  tags:
+  - month_pnl_top
+  account_value_usd: 11124741.0
+  month_pnl_usd: 1062314.0
+  month_roi_pct: 10.56
+  alltime_pnl_usd: -3724456.0
+- address: '0xa65ce1d604fa901c13aa29f2126a57d9032e412b'
+  tags:
+  - month_pnl_top
+  account_value_usd: 11124032.0
+  month_pnl_usd: 1290892.0
+  month_roi_pct: 13.13
+  alltime_pnl_usd: 4166850.0
+- address: '0x5b5d51203a0f9079f8aeb098a6523a13f298c060'
+  tags:
+  - allTime_pnl_top
+  account_value_usd: 10909789.0
+  month_pnl_usd: 687498.0
+  month_roi_pct: 1.19
+  alltime_pnl_usd: 180215452.0
+- address: '0x71dfc07de32c2ebf1c4801f4b1c9e40b76d4a23d'
+  tags:
+  - allTime_pnl_top
+  account_value_usd: 9288684.0
+  month_pnl_usd: -4026044.0
+  month_roi_pct: -30.23
+  alltime_pnl_usd: 14684973.0
+- address: '0xd4c1f7e8d876c4749228d515473d36f919583d1d'
+  tags:
+  - allTime_pnl_top
+  account_value_usd: 9187042.0
+  month_pnl_usd: -85107.0
+  month_roi_pct: -0.92
+  alltime_pnl_usd: 29950299.0
+- address: '0x9bbb821a51d9c0ef24dd8592e9caad7fc469bbf2'
+  tags:
+  - week_pnl_top
+  account_value_usd: 8736700.0
+  month_pnl_usd: 306054.0
+  month_roi_pct: 3.58
+  alltime_pnl_usd: 396879.0
+- address: '0xaf0fdd39e5d92499b0ed9f68693da99c0ec1e92e'
+  tags:
+  - allTime_pnl_top
+  account_value_usd: 8441197.0
+  month_pnl_usd: -1072530.0
+  month_roi_pct: -10.4
+  alltime_pnl_usd: 17796780.0
+- address: '0xea0027b6ea9b6d7d401b5266979cc3b3ca87a918'
+  tags:
+  - month_pnl_top
+  account_value_usd: 8335416.0
+  month_pnl_usd: 1390687.0
+  month_roi_pct: 20.03
+  alltime_pnl_usd: 3335915.0
+- address: '0x8ae4c5b303bc77c3aa68f2b71f37c9fa6d3b3d60'
+  tags:
+  - month_pnl_top
+  account_value_usd: 7563616.0
+  month_pnl_usd: 2003037.0
+  month_roi_pct: 34.16
+  alltime_pnl_usd: -2737124.0
+- address: '0x6859da14835424957a1e6b397d8026b1d9ff7e1e'
+  tags:
+  - allTime_pnl_top
+  account_value_usd: 7395716.0
+  month_pnl_usd: -1005150.0
+  month_roi_pct: -13.05
+  alltime_pnl_usd: 24035549.0
+- address: '0x66f463866512fc337c89bad2032acbe38ee38836'
+  tags:
+  - week_pnl_top
+  account_value_usd: 7257560.0
+  month_pnl_usd: 580213.0
+  month_roi_pct: 8.69
+  alltime_pnl_usd: 580213.0
+- address: '0x6d7823cd5c3d9dcd63e6a8021b475e0c7c94b291'
+  tags:
+  - month_pnl_top
+  account_value_usd: 7166132.0
+  month_pnl_usd: 949111.0
+  month_roi_pct: 11.51
+  alltime_pnl_usd: 6886527.0
+- address: '0x2025137a136bea7446deba681cbfc7cf1970840e'
+  tags:
+  - month_pnl_top
+  account_value_usd: 6951609.0
+  month_pnl_usd: 799129.0
+  month_roi_pct: 11.66
+  alltime_pnl_usd: 12201883.0
+- address: '0x8cc94dc843e1ea7a19805e0cca43001123512b6a'
+  tags:
+  - allTime_pnl_top
+  account_value_usd: 6707005.0
+  month_pnl_usd: -595348.0
+  month_roi_pct: -4.98
+  alltime_pnl_usd: 20071752.0
+- address: '0x418aa6bf98a2b2bc93779f810330d88cde488888'
+  tags:
+  - allTime_pnl_top
+  account_value_usd: 6495771.0
+  month_pnl_usd: -1642827.0
+  month_roi_pct: -24.85
+  alltime_pnl_usd: 33661953.0
+- address: '0xb3e475368ed0fa0ad23c04de0423d48a0758806f'
+  tags:
+  - allTime_pnl_top
+  account_value_usd: 6252313.0
+  month_pnl_usd: 46781.0
+  month_roi_pct: 0.75
+  alltime_pnl_usd: 14402238.0
+- address: '0x61ceef212ff4a86933c69fb6aca2fe35d8f2a62b'
+  tags:
+  - month_pnl_top
+  account_value_usd: 6151956.0
+  month_pnl_usd: 4403646.0
+  month_roi_pct: 39.19
+  alltime_pnl_usd: 8050940.0
+- address: '0x123dbca6a27005a3c4ce10cb66ee8ece8fc13bff'
+  tags:
+  - allTime_pnl_top
+  account_value_usd: 5931731.0
+  month_pnl_usd: -181251.0
+  month_roi_pct: -2.85
+  alltime_pnl_usd: 26497531.0
+- address: '0xa2ce501d9c0c5e23d34272f84402cfb7835b3126'
+  tags:
+  - month_pnl_top
+  account_value_usd: 5911656.0
+  month_pnl_usd: 967967.0
+  month_roi_pct: 23.6
+  alltime_pnl_usd: -31733994.0
+- address: '0xa875890465da20062bcf3b024bf7d54e69c725a8'
+  tags:
+  - month_pnl_top
+  account_value_usd: 5872384.0
+  month_pnl_usd: 1373514.0
+  month_roi_pct: 18.6
+  alltime_pnl_usd: 1758226.0
+- address: '0x48d826da83e69844f2f84b2db50703a933d137a2'
+  tags:
+  - week_pnl_top
+  account_value_usd: 5811983.0
+  month_pnl_usd: 191458.0
+  month_roi_pct: 2.8
+  alltime_pnl_usd: 5049887.0
+- address: '0x7717a7a245d9f950e586822b8c9b46863ed7bd7e'
+  tags:
+  - allTime_pnl_top
+  account_value_usd: 5766363.0
+  month_pnl_usd: -131760.0
+  month_roi_pct: -1.67
+  alltime_pnl_usd: 20656229.0
+- address: '0x004edcd40360e293e4cf260d2ebdf8c7076c1bb8'
+  tags:
+  - week_pnl_top
+  account_value_usd: 5521748.0
+  month_pnl_usd: -419527.0
+  month_roi_pct: -7.06
+  alltime_pnl_usd: -540071.0
+- address: '0x8e096995c3e4a3f0bc5b3ea1cba94de2aa4d70c9'
+  tags:
+  - allTime_pnl_top
+  account_value_usd: 5434912.0
+  month_pnl_usd: -1786086.0
+  month_roi_pct: -24.73
+  alltime_pnl_usd: 58377168.0
+- address: '0xf47237079aeec748370d5ac827747f490e8f5d8b'
+  tags:
+  - month_pnl_top
+  account_value_usd: 5264660.0
+  month_pnl_usd: 1586910.0
+  month_roi_pct: 40.92
+  alltime_pnl_usd: -419552.0
+- address: '0x8bae3527e5a33fa0cf184f37bc112d071463ab6d'
+  tags:
+  - month_pnl_top
+  account_value_usd: 5258547.0
+  month_pnl_usd: 1727971.0
+  month_roi_pct: 39.9
+  alltime_pnl_usd: 8309548.0
+- address: '0xd8d5b0f7219aed171efb5ae2ac3b9941206f7349'
+  tags:
+  - month_pnl_top
+  account_value_usd: 5223563.0
+  month_pnl_usd: 989932.0
+  month_roi_pct: 67.65
+  alltime_pnl_usd: -13661139.0
+- address: '0x523852be2db1a76a0e088ecbff32e849544054e5'
+  tags:
+  - allTime_roi_top
+  account_value_usd: 4896671.0
+  month_pnl_usd: 644064.0
+  month_roi_pct: 15.15
+  alltime_pnl_usd: 6845688.0
+- address: '0x2d23b731e5f04996a2dfdbe434c7d922afdb5e00'
+  tags:
+  - allTime_pnl_top
+  account_value_usd: 4811173.0
+  month_pnl_usd: 168667.0
+  month_roi_pct: 2.5
+  alltime_pnl_usd: 17671807.0
+- address: '0x985f02b19dbc062e565c981aac5614baf2cf501f'
+  tags:
+  - month_pnl_top
+  account_value_usd: 4810535.0
+  month_pnl_usd: 1026546.0
+  month_roi_pct: 4.32
+  alltime_pnl_usd: 8490053.0
+- address: '0x9e8b1e51c642f4c8b87c6ba11c53d516a218afc4'
+  tags:
+  - allTime_pnl_top
+  account_value_usd: 4775929.0
+  month_pnl_usd: 240528.0
+  month_roi_pct: 5.3
+  alltime_pnl_usd: 18222997.0
+- address: '0x6666885961fec8ed58ddb45637ea41c02d6423f5'
+  tags:
+  - month_pnl_top
+  account_value_usd: 4707359.0
+  month_pnl_usd: 816712.0
+  month_roi_pct: 20.99
+  alltime_pnl_usd: 557260.0
+- address: '0xe2823659be02e0f48a4660e4da008b5e1abfdf29'
+  tags:
+  - month_pnl_top
+  account_value_usd: 4638895.0
+  month_pnl_usd: 1982815.0
+  month_roi_pct: 42.04
+  alltime_pnl_usd: 767951.0
+- address: '0xdf9ea6ec3b7109935ccb4fb267e15ac1fb077ab1'
+  tags:
+  - week_pnl_top
+  account_value_usd: 4313074.0
+  month_pnl_usd: 541527.0
+  month_roi_pct: 13.89
+  alltime_pnl_usd: 9626951.0
+- address: '0xcb58b8f5ec6d47985f0728465c25a08ef9ad2c7b'
+  tags:
+  - month_pnl_top
+  account_value_usd: 4183479.0
+  month_pnl_usd: 922526.0
+  month_roi_pct: 26.2
+  alltime_pnl_usd: 8307006.0
+- address: '0x020ca66c30bec2c4fe3861a94e4db4a498a35872'
+  tags:
+  - month_pnl_top
+  account_value_usd: 4127547.0
+  month_pnl_usd: 2394989.0
+  month_roi_pct: 138.23
+  alltime_pnl_usd: -26248205.0
+- address: '0xa31441e058492bc7cfffda9aa7623c407ae83a81'
+  tags:
+  - month_pnl_top
+  account_value_usd: 3977346.0
+  month_pnl_usd: 5900014.0
+  month_roi_pct: 39.28
+  alltime_pnl_usd: 8113889.0
+- address: '0xf5d81a135f756ca16544e53c20fc20643ec3ad53'
+  tags:
+  - month_pnl_top
+  account_value_usd: 3972962.0
+  month_pnl_usd: 768200.0
+  month_roi_pct: 19.8
+  alltime_pnl_usd: 891356.0
+- address: '0x51f63885534cb494f4592a0311551f369bff2b39'
+  tags:
+  - week_pnl_top
+  account_value_usd: 3887424.0
+  month_pnl_usd: 229628.0
+  month_roi_pct: 4.56
+  alltime_pnl_usd: -1079898.0
+- address: '0xda744273f80b22412417f7cfe0503f3d721f987d'
+  tags:
+  - month_pnl_top
+  account_value_usd: 3623903.0
+  month_pnl_usd: 771902.0
+  month_roi_pct: 9.89
+  alltime_pnl_usd: -436809.0
+- address: '0xf517639a8872e756ac98d3c65507d2ebc25cc032'
+  tags:
+  - allTime_pnl_top
+  account_value_usd: 3508790.0
+  month_pnl_usd: -492204.0
+  month_roi_pct: -11.18
+  alltime_pnl_usd: 25274318.0
+- address: '0x888e000c78b8f1aada5b3c99f880794907b76d77'
+  tags:
+  - week_pnl_top
+  account_value_usd: 3375302.0
+  month_pnl_usd: 115622.0
+  month_roi_pct: 3.55
+  alltime_pnl_usd: 3493198.0
+- address: '0x3ee505ba316879d246a8fd2b3d7ee63b51b44fab'
+  tags:
+  - month_pnl_top
+  account_value_usd: 3335516.0
+  month_pnl_usd: 995332.0
+  month_roi_pct: 35.04
+  alltime_pnl_usd: 1881881.0
+- address: '0x350e33a777d510616fbdb483d1de3b50d1edfcfb'
+  tags:
+  - month_pnl_top
+  account_value_usd: 3304400.0
+  month_pnl_usd: 1103913.0
+  month_roi_pct: 46.85
+  alltime_pnl_usd: 13696026.0
+- address: '0x3fc56e944aa7b1594c85861b2d46a07f82a2c0c1'
+  tags:
+  - allTime_pnl_top
+  account_value_usd: 3217514.0
+  month_pnl_usd: -228339.0
+  month_roi_pct: -5.97
+  alltime_pnl_usd: 18054713.0
+- address: '0x06cecfbac34101ae41c88ebc2450f8602b3d164b'
+  tags:
+  - allTime_pnl_top
+  account_value_usd: 3124882.0
+  month_pnl_usd: -539629.0
+  month_roi_pct: -14.62
+  alltime_pnl_usd: 14153556.0
+- address: '0xfe46a7a9861827d77752d05a9cb31508f80fee8c'
+  tags:
+  - week_pnl_top
+  account_value_usd: 3102708.0
+  month_pnl_usd: -144916.0
+  month_roi_pct: -4.46
+  alltime_pnl_usd: -144916.0
+- address: '0x795cfd1b03eafc11c4ec958b8a94cfc9aa64a242'
+  tags:
+  - month_pnl_top
+  account_value_usd: 3066069.0
+  month_pnl_usd: 1884107.0
+  month_roi_pct: 77.44
+  alltime_pnl_usd: 4236802.0
+- address: '0x7ee6b077b59f4417bc36d41bb65365644315db10'
+  tags:
+  - week_pnl_top
+  account_value_usd: 3042868.0
+  month_pnl_usd: 355648.0
+  month_roi_pct: 8.61
+  alltime_pnl_usd: 1047805.0
 - address: '0x45ab58a2034f03aa446baf3bb1d236706f866cbc'
   tags:
   - month_pnl_top
-  account_value_usd: 2581846.0
-  month_pnl_usd: 2264361.0
-  month_roi_pct: 96.11
-  alltime_pnl_usd: 8537570.0
-- address: '0xcab59c7a92b8f7c4d5cde72bb7669ee7d75b6e6e'
+  account_value_usd: 2636981.0
+  month_pnl_usd: 1898344.0
+  month_roi_pct: 78.82
+  alltime_pnl_usd: 8592705.0
+- address: '0x4a96036fb1529561fa3eeeb2781fad2d4f25500e'
+  tags:
+  - allTime_pnl_top
+  account_value_usd: 2584414.0
+  month_pnl_usd: -223534.0
+  month_roi_pct: -6.49
+  alltime_pnl_usd: 14693546.0
+- address: '0xa4dedda59f2908b92ae192cfd494839373bcb3c4'
+  tags:
+  - allTime_pnl_top
+  account_value_usd: 2574194.0
+  month_pnl_usd: 376822.0
+  month_roi_pct: 10.93
+  alltime_pnl_usd: 16762668.0
+- address: '0x7c930969fcf3e5a5c78bcf2e1cefda3f53e3c8fd'
+  tags:
+  - month_pnl_top
+  account_value_usd: 2047078.0
+  month_pnl_usd: 1052055.0
+  month_roi_pct: 104.62
+  alltime_pnl_usd: 4475024.0
+- address: '0xbfc79c444c41a74516bf31237ebf586a231480b4'
+  tags:
+  - allTime_pnl_top
+  account_value_usd: 1972329.0
+  month_pnl_usd: -245493.0
+  month_roi_pct: -11.07
+  alltime_pnl_usd: 17069192.0
+- address: '0x7a6d5fc57f6906f337c48fe2763c3a501304f79c'
+  tags:
+  - allTime_pnl_top
+  account_value_usd: 1864507.0
+  month_pnl_usd: 227405.0
+  month_roi_pct: 13.89
+  alltime_pnl_usd: 14490307.0
+- address: '0x9e8c646220613d68eaf2b947f46c2b4f52bf3f45'
+  tags:
+  - allTime_roi_top
+  account_value_usd: 1796902.0
+  month_pnl_usd: 54148.0
+  month_roi_pct: 3.11
+  alltime_pnl_usd: 3187366.0
+- address: '0xe4c6ae25959d7fc66cf2dd5965fb78c5e09c4048'
+  tags:
+  - allTime_pnl_top
+  account_value_usd: 1758374.0
+  month_pnl_usd: -106469.0
+  month_roi_pct: -5.58
+  alltime_pnl_usd: 13935074.0
+- address: '0xbc2a70be4bd276d82b3a5e6fa365ef96e6daa6e3'
+  tags:
+  - allTime_roi_top
+  account_value_usd: 1641795.0
+  month_pnl_usd: -131818.0
+  month_roi_pct: -30.33
+  alltime_pnl_usd: 2013240.0
+- address: '0x810cc4084a961173963e5fec9249203abaf31de1'
   tags:
   - week_roi_top
-  account_value_usd: 1325377.0
-  month_pnl_usd: -450662.0
-  month_roi_pct: -23.96
-  alltime_pnl_usd: -1961674.0
+  account_value_usd: 1171535.0
+  month_pnl_usd: 24509.0
+  month_roi_pct: 163.56
+  alltime_pnl_usd: 18422.0
+- address: '0xbe2c69eb3d7b8ee35cbe3a28293472be31179d75'
+  tags:
+  - allTime_roi_top
+  account_value_usd: 1125212.0
+  month_pnl_usd: 1500.0
+  month_roi_pct: 0.13
+  alltime_pnl_usd: 3826138.0
+- address: '0x06bc596fb16734f7abc3a5996b580be932c2fb72'
+  tags:
+  - week_pnl_top
+  account_value_usd: 1104211.0
+  month_pnl_usd: -715094.0
+  month_roi_pct: -24.86
+  alltime_pnl_usd: -4214774.0
+- address: '0xfdf891f2b214a4c9374d26595ec6d4080262e381'
+  tags:
+  - month_pnl_top
+  account_value_usd: 1093988.0
+  month_pnl_usd: 718034.0
+  month_roi_pct: 136.52
+  alltime_pnl_usd: -46127.0
 - address: '0x2e3d94f0562703b25c83308a05046ddaf9a8dd14'
   tags:
-  - alltime_pnl_top
+  - allTime_pnl_top
   account_value_usd: 1000000.0
   month_pnl_usd: -613514.0
   month_roi_pct: -38.02
   alltime_pnl_usd: 84592537.0
+- address: '0x08138243c8b2c5bb825763a7b065280a57af79e5'
+  tags:
+  - allTime_roi_top
+  account_value_usd: 981234.0
+  month_pnl_usd: 17719.0
+  month_roi_pct: 1.84
+  alltime_pnl_usd: 1170961.0
 - address: '0xcf67e4da9e9cd38c0afd26338d0fbddb3036eb24'
   tags:
   - month_roi_top
-  account_value_usd: 501680.0
-  month_pnl_usd: 451645.0
-  month_roi_pct: 904.99
-  alltime_pnl_usd: 451645.0
-- address: '0xeca57b3ab6fe52bf5ac90838e6a50116feac0afd'
+  account_value_usd: 754167.0
+  month_pnl_usd: 704132.0
+  month_roi_pct: 1428.15
+  alltime_pnl_usd: 704132.0
+- address: '0xdf86c7c9069e9bd5bac9d97e21f9aa10f728fb86'
   tags:
   - week_roi_top
-  account_value_usd: 420191.0
-  month_pnl_usd: 259936.0
-  month_roi_pct: 162.2
-  alltime_pnl_usd: -241736.0
-- address: '0x0b91df53289f693220ea06af8419116e45b0a4db'
+  account_value_usd: 721948.0
+  month_pnl_usd: 648111.0
+  month_roi_pct: 151.13
+  alltime_pnl_usd: 391292.0
+- address: '0x2fe21fc5130e953b862d4a6048cfd016ecf3974d'
+  tags:
+  - allTime_roi_top
+  account_value_usd: 700439.0
+  month_pnl_usd: -2144.0
+  month_roi_pct: -0.31
+  alltime_pnl_usd: 6331905.0
+- address: '0xf9fbfe77059b980cd8aef58204a3a66f9eaa0b98'
   tags:
   - month_roi_top
-  account_value_usd: 280937.0
-  month_pnl_usd: 1919.0
-  month_roi_pct: 1918.69
-  alltime_pnl_usd: 17234.0
-- address: '0x15a69a9e55b691a11f3d341e3d086746c47a09b7'
+  account_value_usd: 694691.0
+  month_pnl_usd: 490114.0
+  month_roi_pct: 239.14
+  alltime_pnl_usd: 495061.0
+- address: '0x2306ce07ddca3829cdb1a2a14653dbefc211a9f1'
+  tags:
+  - allTime_roi_top
+  account_value_usd: 671576.0
+  month_pnl_usd: 18616.0
+  month_roi_pct: 2.68
+  alltime_pnl_usd: 1666448.0
+- address: '0x31c56d873dad3d64ceaf50faadfbd8b4559a2216'
+  tags:
+  - allTime_roi_top
+  account_value_usd: 631746.0
+  month_pnl_usd: 23277.0
+  month_roi_pct: 3.13
+  alltime_pnl_usd: 797923.0
+- address: '0x6bb971430554e3af58fbd469bce46ab2359a2d23'
+  tags:
+  - month_pnl_top
+  account_value_usd: 627733.0
+  month_pnl_usd: 988142.0
+  month_roi_pct: 20.2
+  alltime_pnl_usd: 1342776.0
+- address: '0x987163b6b482c30c2f5f3aa2760109668eb0091d'
+  tags:
+  - allTime_roi_top
+  account_value_usd: 573965.0
+  month_pnl_usd: -8716.0
+  month_roi_pct: -1.11
+  alltime_pnl_usd: 5058205.0
+- address: '0xbac2d8e1e3ef8cba378564667be59a2e2d8ed897'
+  tags:
+  - week_roi_top
+  account_value_usd: 557244.0
+  month_pnl_usd: -112808.0
+  month_roi_pct: -16.81
+  alltime_pnl_usd: -422375.0
+- address: '0x0884051c662892bfcd8a132d1404ab8a3a409cea'
   tags:
   - month_roi_top
-  account_value_usd: 250305.0
-  month_pnl_usd: 12318.0
-  month_roi_pct: 12317.77
-  alltime_pnl_usd: 66750.0
-- address: '0x7211ac2d18523d0546609c0aeabc234ff06be8e8'
+  account_value_usd: 546224.0
+  month_pnl_usd: 479206.0
+  month_roi_pct: 715.04
+  alltime_pnl_usd: -11418324.0
+- address: '0x01ffcc7285866e5cee14c8e807cb2e8d5f61079f'
+  tags:
+  - allTime_roi_top
+  account_value_usd: 505175.0
+  month_pnl_usd: 9742.0
+  month_roi_pct: 1.95
+  alltime_pnl_usd: 863825.0
+- address: '0x1aa780bb10425b86bcf05ecbb7953f9a93729ed9'
+  tags:
+  - month_pnl_top
+  account_value_usd: 500109.0
+  month_pnl_usd: 1071722.0
+  month_roi_pct: 130.55
+  alltime_pnl_usd: 3739618.0
+- address: '0xb88df30e615c0e63237decfaece9fd958f4ae769'
+  tags:
+  - allTime_roi_top
+  account_value_usd: 455352.0
+  month_pnl_usd: 6823.0
+  month_roi_pct: 1.52
+  alltime_pnl_usd: 1026326.0
+- address: '0x3c516f085e94177eaf0bdfb5b5eb1ab71052d064'
+  tags:
+  - allTime_roi_top
+  account_value_usd: 438401.0
+  month_pnl_usd: 5448.0
+  month_roi_pct: 1.25
+  alltime_pnl_usd: 1130787.0
+- address: '0xb4a9964201c213af0c9c7f62af561813c9a2f1f7'
+  tags:
+  - allTime_roi_top
+  account_value_usd: 434953.0
+  month_pnl_usd: 36182.0
+  month_roi_pct: 9.07
+  alltime_pnl_usd: 4946911.0
+- address: '0x3d643dabed5e1675ffc6a4608d095c11943ef551'
+  tags:
+  - allTime_roi_top
+  account_value_usd: 428482.0
+  month_pnl_usd: 17146.0
+  month_roi_pct: 2.81
+  alltime_pnl_usd: 1721263.0
+- address: '0x164e9765e50495b0a19770682cb30d442bda9c64'
+  tags:
+  - allTime_roi_top
+  account_value_usd: 412810.0
+  month_pnl_usd: 14897.0
+  month_roi_pct: 1.86
+  alltime_pnl_usd: 2469568.0
+- address: '0x55b48b41e6f1b3799f531bdf80e630f961de0161'
+  tags:
+  - allTime_roi_top
+  account_value_usd: 363872.0
+  month_pnl_usd: -2685.0
+  month_roi_pct: -0.73
+  alltime_pnl_usd: 575011.0
+- address: '0x99b1098d9d50aa076f78bd26ab22e6abd3710729'
+  tags:
+  - allTime_pnl_top
+  account_value_usd: 351989.0
+  month_pnl_usd: 48341.0
+  month_roi_pct: 14.23
+  alltime_pnl_usd: 24279179.0
+- address: '0x04febde8d852931b73fd81c09904bb29d3a0e964'
+  tags:
+  - week_roi_top
+  account_value_usd: 340515.0
+  month_pnl_usd: 24359.0
+  month_roi_pct: 7.59
+  alltime_pnl_usd: 463191.0
+- address: '0x166866a2845506f6b4c817482fe53b4985882ea6'
+  tags:
+  - week_roi_top
+  account_value_usd: 285012.0
+  month_pnl_usd: 5522.0
+  month_roi_pct: 1.3
+  alltime_pnl_usd: 4423229.0
+- address: '0x6fefdc7b1f6e21c2df6564444547a88d3682e993'
+  tags:
+  - week_roi_top
+  account_value_usd: 283458.0
+  month_pnl_usd: 176197.0
+  month_roi_pct: 121.34
+  alltime_pnl_usd: -473096.0
+- address: '0xf8ca4bdc7db06ad819fe8aed62bf5fc9a13831f6'
+  tags:
+  - allTime_roi_top
+  account_value_usd: 278255.0
+  month_pnl_usd: 6255.0
+  month_roi_pct: 2.2
+  alltime_pnl_usd: 368835.0
+- address: '0x7e1ad5e2bbe30d6d202e7c41036ea0a07c560be9'
+  tags:
+  - week_roi_top
+  account_value_usd: 257288.0
+  month_pnl_usd: 163539.0
+  month_roi_pct: 78.62
+  alltime_pnl_usd: 152138.0
+- address: '0xab73d686716339ed1f96829e59a5960fa34ecd7a'
+  tags:
+  - week_roi_top
+  account_value_usd: 251319.0
+  month_pnl_usd: 30353.0
+  month_roi_pct: 13.74
+  alltime_pnl_usd: 621439.0
+- address: '0xc387339879190ec6bb5dd0ceae32f9e1d2ed386d'
   tags:
   - month_roi_top
-  account_value_usd: 232531.0
-  month_pnl_usd: 1779.0
-  month_roi_pct: 1778.7
-  alltime_pnl_usd: 1779.0
+  account_value_usd: 236369.0
+  month_pnl_usd: 195857.0
+  month_roi_pct: 352.19
+  alltime_pnl_usd: 232319.0
+- address: '0x2bf9a0ef83d8066189b5caee94c57114a67540ab'
+  tags:
+  - month_roi_top
+  account_value_usd: 225231.0
+  month_pnl_usd: 151439.0
+  month_roi_pct: 205.22
+  alltime_pnl_usd: 139367.0
 - address: '0x93d45b22173746500123ec1b91677a6bf5f61813'
   tags:
-  - week_roi_top
+  - month_roi_top
   account_value_usd: 214708.0
   month_pnl_usd: 143337.0
   month_roi_pct: 200.83
   alltime_pnl_usd: 143337.0
-- address: '0x63a0d2f777f1b4161a51c99f5166132a08a3401d'
-  tags:
-  - week_roi_top
-  account_value_usd: 166295.0
-  month_pnl_usd: 78611.0
-  month_roi_pct: 89.65
-  alltime_pnl_usd: 82012.0
-- address: '0x675437e075f70c170f49ced83547cf3b6ff9aeb4'
+- address: '0x21ed8665dabe127dba334147de0a73c2978f6995'
   tags:
   - month_roi_top
-  account_value_usd: 150066.0
-  month_pnl_usd: 144665.0
-  month_roi_pct: 734.47
-  alltime_pnl_usd: -9212.0
-- address: '0x138e6dc721fecc585f2a9e39ba7d36e1771b1401'
+  account_value_usd: 214488.0
+  month_pnl_usd: 181033.0
+  month_roi_pct: 541.12
+  alltime_pnl_usd: 96430.0
+- address: '0xe799f6e2414c60340ebd1e1613f7a9b1857d2af3'
   tags:
-  - month_roi_top
-  account_value_usd: 148851.0
-  month_pnl_usd: 172631.0
-  month_roi_pct: 553.31
-  alltime_pnl_usd: 172631.0
-- address: '0x1a27499553b12458fa1e0f22860bc99c4a2f5efb'
+  - allTime_roi_top
+  account_value_usd: 206955.0
+  month_pnl_usd: 14754.0
+  month_roi_pct: 7.26
+  alltime_pnl_usd: 386222.0
+- address: '0x1e07c233341012327ba02455a1dedc45f2b499d6'
   tags:
-  - month_roi_top
-  account_value_usd: 124127.0
-  month_pnl_usd: 125530.0
-  month_roi_pct: 539.65
-  alltime_pnl_usd: 37422.0
+  - allTime_roi_top
+  account_value_usd: 198686.0
+  month_pnl_usd: -20062.0
+  month_roi_pct: -9.17
+  alltime_pnl_usd: 6233627.0
+- address: '0x30a712758896b443d447f486737b91b54161e64f'
+  tags:
+  - allTime_roi_top
+  account_value_usd: 177522.0
+  month_pnl_usd: 43423.0
+  month_roi_pct: 28.67
+  alltime_pnl_usd: 1822275.0
+- address: '0x9d484fc17cfdc556454c2e77368267ddc778e559'
+  tags:
+  - allTime_roi_top
+  account_value_usd: 173057.0
+  month_pnl_usd: 3693.0
+  month_roi_pct: 2.18
+  alltime_pnl_usd: 929762.0
+- address: '0xa8b695817a4054dd278f04746585dea6487e775d'
+  tags:
+  - month_pnl_top
+  account_value_usd: 171529.0
+  month_pnl_usd: 864247.0
+  month_roi_pct: 26.75
+  alltime_pnl_usd: 3715153.0
 - address: '0xb9ec4e1886adeefa95cb4d13873dc420dfe6b583'
   tags:
   - month_roi_top
-  account_value_usd: 106158.0
-  month_pnl_usd: 104444.0
-  month_roi_pct: 2393.13
-  alltime_pnl_usd: 13674.0
+  account_value_usd: 167687.0
+  month_pnl_usd: 165882.0
+  month_roi_pct: 3723.29
+  alltime_pnl_usd: 75202.0
+- address: '0x5c95c713df750216049c2427f8d960bd4c546a2f'
+  tags:
+  - allTime_roi_top
+  account_value_usd: 166810.0
+  month_pnl_usd: 4906.0
+  month_roi_pct: 3.03
+  alltime_pnl_usd: 261416.0
+- address: '0x3f9a0ee7bba80568a211b7b894dfda46e902fca1'
+  tags:
+  - allTime_roi_top
+  account_value_usd: 158425.0
+  month_pnl_usd: 4462.0
+  month_roi_pct: 2.9
+  alltime_pnl_usd: 221020.0
+- address: '0xe117d3d94b30f7e7aa4f29704d0d2f43c009b9a8'
+  tags:
+  - week_roi_top
+  account_value_usd: 140886.0
+  month_pnl_usd: -30382.0
+  month_roi_pct: -6.73
+  alltime_pnl_usd: 222608.0
+- address: '0x1df3d42f6876fc530a5e36d9e2470975e6131414'
+  tags:
+  - week_roi_top
+  account_value_usd: 139949.0
+  month_pnl_usd: 89779.0
+  month_roi_pct: 178.95
+  alltime_pnl_usd: -183319.0
+- address: '0x675437e075f70c170f49ced83547cf3b6ff9aeb4'
+  tags:
+  - month_roi_top
+  account_value_usd: 139111.0
+  month_pnl_usd: 147754.0
+  month_roi_pct: 1290.68
+  alltime_pnl_usd: -9167.0
+- address: '0x833b99b27dac651d02080f5e220e929df891db06'
+  tags:
+  - month_pnl_top
+  account_value_usd: 126432.0
+  month_pnl_usd: 1090201.0
+  month_roi_pct: 92.38
+  alltime_pnl_usd: 7578987.0
+- address: '0x4df63e746b71d3a8e151751a9594c8f06b7b7695'
+  tags:
+  - week_roi_top
+  account_value_usd: 123968.0
+  month_pnl_usd: 63853.0
+  month_roi_pct: 88.26
+  alltime_pnl_usd: 46997.0
+- address: '0xd6040a09a3403fe2a4474b50836d8f487140c675'
+  tags:
+  - month_roi_top
+  account_value_usd: 117195.0
+  month_pnl_usd: 116126.0
+  month_roi_pct: 198.97
+  alltime_pnl_usd: -145196.0
+- address: '0xad8e74fa529e7930db2aa2a3f73635bb095bca4f'
+  tags:
+  - month_roi_top
+  account_value_usd: 115972.0
+  month_pnl_usd: 145398.0
+  month_roi_pct: 293.3
+  alltime_pnl_usd: 145398.0
+- address: '0xd8c5d4d36ddb2634491076c3d3bc541ed4646d3f'
+  tags:
+  - month_roi_top
+  account_value_usd: 107908.0
+  month_pnl_usd: 76215.0
+  month_roi_pct: 240.49
+  alltime_pnl_usd: 1254960.0
+- address: '0x8477e447846c758f5a675856001ea72298fd9cb5'
+  tags:
+  - allTime_roi_top
+  account_value_usd: 102775.0
+  month_pnl_usd: 1662.0
+  month_roi_pct: 1.64
+  alltime_pnl_usd: 153030.0
 - address: '0xebdac3f02388754f9ef5b6b262dd03c827addb74'
   tags:
   - month_roi_top
   account_value_usd: 102329.0
-  month_pnl_usd: 2277.0
-  month_roi_pct: 2277.18
+  month_pnl_usd: 2268.0
+  month_roi_pct: 2268.01
   alltime_pnl_usd: 2353.0
+- address: '0xb3813bf2459b26097a618e74d425aa53622c52d2'
+  tags:
+  - month_roi_top
+  account_value_usd: 101928.0
+  month_pnl_usd: 79436.0
+  month_roi_pct: 329.7
+  alltime_pnl_usd: 17455.0
+- address: '0x6f6970b3060e350913da4755e98fd229faf23b02'
+  tags:
+  - month_roi_top
+  account_value_usd: 93849.0
+  month_pnl_usd: 68383.0
+  month_roi_pct: 220.09
+  alltime_pnl_usd: 65202.0
+- address: '0x5db201ae15f9702f0a0ff9f00b8c1c18355373d0'
+  tags:
+  - allTime_pnl_top
+  account_value_usd: 92860.0
+  month_pnl_usd: 77447.0
+  month_roi_pct: 23.99
+  alltime_pnl_usd: 17345875.0
+- address: '0xdb447156575ff746df339596dcc72347e77e7176'
+  tags:
+  - week_roi_top
+  account_value_usd: 92514.0
+  month_pnl_usd: 8842.0
+  month_roi_pct: 10.55
+  alltime_pnl_usd: -213851.0
+- address: '0x922197fd26290e3af3da0c35e7f4f299d95e8741'
+  tags:
+  - allTime_roi_top
+  account_value_usd: 90238.0
+  month_pnl_usd: 81512.0
+  month_roi_pct: 59.51
+  alltime_pnl_usd: 688791.0
+- address: '0x0f7707db61e6add7c377757c0aa8068a58e389cc'
+  tags:
+  - month_roi_top
+  account_value_usd: 86121.0
+  month_pnl_usd: 114220.0
+  month_roi_pct: 220.03
+  alltime_pnl_usd: 296125.0
+- address: '0x36076e4bfad9624d7feba562326fdfa2063ede23'
+  tags:
+  - allTime_roi_top
+  account_value_usd: 84051.0
+  month_pnl_usd: 52580.0
+  month_roi_pct: 81.05
+  alltime_pnl_usd: 356380.0
+- address: '0x25f000da36b4c56f37307faa4e93349ac17ac02c'
+  tags:
+  - week_roi_top
+  account_value_usd: 80792.0
+  month_pnl_usd: 7795.0
+  month_roi_pct: 10.6
+  alltime_pnl_usd: 69951.0
+- address: '0x138e6dc721fecc585f2a9e39ba7d36e1771b1401'
+  tags:
+  - month_roi_top
+  account_value_usd: 78139.0
+  month_pnl_usd: 146779.0
+  month_roi_pct: 470.45
+  alltime_pnl_usd: 146779.0
+- address: '0x47930c76790c865217472f2ddb4d14c640ee450a'
+  tags:
+  - allTime_roi_top
+  account_value_usd: 77795.0
+  month_pnl_usd: 1956.0
+  month_roi_pct: 2.03
+  alltime_pnl_usd: 1763316.0
+- address: '0xf259d849b283ae31c8417c815e588bcf4d19f4db'
+  tags:
+  - week_roi_top
+  account_value_usd: 68682.0
+  month_pnl_usd: 10372.0
+  month_roi_pct: 17.79
+  alltime_pnl_usd: 148060.0
 - address: '0x25699fd4882257697a36284b5b39c1fc3ffd4212'
   tags:
   - month_roi_top
-  account_value_usd: 67343.0
-  month_pnl_usd: 57737.0
-  month_roi_pct: 601.04
-  alltime_pnl_usd: 652592.0
-- address: '0x7118dd56e90cb9312a135129800c79784495231b'
-  tags:
-  - week_roi_top
-  account_value_usd: 60778.0
-  month_pnl_usd: 184640.0
-  month_roi_pct: 184.46
-  alltime_pnl_usd: 184640.0
-- address: '0x64276a44aa401a563b9229c735eae77e451586cb'
+  account_value_usd: 67329.0
+  month_pnl_usd: 57599.0
+  month_roi_pct: 592.03
+  alltime_pnl_usd: 652578.0
+- address: '0x7a3df509d9450647540792c8fdf8e11d6dd7df4f'
   tags:
   - month_roi_top
-  account_value_usd: 55714.0
-  month_pnl_usd: 49135.0
-  month_roi_pct: 746.79
-  alltime_pnl_usd: -36902.0
-- address: '0xe0c8cbaf63c428cf217035458a7088d82e41e245'
+  account_value_usd: 66579.0
+  month_pnl_usd: 51579.0
+  month_roi_pct: 343.86
+  alltime_pnl_usd: 51579.0
+- address: '0xfdfb306dbff80664bd1f61699089ddead7d7dbb9'
   tags:
   - week_roi_top
-  account_value_usd: 43981.0
-  month_pnl_usd: -46076.0
-  month_roi_pct: -51.16
-  alltime_pnl_usd: -27595.0
-- address: '0xf8ed2360d4a1ef00f2e92c46f7f2586765eb35aa'
-  tags:
-  - week_roi_top
-  account_value_usd: 30326.0
-  month_pnl_usd: -19517.0
-  month_roi_pct: -39.16
-  alltime_pnl_usd: -38970.0
-- address: '0xe392e9008c49e7f82e7927a741fcb12799ebdb2b'
+  account_value_usd: 64227.0
+  month_pnl_usd: -3773.0
+  month_roi_pct: -3.34
+  alltime_pnl_usd: 131979.0
+- address: '0x7928367337f2315e54b0e2809eae446c99593aa8'
   tags:
   - month_roi_top
-  account_value_usd: 28663.0
-  month_pnl_usd: 28398.0
-  month_roi_pct: 10650.31
-  alltime_pnl_usd: 23241.0
-- address: '0x34f6b5138c4db772a8e67e1dd06c075245e78daa'
+  account_value_usd: 63600.0
+  month_pnl_usd: 89877.0
+  month_roi_pct: 302.39
+  alltime_pnl_usd: -771260.0
+- address: '0xedc3bcac96833616b45be1c5e7bbc3ca8b2fe60c'
+  tags:
+  - month_roi_top
+  account_value_usd: 60925.0
+  month_pnl_usd: 89579.0
+  month_roi_pct: 251.43
+  alltime_pnl_usd: 111985.0
+- address: '0xe0c8d0d390454dc98977cf53123244d74c9478c1'
+  tags:
+  - month_roi_top
+  account_value_usd: 59831.0
+  month_pnl_usd: 44716.0
+  month_roi_pct: 295.85
+  alltime_pnl_usd: -707038.0
+- address: '0x9f3e77cb89df964003053aa5b438e5697c77f4f9'
+  tags:
+  - allTime_roi_top
+  account_value_usd: 55956.0
+  month_pnl_usd: 12789.0
+  month_roi_pct: 29.63
+  alltime_pnl_usd: 442127.0
+- address: '0x5b9306593ae710a66832c4101e019e3e96f65d0a'
+  tags:
+  - month_pnl_top
+  account_value_usd: 50246.0
+  month_pnl_usd: 999621.0
+  month_roi_pct: 8.26
+  alltime_pnl_usd: 8097499.0
+- address: '0x417ac47ab85ff79254a541fd6a9fdff23852a9a4'
   tags:
   - week_roi_top
-  account_value_usd: 24125.0
-  month_pnl_usd: 17091.0
-  month_roi_pct: 242.99
-  alltime_pnl_usd: -15561.0
+  account_value_usd: 47586.0
+  month_pnl_usd: 5770.0
+  month_roi_pct: 11.87
+  alltime_pnl_usd: 631047.0
+- address: '0x0a391e4fbc2098dc4aab762880e510049dd66312'
+  tags:
+  - month_roi_top
+  account_value_usd: 44666.0
+  month_pnl_usd: 13872.0
+  month_roi_pct: 647.13
+  alltime_pnl_usd: 50873.0
+- address: '0x1bfcfde0b5f0916bc6d8274e882c0dca3bc30959'
+  tags:
+  - month_roi_top
+  account_value_usd: 43541.0
+  month_pnl_usd: 34310.0
+  month_roi_pct: 230.96
+  alltime_pnl_usd: -165770.0
+- address: '0x53ad68079890e9d72a5bb4eb79079f19c32aeca4'
+  tags:
+  - month_pnl_top
+  account_value_usd: 42559.0
+  month_pnl_usd: 974524.0
+  month_roi_pct: 17.11
+  alltime_pnl_usd: 813634.0
+- address: '0x5a3a3f3c2b031d514810a5ad6034daf973e5ee7a'
+  tags:
+  - month_roi_top
+  account_value_usd: 41125.0
+  month_pnl_usd: 31760.0
+  month_roi_pct: 344.64
+  alltime_pnl_usd: 3177.0
+- address: '0x1e5c797a569276bda2ee21750186000e01d2bb5b'
+  tags:
+  - allTime_roi_top
+  account_value_usd: 41019.0
+  month_pnl_usd: -3100.0
+  month_roi_pct: -7.03
+  alltime_pnl_usd: 2173341.0
+- address: '0xce629009309c3ca05df55b9d54005aeaa0a4c18a'
+  tags:
+  - month_roi_top
+  account_value_usd: 37805.0
+  month_pnl_usd: 26871.0
+  month_roi_pct: 239.57
+  alltime_pnl_usd: 23841.0
+- address: '0x7e91816a06f036011553a18f2422c50d108dbfc0'
+  tags:
+  - week_roi_top
+  account_value_usd: 37075.0
+  month_pnl_usd: -11967.0
+  month_roi_pct: -24.4
+  alltime_pnl_usd: -11967.0
+- address: '0x7759d4dca0b4467314ba08d22dfdb6dac9c22a8b'
+  tags:
+  - allTime_roi_top
+  account_value_usd: 36898.0
+  month_pnl_usd: 1883.0
+  month_roi_pct: 5.38
+  alltime_pnl_usd: 141449.0
+- address: '0x8dc34ec570b92888f77adc3edfe74c8e987fb655'
+  tags:
+  - week_roi_top
+  account_value_usd: 36310.0
+  month_pnl_usd: 20750.0
+  month_roi_pct: 133.36
+  alltime_pnl_usd: 101529.0
 - address: '0x02a6a59224c8838772931d596a2f74d8edab9112'
   tags:
   - month_roi_top
-  account_value_usd: 23754.0
-  month_pnl_usd: 54327.0
-  month_roi_pct: 570.25
-  alltime_pnl_usd: 33356.0
-- address: '0xc3592bb216418a817ddaad596c4b93ea04e617e3'
+  account_value_usd: 36276.0
+  month_pnl_usd: 63380.0
+  month_roi_pct: 487.69
+  alltime_pnl_usd: 45878.0
+- address: '0x584d8bb48dfdf3cc2a766b5c8261866ae54bd583'
+  tags:
+  - allTime_roi_top
+  account_value_usd: 35932.0
+  month_pnl_usd: 6811.0
+  month_roi_pct: 10.44
+  alltime_pnl_usd: 113660.0
+- address: '0x0c1a14341119c84ab0bc65910851d11eef8b46f4'
+  tags:
+  - allTime_roi_top
+  account_value_usd: 34295.0
+  month_pnl_usd: 1020.0
+  month_roi_pct: 3.06
+  alltime_pnl_usd: 44167.0
+- address: '0x8d7d49eb9715a93eef4843b357cad5f5b9be7bda'
   tags:
   - week_roi_top
-  account_value_usd: 23287.0
-  month_pnl_usd: 1922.0
-  month_roi_pct: 9.0
-  alltime_pnl_usd: -33413.0
+  account_value_usd: 33299.0
+  month_pnl_usd: 12315.0
+  month_roi_pct: 58.69
+  alltime_pnl_usd: 12315.0
+- address: '0x666f23fad5fd6362c2ea08a7fdf2c56f90daecc9'
+  tags:
+  - month_roi_top
+  account_value_usd: 31421.0
+  month_pnl_usd: 73594.0
+  month_roi_pct: 237.61
+  alltime_pnl_usd: 73594.0
+- address: '0x03f41ea5346172ed884ff4911543af5551de728c'
+  tags:
+  - month_roi_top
+  account_value_usd: 30446.0
+  month_pnl_usd: 51960.0
+  month_roi_pct: 334.59
+  alltime_pnl_usd: 48780.0
+- address: '0xe392e9008c49e7f82e7927a741fcb12799ebdb2b'
+  tags:
+  - month_roi_top
+  account_value_usd: 29912.0
+  month_pnl_usd: 30641.0
+  month_roi_pct: 11222.63
+  alltime_pnl_usd: 25490.0
+- address: '0x24907c58e080f2a9d1f31f25d555aa3d5a5e3419'
+  tags:
+  - week_roi_top
+  account_value_usd: 29539.0
+  month_pnl_usd: 7379.0
+  month_roi_pct: 33.3
+  alltime_pnl_usd: 43804.0
+- address: '0x9d60df42a75f4752851bdb8ebf66ad2435ff5e1f'
+  tags:
+  - month_roi_top
+  account_value_usd: 27503.0
+  month_pnl_usd: 18306.0
+  month_roi_pct: 199.06
+  alltime_pnl_usd: -25221.0
+- address: '0xea1541b67de0364de56820085b7a3cc78952a7ef'
+  tags:
+  - allTime_roi_top
+  account_value_usd: 27071.0
+  month_pnl_usd: 12445.0
+  month_roi_pct: 85.09
+  alltime_pnl_usd: 311666.0
+- address: '0x900b12854f11d7002713bb703694bd61ffcaf0f0'
+  tags:
+  - week_roi_top
+  account_value_usd: 23776.0
+  month_pnl_usd: 14557.0
+  month_roi_pct: 157.91
+  alltime_pnl_usd: 14557.0
+- address: '0x34f6b5138c4db772a8e67e1dd06c075245e78daa'
+  tags:
+  - month_roi_top
+  account_value_usd: 22819.0
+  month_pnl_usd: 43785.0
+  month_roi_pct: 622.49
+  alltime_pnl_usd: 11133.0
+- address: '0x796fadeab9503100f74c8cd8c0fc75281cbe55c7'
+  tags:
+  - month_roi_top
+  account_value_usd: 21293.0
+  month_pnl_usd: 16895.0
+  month_roi_pct: 312.99
+  alltime_pnl_usd: 1066.0
+- address: '0x13a322932669e2cb517da38a4dd343539a75fe2f'
+  tags:
+  - month_roi_top
+  account_value_usd: 21195.0
+  month_pnl_usd: 52737.0
+  month_roi_pct: 797.63
+  alltime_pnl_usd: 52737.0
+- address: '0xd8155b44c1487f7533279b27c6758931f5a91743'
+  tags:
+  - week_roi_top
+  account_value_usd: 19880.0
+  month_pnl_usd: -2404.0
+  month_roi_pct: -8.01
+  alltime_pnl_usd: 25328.0
+- address: '0x0daae6dc07e360e805c69af261467a4c92774eea'
+  tags:
+  - week_roi_top
+  account_value_usd: 19758.0
+  month_pnl_usd: -7850.0
+  month_roi_pct: -17.07
+  alltime_pnl_usd: 3379.0
+- address: '0x5de380ef1be9221f156748b65521ed3fa2a9bbbd'
+  tags:
+  - month_roi_top
+  account_value_usd: 19723.0
+  month_pnl_usd: 15768.0
+  month_roi_pct: 398.66
+  alltime_pnl_usd: 1172.0
+- address: '0xe70f1efff7f7ad16f7413f3dd5772b98361ff378'
+  tags:
+  - week_roi_top
+  account_value_usd: 19639.0
+  month_pnl_usd: -63827.0
+  month_roi_pct: -76.47
+  alltime_pnl_usd: -41360.0
+- address: '0x1d6479f1c903476fe3d1750a6335ca2486ffa5ba'
+  tags:
+  - month_roi_top
+  account_value_usd: 18755.0
+  month_pnl_usd: 37289.0
+  month_roi_pct: 282.88
+  alltime_pnl_usd: 35944.0
 - address: '0xee299a4eb1263236bc8ad8caa749839df1681ce8'
   tags:
   - month_roi_top
-  account_value_usd: 18608.0
-  month_pnl_usd: 21781.0
-  month_roi_pct: 676.18
-  alltime_pnl_usd: -1109.0
-- address: '0xa5d705e908dee4a5c54803ffa8cd9502fded5797'
-  tags:
-  - week_roi_top
-  account_value_usd: 18029.0
-  month_pnl_usd: 1804.0
-  month_roi_pct: 8.28
-  alltime_pnl_usd: -32374.0
-- address: '0x6ff75123fb65966ed0870a61d002004ec1775d78'
-  tags:
-  - week_roi_top
-  account_value_usd: 15152.0
-  month_pnl_usd: 4273.0
-  month_roi_pct: 38.23
-  alltime_pnl_usd: -10897.0
-- address: '0xd8bdbe0bf532eaa892a9a62dfc1f31674ae6c86e'
+  account_value_usd: 18683.0
+  month_pnl_usd: 21997.0
+  month_roi_pct: 680.72
+  alltime_pnl_usd: -861.0
+- address: '0x3efcc3536ac0c5371c2641243f0fb15e290e0bac'
   tags:
   - month_roi_top
-  account_value_usd: 14897.0
-  month_pnl_usd: 14812.0
-  month_roi_pct: 1060.87
-  alltime_pnl_usd: 12861.0
-- address: '0x8e70e8e2ddd5404b12fda47c49ca4b9b5e4af04e'
+  account_value_usd: 18596.0
+  month_pnl_usd: 14156.0
+  month_roi_pct: 275.19
+  alltime_pnl_usd: -105666.0
+- address: '0x8ebb29ada81119e7eea4b7feebb4756f018aeabc'
   tags:
   - month_roi_top
-  account_value_usd: 11459.0
-  month_pnl_usd: 29430.0
-  month_roi_pct: 649.5
-  alltime_pnl_usd: -21869.0
+  account_value_usd: 17845.0
+  month_pnl_usd: 23722.0
+  month_roi_pct: 230.11
+  alltime_pnl_usd: -26333.0
+- address: '0xaf5971a903e30b666dc15ded4d6bded78ccc0271'
+  tags:
+  - allTime_roi_top
+  account_value_usd: 17793.0
+  month_pnl_usd: -15977.0
+  month_roi_pct: -47.31
+  alltime_pnl_usd: 21284.0
+- address: '0xf06787919a792e966899fe4ee0562f5a62f0f611'
+  tags:
+  - allTime_roi_top
+  account_value_usd: 17480.0
+  month_pnl_usd: 11406.0
+  month_roi_pct: 187.77
+  alltime_pnl_usd: 2312997.0
 - address: '0xe30288b6b7fbaa15cd6432c3264b7e835cce8282'
   tags:
   - month_roi_top
-  account_value_usd: 10829.0
-  month_pnl_usd: 9901.0
-  month_roi_pct: 1067.67
-  alltime_pnl_usd: -17068.0
-- address: '0x3ef8ebcf9d3ae81e885e856c4810322b8e12d663'
+  account_value_usd: 16664.0
+  month_pnl_usd: 15741.0
+  month_roi_pct: 1697.35
+  alltime_pnl_usd: -11228.0
+- address: '0x2f79e7993359e37091f8298c9706c75243da65a5'
+  tags:
+  - month_roi_top
+  account_value_usd: 16285.0
+  month_pnl_usd: 13100.0
+  month_roi_pct: 411.32
+  alltime_pnl_usd: -149102.0
+- address: '0xc4adc4ab67c6356ef3c3167ea9f38302aadd444a'
+  tags:
+  - allTime_roi_top
+  account_value_usd: 15347.0
+  month_pnl_usd: -1214.0
+  month_roi_pct: -7.33
+  alltime_pnl_usd: 247246.0
+- address: '0xdbe10ec526c18ab0e18e56a22524a8c90cc1c2a1'
+  tags:
+  - allTime_roi_top
+  account_value_usd: 12220.0
+  month_pnl_usd: 1754.0
+  month_roi_pct: 16.59
+  alltime_pnl_usd: 97978.0
+- address: '0xd0ab21bf0e3c0c20ccb690a0ec45d203d755ac08'
   tags:
   - week_roi_top
-  account_value_usd: 10493.0
-  month_pnl_usd: -16157.0
-  month_roi_pct: -60.63
-  alltime_pnl_usd: -23602.0
+  account_value_usd: 10827.0
+  month_pnl_usd: 12311.0
+  month_roi_pct: 96.17
+  alltime_pnl_usd: 76585.0
+- address: '0x2e91bac65dd522a211ab4ef448e365b02a7859f9'
+  tags:
+  - week_roi_top
+  account_value_usd: 10674.0
+  month_pnl_usd: 1375.0
+  month_roi_pct: 13.47
+  alltime_pnl_usd: 11839.0
+- address: '0x94cb084cf4b8e758beff9c6fa90978b80344f860'
+  tags:
+  - month_roi_top
+  account_value_usd: 10658.0
+  month_pnl_usd: 12418.0
+  month_roi_pct: 341.17
+  alltime_pnl_usd: -4984.0
+- address: '0x899b2d61a5943dd2452cbc9ff5d158c63a2275dd'
+  tags:
+  - allTime_roi_top
+  account_value_usd: 10141.0
+  month_pnl_usd: 2225.0
+  month_roi_pct: 23.89
+  alltime_pnl_usd: 225931.0
