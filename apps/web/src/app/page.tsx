@@ -14,6 +14,7 @@ import { CryptoEnvPanel } from '@/components/dashboard/CryptoEnvPanel';
 import EquityCurve from '@/components/dashboard/EquityCurve';
 import SupertrendSignals from '@/components/dashboard/SupertrendSignals';
 import { SystemHealthBar } from '@/components/dashboard/SystemHealthBar';
+import { DataHealthPanel } from '@/components/dashboard/DataHealthPanel';
 
 interface DashboardData {
   timestamp: string;
@@ -138,6 +139,9 @@ export default function DashboardPage() {
       <TickerTape items={tickerItems} />
 
       <div style={{ padding: 16 }} className="space-y-3">
+        {/* Data Pipelines Health — top-level liveness for 3 systems */}
+        <DataHealthPanel />
+
         {/* System Health Bar (crypto + polymarket 雙系統並列) */}
         <SystemHealthBar
           crypto={{
