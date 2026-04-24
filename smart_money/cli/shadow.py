@@ -1,15 +1,19 @@
 """Shadow mode daemon — Phase 4.
 
-P4a (this revision): boot WS listener + REST reconciler, drain events
-from the queue and log them. No classifier / aggregator yet — those
-land in P4b/c.
+P4a: WS listener + REST reconciler → RawFillEvent queue.
+P4b (current): classifier turns RawFillEvent → Signal, persists position state.
+P4c (pending): aggregator + shadow simulator.
 
 Run:
-    python -m smart_money.cli.shadow --whitelist path/to/whitelist.yaml
-    python -m smart_money.cli.shadow --address 0xabc... --address 0xdef...
+    python -m smart_money.cli.shadow [--whitelist path/to/override.yaml]
 
-Graceful shutdown on SIGINT/SIGTERM: stops listener, cancels reconciler,
-drains remaining queue items, exits 0.
+Addresses to subscribe come from the dynamic whitelist:
+    1. latest sm_rankings top N (config: ranking.whitelist_size)
+    2. + manual include (from --whitelist yaml)
+    3. - manual exclude, stale-no-fills, warmup-demoted
+
+Graceful shutdown on SIGINT/SIGTERM. Exit codes: 0=clean, 1=no wallets,
+2=WS failed to connect, 3=store init failed.
 """
 from __future__ import annotations
 
@@ -19,11 +23,19 @@ import logging
 import signal
 import sys
 from pathlib import Path
+from uuid import UUID
 
+from smart_money.config import settings
 from smart_money.scanner.reconciler import FillsReconciler
 from smart_money.scanner.realtime import HLFillsListener
-from smart_money.scanner.seeds import is_valid_address, load_seed_file
+from smart_money.signals.classifier import classify
 from smart_money.signals.types import RawFillEvent
+from smart_money.signals.whitelist import (
+    WhitelistEntry,
+    build_whitelist,
+    load_manual_override,
+)
+from smart_money.store.db import TradeStore, build_store
 
 logger = logging.getLogger(__name__)
 
@@ -31,64 +43,91 @@ logger = logging.getLogger(__name__)
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="python -m smart_money.cli.shadow",
-        description="Run shadow mode (paper trading) daemon subscribing to HL ws fills.",
+        description="Shadow mode daemon — subscribe to HL WS, classify fills, log signals.",
     )
     parser.add_argument(
         "--whitelist",
-        type=str,
-        help="Path to whitelist yaml (falls back to seeds.yaml if not given).",
+        type=Path,
+        default=Path("config/smart_money/whitelist_manual.yaml"),
+        help="Manual include/exclude override YAML (default: config/smart_money/whitelist_manual.yaml).",
     )
     parser.add_argument(
         "--address",
         action="append",
         default=[],
-        help="Explicit wallet address to subscribe (repeatable). Overrides --whitelist.",
+        help="Force subscribe this address (repeatable). Bypasses ranking lookup.",
     )
     parser.add_argument(
-        "--reconciler-interval",
-        type=int,
-        default=60,
-        help="Seconds between REST reconciler sweeps (default 60).",
+        "--whitelist-size", type=int, default=settings.ranking.whitelist_size,
+        help=f"Top N from latest ranking (default {settings.ranking.whitelist_size}).",
     )
     parser.add_argument(
-        "--reconciler-lookback",
-        type=int,
-        default=300,
-        help="Reconciler lookback window in seconds (default 300).",
+        "--freshness-days", type=int, default=14,
+        help="Wallets with no fill in this window are demoted to watch-only.",
     )
     parser.add_argument(
-        "--log-level",
-        default="INFO",
-        choices=["DEBUG", "INFO", "WARNING", "ERROR"],
+        "--warmup-hours", type=int, default=None,
+        help="New wallets (first_seen within this window) demoted to watch-only.",
     )
+    parser.add_argument(
+        "--reconciler-interval", type=int, default=60,
+        help="Seconds between REST reconciler sweeps.",
+    )
+    parser.add_argument(
+        "--reconciler-lookback", type=int, default=300,
+        help="Reconciler lookback window in seconds.",
+    )
+    parser.add_argument("--log-level", default="INFO",
+                        choices=["DEBUG", "INFO", "WARNING", "ERROR"])
     return parser
 
 
-def _resolve_addresses(args: argparse.Namespace) -> list[str]:
-    """Get the list of addresses to subscribe, in priority order."""
+def _resolve_whitelist(
+    args: argparse.Namespace,
+    store: TradeStore,
+) -> list[WhitelistEntry]:
+    """Build the active whitelist from CLI args + store state."""
+    # --address overrides: go direct without ranking logic.
     if args.address:
-        addrs = [a.lower() for a in args.address if is_valid_address(a)]
-        if len(addrs) != len(args.address):
-            logger.warning("dropped %d invalid addresses", len(args.address) - len(addrs))
-        return addrs
+        entries: list[WhitelistEntry] = []
+        for addr in args.address:
+            w = store.get_wallet_by_address(addr.lower())
+            if w is None:
+                logger.warning("--address %s not in sm_wallets — skip", addr[:10])
+                continue
+            entries.append(WhitelistEntry(
+                wallet_id=w.id, address=w.address, score=0.0, rank=None,
+                source="manual_include", is_tradeable=True, demotion_reason="none",
+            ))
+        return entries
 
-    path = Path(args.whitelist) if args.whitelist else None
-    if path is None:
-        # Default to project's seeds.yaml
-        default = Path("smart_money/data/seeds.yaml")
-        if default.exists():
-            path = default
-        else:
-            raise SystemExit("no addresses given and no seeds.yaml found")
+    from datetime import datetime, timedelta, timezone
+    now = datetime.now(timezone.utc)
+    override = load_manual_override(args.whitelist)
 
-    entries = load_seed_file(path)
-    return [e.address.lower() for e in entries]
+    warmup_cutoff = None
+    if args.warmup_hours is not None:
+        warmup_cutoff = now - timedelta(hours=args.warmup_hours)
+
+    return build_whitelist(
+        store,
+        as_of=now,
+        whitelist_size=args.whitelist_size,
+        freshness_days=args.freshness_days,
+        override=override,
+        warmup_cutoff=warmup_cutoff,
+    )
 
 
-async def _drain_events(queue: asyncio.Queue[RawFillEvent], stop: asyncio.Event) -> None:
-    """Consume events from the queue and log them.
+async def _drain_and_classify(
+    queue: asyncio.Queue[RawFillEvent],
+    store: TradeStore,
+    address_to_wallet: dict[str, tuple[UUID, float]],
+    stop: asyncio.Event,
+) -> None:
+    """Consume RawFillEvents, run classifier, persist position + signal/skip.
 
-    P4a: structured logging only. P4b will replace this with classifier.process().
+    P4b: log Signal events for now; P4c will pipe them into the aggregator.
     """
     while not stop.is_set():
         try:
@@ -96,59 +135,92 @@ async def _drain_events(queue: asyncio.Queue[RawFillEvent], stop: asyncio.Event)
         except asyncio.TimeoutError:
             continue
 
+        info = address_to_wallet.get(event.wallet_address.lower())
+        if info is None:
+            # Fill arrived for an address not on our current whitelist — skip.
+            logger.debug(
+                "drain: fill for non-whitelisted wallet %s — ignoring",
+                event.wallet_address[:10],
+            )
+            continue
+        wallet_id, wallet_score = info
+
+        prev = store.get_position(wallet_id, event.symbol_hl)
+        result = classify(event, prev=prev, wallet_id=wallet_id, wallet_score=wallet_score)
+
+        # Persist the updated position (even on skip, the state may be 'flat'
+        # representing cold-start — persisting lets later fills use it as prev).
+        store.upsert_position(result.new_position)
+
+        if result.skipped is not None:
+            store.record_skipped_signal(result.skipped)
+            logger.info(
+                "skip wallet=%s sym=%s reason=%s dir=%r tid=%d",
+                event.wallet_address[:10], event.symbol_hl,
+                result.skipped.reason, event.direction_raw, event.hl_trade_id,
+            )
+            continue
+
+        sig = result.signal
+        assert sig is not None  # classify always returns one or the other
         logger.info(
-            "fill src=%s wallet=%s sym=%s dir=%r sz=%+.4f px=%s tid=%d "
-            "lat_ms=%d (net=%d, proc=%d)",
-            event.source,
-            event.wallet_address[:10],
-            event.symbol_hl,
-            event.direction_raw,
-            event.size,
-            event.px,
-            event.hl_trade_id,
-            event.total_latency_ms,
-            event.network_latency_ms,
-            event.processing_latency_ms,
+            "signal wallet=%s sym=%s type=%s size=%s→%s px=%s lat_ms=%d src=%s",
+            event.wallet_address[:10], event.symbol_hl, sig.signal_type.value,
+            round(sig.size_delta, 4), round(sig.new_size, 4), sig.px,
+            sig.total_latency_ms, event.source,
         )
 
 
 async def run_shadow_daemon(args: argparse.Namespace) -> int:
     """Main async entry. Returns exit code."""
-    addresses = _resolve_addresses(args)
-    if not addresses:
-        logger.error("no valid addresses to subscribe")
+    try:
+        store = build_store(settings)
+    except Exception as e:
+        logger.error("store init failed: %s", e)
+        return 3
+
+    whitelist = _resolve_whitelist(args, store)
+    if not whitelist:
+        logger.error("whitelist is empty — nothing to subscribe")
         return 1
 
-    logger.info("shadow daemon starting: %d wallets", len(addresses))
+    tradeable = [e for e in whitelist if e.is_tradeable]
+    watch_only = [e for e in whitelist if not e.is_tradeable]
+    logger.info(
+        "shadow daemon: %d tradeable, %d watch-only",
+        len(tradeable), len(watch_only),
+    )
+    for e in watch_only:
+        logger.info(
+            "  watch-only: %s rank=%s reason=%s",
+            e.address[:10], e.rank, e.demotion_reason,
+        )
+
+    # Subscribe ALL (tradeable + watch-only) — state machine still tracks
+    # non-tradeable wallets so we can detect recovery.
+    addresses = [e.address for e in whitelist]
+    address_to_wallet = {
+        e.address.lower(): (e.wallet_id, e.score) for e in whitelist
+    }
 
     loop = asyncio.get_running_loop()
     event_queue: asyncio.Queue[RawFillEvent] = asyncio.Queue()
 
-    # Shared dedup set: WS listener marks seen tids so reconciler skips them.
+    # Shared dedup set between WS listener and reconciler
     seen_tids: set[int] = set()
 
     def _mark_seen(ev: RawFillEvent) -> None:
         seen_tids.add(ev.hl_trade_id)
 
-    listener = HLFillsListener(
-        addresses,
-        event_queue,
-        loop,
-        on_dispatch=_mark_seen,
-    )
+    listener = HLFillsListener(addresses, event_queue, loop, on_dispatch=_mark_seen)
     await listener.start()
 
-    # Reconciler needs a UserFillsByTimeClient — reuse the listener's Info instance.
-    # If listener._info is None (connection failed), reconciler still works but won't
-    # share transport. For P4a simplicity we demand listener must be connected.
     if listener._info is None:
-        logger.error("WS listener failed to connect; aborting shadow daemon")
+        logger.error("WS listener failed to connect; aborting")
         return 2
 
     reconciler = FillsReconciler(
-        addresses,
-        listener._info,
-        event_queue,
+        addresses, listener._info, event_queue,
         interval_sec=args.reconciler_interval,
         lookback_sec=args.reconciler_lookback,
         seen_tids=seen_tids,
@@ -161,10 +233,12 @@ async def run_shadow_daemon(args: argparse.Namespace) -> int:
         logger.info("shutdown signal received")
         stop.set()
 
-    for sig in (signal.SIGINT, signal.SIGTERM):
-        loop.add_signal_handler(sig, _on_signal)
+    for sig_ in (signal.SIGINT, signal.SIGTERM):
+        loop.add_signal_handler(sig_, _on_signal)
 
-    drain_task = asyncio.create_task(_drain_events(event_queue, stop))
+    drain_task = asyncio.create_task(
+        _drain_and_classify(event_queue, store, address_to_wallet, stop)
+    )
 
     try:
         await stop.wait()

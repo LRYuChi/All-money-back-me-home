@@ -10,7 +10,13 @@ from datetime import datetime, timezone
 from typing import Any, Protocol
 from uuid import UUID, uuid4
 
-from smart_money.store.schema import Ranking, Trade, Wallet
+from smart_money.store.schema import (
+    Ranking,
+    SkippedSignal,
+    Trade,
+    Wallet,
+    WalletPosition,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -38,6 +44,23 @@ class TradeStore(Protocol):
 
     def save_ranking(self, rankings: list[Ranking]) -> int: ...
 
+    # -- positions (P4b) ----------------------------------------------
+    def get_position(self, wallet_id: UUID, symbol: str) -> WalletPosition | None: ...
+    def upsert_position(self, position: WalletPosition) -> None: ...
+    def list_positions(self, wallet_id: UUID) -> list[WalletPosition]: ...
+
+    # -- skipped signals (P4b) ----------------------------------------
+    def record_skipped_signal(self, skipped: SkippedSignal) -> None: ...
+
+    # -- ranking reads (P4b whitelist) --------------------------------
+    def latest_ranking_snapshot_date(self) -> datetime | None: ...
+    def list_rankings(
+        self,
+        snapshot_date: datetime | None = None,
+        *,
+        limit: int | None = None,
+    ) -> list[Ranking]: ...
+
 
 # ------------------------------------------------------------------ #
 # InMemoryStore — 測試 & local runs
@@ -51,22 +74,27 @@ class InMemoryStore:
         # (wallet_id, hl_trade_id) -> Trade (for idempotent upsert)
         self._trades: dict[tuple[UUID, str], Trade] = {}
         self._rankings: list[Ranking] = []
+        # P4b: per-(wallet, symbol) position state + skipped signals audit log
+        self._positions: dict[tuple[UUID, str], WalletPosition] = {}
+        self._skipped: list[SkippedSignal] = []
 
     # -- wallets -----------------------------------------------------------
     def upsert_wallet(self, address: str, *, seen_at: datetime) -> Wallet:
+        # EVM addresses are case-insensitive; normalize for consistent lookups.
+        addr_lc = address.lower()
         seen_at = seen_at.astimezone(timezone.utc)
-        existing_id = self._wallets_by_addr.get(address)
+        existing_id = self._wallets_by_addr.get(addr_lc)
         if existing_id:
             w = self._wallets[existing_id]
             w.last_active_at = max(w.last_active_at, seen_at)
             return w
-        w = Wallet(address=address, first_seen_at=seen_at, last_active_at=seen_at, id=uuid4())
+        w = Wallet(address=addr_lc, first_seen_at=seen_at, last_active_at=seen_at, id=uuid4())
         self._wallets[w.id] = w
-        self._wallets_by_addr[address] = w.id
+        self._wallets_by_addr[addr_lc] = w.id
         return w
 
     def get_wallet_by_address(self, address: str) -> Wallet | None:
-        wid = self._wallets_by_addr.get(address)
+        wid = self._wallets_by_addr.get(address.lower())
         return self._wallets[wid] if wid else None
 
     def list_wallets(self, tag: str | None = None) -> list[Wallet]:
@@ -122,13 +150,39 @@ class InMemoryStore:
         self._rankings.extend(rankings)
         return len(rankings)
 
-    def list_rankings(self, snapshot_date: datetime | None = None) -> list[Ranking]:
+    def list_rankings(
+        self,
+        snapshot_date: datetime | None = None,
+        *,
+        limit: int | None = None,
+    ) -> list[Ranking]:
         if snapshot_date is None:
-            return sorted(self._rankings, key=lambda r: (r.snapshot_date, r.rank))
-        return sorted(
-            [r for r in self._rankings if r.snapshot_date == snapshot_date],
-            key=lambda r: r.rank,
-        )
+            rows = sorted(self._rankings, key=lambda r: (r.snapshot_date, r.rank))
+        else:
+            rows = sorted(
+                [r for r in self._rankings if r.snapshot_date == snapshot_date],
+                key=lambda r: r.rank,
+            )
+        return rows[:limit] if limit is not None else rows
+
+    def latest_ranking_snapshot_date(self) -> datetime | None:
+        if not self._rankings:
+            return None
+        return max(r.snapshot_date for r in self._rankings)
+
+    # -- positions (P4b) ----------------------------------------------
+    def get_position(self, wallet_id: UUID, symbol: str) -> WalletPosition | None:
+        return self._positions.get((wallet_id, symbol))
+
+    def upsert_position(self, position: WalletPosition) -> None:
+        self._positions[(position.wallet_id, position.symbol)] = position
+
+    def list_positions(self, wallet_id: UUID) -> list[WalletPosition]:
+        return [p for (wid, _), p in self._positions.items() if wid == wallet_id]
+
+    # -- skipped signals (P4b) ----------------------------------------
+    def record_skipped_signal(self, skipped: SkippedSignal) -> None:
+        self._skipped.append(skipped)
 
 
 # ------------------------------------------------------------------ #
@@ -281,6 +335,90 @@ class SupabaseStore:
             .execute()
         )
         return len(res.data or [])
+
+    # -- P4b: position state ------------------------------------------
+    def get_position(self, wallet_id: UUID, symbol: str) -> WalletPosition | None:
+        res = (
+            self._client.table("sm_wallet_positions")
+            .select("*")
+            .eq("wallet_id", str(wallet_id))
+            .eq("symbol", symbol)
+            .limit(1)
+            .execute()
+        )
+        if not res.data:
+            return None
+        return _row_to_position(res.data[0])
+
+    def upsert_position(self, position: WalletPosition) -> None:
+        self._client.table("sm_wallet_positions").upsert(
+            position.to_row(), on_conflict="wallet_id,symbol"
+        ).execute()
+
+    def list_positions(self, wallet_id: UUID) -> list[WalletPosition]:
+        res = (
+            self._client.table("sm_wallet_positions")
+            .select("*")
+            .eq("wallet_id", str(wallet_id))
+            .execute()
+        )
+        return [_row_to_position(r) for r in (res.data or [])]
+
+    # -- P4b: skipped signals audit -----------------------------------
+    def record_skipped_signal(self, skipped: SkippedSignal) -> None:
+        self._client.table("sm_skipped_signals").insert(skipped.to_row()).execute()
+
+    # -- P4b: ranking reads -------------------------------------------
+    def latest_ranking_snapshot_date(self) -> datetime | None:
+        res = (
+            self._client.table("sm_rankings")
+            .select("snapshot_date")
+            .order("snapshot_date", desc=True)
+            .limit(1)
+            .execute()
+        )
+        if not res.data:
+            return None
+        d = res.data[0]["snapshot_date"]
+        return datetime.fromisoformat(d).replace(tzinfo=timezone.utc)
+
+    def list_rankings(
+        self,
+        snapshot_date: datetime | None = None,
+        *,
+        limit: int | None = None,
+    ) -> list[Ranking]:
+        q = self._client.table("sm_rankings").select("*")
+        if snapshot_date is not None:
+            q = q.eq("snapshot_date", snapshot_date.date().isoformat())
+        q = q.order("snapshot_date", desc=True).order("rank")
+        if limit is not None:
+            q = q.limit(limit)
+        res = q.execute()
+        return [_row_to_ranking(r) for r in (res.data or [])]
+
+
+def _row_to_position(row: dict[str, Any]) -> WalletPosition:
+    avg = row.get("avg_entry_px")
+    return WalletPosition(
+        wallet_id=UUID(row["wallet_id"]),
+        symbol=row["symbol"],
+        side=row["side"],
+        size=float(row["size"]),
+        avg_entry_px=(float(avg) if avg is not None else None),
+        last_updated_ts=datetime.fromisoformat(row["last_updated_ts"].replace("Z", "+00:00")),
+    )
+
+
+def _row_to_ranking(row: dict[str, Any]) -> Ranking:
+    return Ranking(
+        snapshot_date=datetime.fromisoformat(row["snapshot_date"]).replace(tzinfo=timezone.utc),
+        wallet_id=UUID(row["wallet_id"]),
+        rank=int(row["rank"]),
+        score=float(row["score"]),
+        metrics=dict(row.get("metrics") or {}),
+        ai_analysis=(dict(row["ai_analysis"]) if row.get("ai_analysis") else None),
+    )
 
 
 def _row_to_wallet(row: dict[str, Any]) -> Wallet:
@@ -530,6 +668,125 @@ class PostgresStore:
             cur.executemany(sql, params)
             conn.commit()
         return len(rankings)
+
+    # -- P4b: position state ------------------------------------------
+    def get_position(self, wallet_id: UUID, symbol: str) -> WalletPosition | None:
+        with self._conn() as conn, conn.cursor() as cur:
+            cur.execute(
+                "select wallet_id, symbol, side, size, avg_entry_px, last_updated_ts "
+                "from sm_wallet_positions where wallet_id = %s and symbol = %s",
+                (str(wallet_id), symbol),
+            )
+            row = cur.fetchone()
+        if row is None:
+            return None
+        return WalletPosition(
+            wallet_id=UUID(str(row[0])),
+            symbol=row[1],
+            side=row[2],
+            size=float(row[3]),
+            avg_entry_px=(float(row[4]) if row[4] is not None else None),
+            last_updated_ts=row[5],
+        )
+
+    def upsert_position(self, position: WalletPosition) -> None:
+        sql = (
+            "insert into sm_wallet_positions "
+            "(wallet_id, symbol, side, size, avg_entry_px, last_updated_ts, updated_at) "
+            "values (%s, %s, %s, %s, %s, %s, now()) "
+            "on conflict (wallet_id, symbol) do update set "
+            "side = excluded.side, size = excluded.size, "
+            "avg_entry_px = excluded.avg_entry_px, "
+            "last_updated_ts = excluded.last_updated_ts, "
+            "updated_at = now()"
+        )
+        with self._conn() as conn, conn.cursor() as cur:
+            cur.execute(sql, (
+                str(position.wallet_id), position.symbol, position.side,
+                position.size, position.avg_entry_px,
+                position.last_updated_ts.astimezone(timezone.utc),
+            ))
+            conn.commit()
+
+    def list_positions(self, wallet_id: UUID) -> list[WalletPosition]:
+        with self._conn() as conn, conn.cursor() as cur:
+            cur.execute(
+                "select wallet_id, symbol, side, size, avg_entry_px, last_updated_ts "
+                "from sm_wallet_positions where wallet_id = %s",
+                (str(wallet_id),),
+            )
+            rows = cur.fetchall()
+        return [
+            WalletPosition(
+                wallet_id=UUID(str(r[0])),
+                symbol=r[1], side=r[2], size=float(r[3]),
+                avg_entry_px=(float(r[4]) if r[4] is not None else None),
+                last_updated_ts=r[5],
+            )
+            for r in rows
+        ]
+
+    # -- P4b: skipped signals audit -----------------------------------
+    def record_skipped_signal(self, skipped: SkippedSignal) -> None:
+        import json as _json
+        sql = (
+            "insert into sm_skipped_signals "
+            "(wallet_id, wallet_address, symbol_hl, reason, signal_latency_ms, "
+            " direction_raw, hl_trade_id, detail, created_at) "
+            "values (%s, %s, %s, %s, %s, %s, %s, %s, %s)"
+        )
+        with self._conn() as conn, conn.cursor() as cur:
+            cur.execute(sql, (
+                str(skipped.wallet_id) if skipped.wallet_id else None,
+                skipped.wallet_address, skipped.symbol_hl, skipped.reason,
+                skipped.signal_latency_ms, skipped.direction_raw, skipped.hl_trade_id,
+                _json.dumps(skipped.detail) if skipped.detail is not None else None,
+                skipped.created_at.astimezone(timezone.utc),
+            ))
+            conn.commit()
+
+    # -- P4b: ranking reads -------------------------------------------
+    def latest_ranking_snapshot_date(self) -> datetime | None:
+        with self._conn() as conn, conn.cursor() as cur:
+            cur.execute("select max(snapshot_date) from sm_rankings")
+            row = cur.fetchone()
+        if not row or row[0] is None:
+            return None
+        return datetime(row[0].year, row[0].month, row[0].day, tzinfo=timezone.utc)
+
+    def list_rankings(
+        self,
+        snapshot_date: datetime | None = None,
+        *,
+        limit: int | None = None,
+    ) -> list[Ranking]:
+        sql = (
+            "select snapshot_date, wallet_id, rank, score, metrics, ai_analysis "
+            "from sm_rankings"
+        )
+        params: list[Any] = []
+        if snapshot_date is not None:
+            sql += " where snapshot_date = %s"
+            params.append(snapshot_date.date())
+        sql += " order by snapshot_date desc, rank asc"
+        if limit is not None:
+            sql += " limit %s"
+            params.append(limit)
+        with self._conn() as conn, conn.cursor() as cur:
+            cur.execute(sql, params)
+            rows = cur.fetchall()
+        out = []
+        for r in rows:
+            d = r[0]
+            out.append(Ranking(
+                snapshot_date=datetime(d.year, d.month, d.day, tzinfo=timezone.utc),
+                wallet_id=UUID(str(r[1])),
+                rank=int(r[2]),
+                score=float(r[3]),
+                metrics=dict(r[4] or {}),
+                ai_analysis=(dict(r[5]) if r[5] else None),
+            ))
+        return out
 
 
 # ------------------------------------------------------------------ #
