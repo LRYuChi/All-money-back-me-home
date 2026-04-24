@@ -184,10 +184,10 @@ services:
       --aggregation-mode ${SM_SHADOW_AGGREGATION_MODE:-aggregated}
       --aggregation-window-sec ${SM_SHADOW_AGGREGATION_WINDOW_SEC:-300}
       --min-wallets-for-signal ${SM_SHADOW_MIN_WALLETS:-2}
-      --whitelist-size ${SM_SHADOW_WHITELIST_SIZE:-10}
-      --freshness-days ${SM_SHADOW_FRESHNESS_DAYS:-14}
-      --reconciler-interval 60
-      --reconciler-lookback 300
+      --whitelist-size ${SM_SHADOW_WHITELIST_SIZE:-30}
+      --freshness-days ${SM_SHADOW_FRESHNESS_DAYS:-7}
+      --reconciler-interval ${SM_SHADOW_RECONCILER_INTERVAL:-30}
+      --reconciler-lookback ${SM_SHADOW_RECONCILER_LOOKBACK:-300}
       --symbol-map /app/config/smart_money/symbol_map.yaml
       --whitelist /app/config/smart_money/whitelist_manual.yaml
       --log-level ${SM_SHADOW_LOG_LEVEL:-INFO}
