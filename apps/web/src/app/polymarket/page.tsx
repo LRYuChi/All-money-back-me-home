@@ -1,9 +1,9 @@
 'use client';
 
 import { useCallback, useEffect, useState } from 'react';
-import Link from 'next/link';
 import { apiClient } from '@/lib/api-client';
-import { borderColor, fg, layer, semantic } from '@/lib/polymarket/tokens';
+import { borderColor, fg, semantic } from '@/lib/polymarket/tokens';
+import { AppShell } from '@/components/layout/AppShell';
 import { PipelineStatusCard } from '@/components/polymarket/PipelineStatusCard';
 import { OverviewCards } from '@/components/polymarket/OverviewCards';
 import { WhaleDirectoryTable } from '@/components/polymarket/WhaleDirectoryTable';
@@ -166,22 +166,16 @@ export default function PolymarketPage() {
   }, [fetchAll]);
 
   return (
-    <div
-      className="min-h-screen"
-      style={{
-        backgroundColor: layer['00'],
-        color: fg.primary,
-        fontFamily: 'Inter, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif',
-      }}
+    <AppShell
+      pageTitle="Polymarket · 鯨魚追蹤"
+      dataFreshness={{ lastUpdate, refreshMs: REFRESH_INTERVAL_MS, onRefresh: fetchAll }}
     >
-      <div className="max-w-[1400px] mx-auto" style={{ padding: '24px 28px' }}>
-        <Header lastUpdate={lastUpdate} onRefresh={fetchAll} />
-
+      <div style={{ padding: 16, display: 'flex', flexDirection: 'column', gap: 12 }}>
         {loading && !data && <LoadingState />}
         {error && <ErrorBanner message={error} />}
 
         {data && (
-          <div className="flex flex-col gap-4">
+          <div className="flex flex-col" style={{ gap: 12 }}>
             <PipelineStatusCard status={data.status} />
             <OverviewCards overview={data.overview} />
             <HighlightCards
@@ -201,101 +195,21 @@ export default function PolymarketPage() {
         )}
 
         <footer
-          className="mt-8 pt-4"
+          className="mt-4 pt-4"
           style={{ borderTop: `1px solid ${borderColor.hair}`, color: fg.tertiary, fontSize: '11px' }}
         >
           Polymarket 情報系統 · Phase 1 鯨魚追蹤 · 每 5 分鐘自動收集，每 30 秒重新整理介面
         </footer>
       </div>
-    </div>
-  );
-}
-
-function Header({ lastUpdate, onRefresh }: { lastUpdate: Date | null; onRefresh: () => void }) {
-  return (
-    <header
-      className="flex items-end justify-between flex-wrap gap-4"
-      style={{ marginBottom: '24px' }}
-    >
-      <div>
-        <Link
-          href="/"
-          style={{
-            color: fg.tertiary,
-            fontSize: '11px',
-            textDecoration: 'none',
-          }}
-        >
-          ← 主儀表板
-        </Link>
-        <div className="flex items-baseline gap-3 mt-1">
-          <h1
-            style={{
-              color: fg.primary,
-              fontSize: '28px',
-              fontWeight: 700,
-              letterSpacing: '-0.02em',
-              lineHeight: 1.1,
-            }}
-          >
-            Polymarket 情報
-          </h1>
-          <span
-            className="rounded-full border"
-            style={{
-              padding: '3px 10px',
-              fontSize: '11px',
-              color: semantic.whale,
-              backgroundColor: layer['02'],
-              borderColor: 'color-mix(in oklab, ' + semantic.whale + ' 30%, transparent)',
-              fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace',
-            }}
-          >
-            Phase 1 · 鯨魚追蹤
-          </span>
-        </div>
-        <div style={{ color: fg.tertiary, fontSize: '12px', marginTop: '6px' }}>
-          基於 Polymarket CLOB + Data API · 讀取本地 SQLite 快照
-        </div>
-      </div>
-
-      <div className="flex items-center gap-3">
-        {lastUpdate && (
-          <span
-            style={{
-              color: fg.tertiary,
-              fontSize: '11px',
-              fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace',
-            }}
-          >
-            UI 更新 {lastUpdate.toLocaleTimeString('zh-TW', { hour12: false })}
-          </span>
-        )}
-        <button
-          onClick={onRefresh}
-          className="rounded-lg border transition-colors hover:border-opacity-50"
-          style={{
-            padding: '6px 14px',
-            backgroundColor: layer['02'],
-            borderColor: borderColor.base,
-            color: fg.primary,
-            fontSize: '12px',
-            fontWeight: 500,
-          }}
-        >
-          手動刷新
-        </button>
-      </div>
-    </header>
+    </AppShell>
   );
 }
 
 function LoadingState() {
   return (
     <div
-      className="rounded-lg text-center"
+      className="rounded-sm text-center"
       style={{
-        backgroundColor: layer['01'],
         color: fg.tertiary,
         border: `1px solid ${borderColor.hair}`,
         padding: '80px 20px',

@@ -25,3 +25,17 @@ body {
     text-wrap: balance;
   }
 }
+
+/* AppShell: live-data pulse indicator (institutional UI) */
+@keyframes ambmh-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.35; }
+}
+
+/* Institutional DataTable hover row highlight */
+.ambmh-row {
+  transition: background-color 100ms;
+}
+.ambmh-row:hover > td {
+  background-color: oklch(20% 0.010 240) !important;
+}

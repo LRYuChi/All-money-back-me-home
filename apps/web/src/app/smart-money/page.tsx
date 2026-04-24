@@ -1,10 +1,10 @@
 'use client';
 
 import { useCallback, useEffect, useState } from 'react';
-import Link from 'next/link';
 import { apiClient } from '@/lib/api-client';
 import { borderColor, fg, layer, semantic } from '@/lib/polymarket/tokens';
 import { Card, CardHeader, CardBody } from '@/components/polymarket/Card';
+import { AppShell } from '@/components/layout/AppShell';
 
 interface StatusPayload {
   configured: boolean;
@@ -40,6 +40,7 @@ export default function SmartMoneyPage() {
   const [leaderboard, setLeaderboard] = useState<LeaderboardPayload | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [lastUpdate, setLastUpdate] = useState<Date | null>(null);
 
   const fetchAll = useCallback(async () => {
     try {
@@ -51,6 +52,7 @@ export default function SmartMoneyPage() {
       ]);
       setStatus(s);
       setLeaderboard(lb);
+      setLastUpdate(new Date());
       setError(null);
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
@@ -66,59 +68,31 @@ export default function SmartMoneyPage() {
   }, [fetchAll]);
 
   return (
-    <div
-      style={{
-        backgroundColor: layer['00'],
-        minHeight: '100vh',
-        color: fg.primary,
-        fontFamily: 'Inter, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif',
-      }}
+    <AppShell
+      pageTitle="Smart Money · Hyperliquid 鯨魚排名"
+      dataFreshness={{ lastUpdate, refreshMs: REFRESH_MS, onRefresh: fetchAll }}
     >
-      <div className="max-w-[1400px] mx-auto" style={{ padding: '24px 28px 48px' }}>
-        <Header />
-
+      <div style={{ padding: 16, display: 'flex', flexDirection: 'column', gap: 12 }}>
         {loading && !status && !leaderboard && <LoadingState />}
         {error && <ErrorBanner message={error} />}
 
-        <div className="flex flex-col gap-4">
+        <div className="flex flex-col" style={{ gap: 12 }}>
           <StatusCard status={status} />
           <LeaderboardTable lb={leaderboard} />
         </div>
 
         <footer
-          className="mt-8 pt-4"
+          className="mt-4 pt-4"
           style={{ borderTop: `1px solid ${borderColor.hair}`, color: fg.tertiary, fontSize: 11 }}
         >
           Smart Money 情報系統 · Hyperliquid 鯨魚排名 · 每 60 秒重新整理
         </footer>
       </div>
-    </div>
+    </AppShell>
   );
 }
 
 // ─────────────────────────────────────────────────────────────────────
-
-function Header() {
-  return (
-    <header style={{ marginBottom: '24px' }}>
-      <nav style={{ fontSize: 12, color: fg.tertiary, marginBottom: 8 }}>
-        <Link href="/" style={{ color: fg.tertiary, textDecoration: 'none' }}>
-          ← 首頁
-        </Link>
-        {' · '}
-        <Link href="/polymarket" style={{ color: fg.tertiary, textDecoration: 'none' }}>
-          Polymarket 儀表板
-        </Link>
-      </nav>
-      <h1 style={{ fontSize: 24, fontWeight: 600, color: fg.primary, marginTop: 4 }}>
-        Smart Money — Hyperliquid Whale Intelligence
-      </h1>
-      <p style={{ fontSize: 13, color: fg.tertiary, marginTop: 4 }}>
-        排名根據 smart_money 模組的 scanner + ranking pipeline 產出（Sortino / PF / MDD 等指標）
-      </p>
-    </header>
-  );
-}
 
 function StatusCard({ status }: { status: StatusPayload | null }) {
   if (!status) {
