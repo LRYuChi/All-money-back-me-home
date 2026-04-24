@@ -87,6 +87,11 @@ class PaperTrade:
     pnl: float | None = None
     signal_latency_ms: int | None = None
     closed_at: datetime | None = None
+    id: int | None = None       # set by store on insert
+    # P4c additions — observability for the 14-day shadow window
+    signal_mode: str | None = None          # 'independent' | 'aggregated'
+    source_wallets: list[UUID] | None = None  # aggregated-mode source(s)
+    exit_reason: str | None = None          # 'whale_close' | 'reverse' | ...
 
 
 @dataclass(slots=True)

@@ -46,3 +46,19 @@ create index if not exists idx_sm_skipped_signals_reason
     on sm_skipped_signals (reason);
 create index if not exists idx_sm_skipped_signals_wallet
     on sm_skipped_signals (wallet_id, created_at desc);
+
+-- ----------------------------------------------------------------
+-- sm_paper_trades extensions (P4c)
+-- Preserve backward compat: all columns nullable, idempotent.
+-- ----------------------------------------------------------------
+alter table sm_paper_trades
+    add column if not exists signal_mode      text,     -- 'independent' | 'aggregated'
+    add column if not exists source_wallets   uuid[],   -- for aggregated multi-source trades
+    add column if not exists exit_reason      text,     -- 'whale_close' | 'reverse' | 'sl_hit' | ...
+    add column if not exists network_latency_ms   integer,
+    add column if not exists processing_latency_ms integer;
+
+create index if not exists idx_sm_paper_trades_opened
+    on sm_paper_trades (opened_at desc);
+create index if not exists idx_sm_paper_trades_open
+    on sm_paper_trades (source_wallet_id, symbol) where closed_at is null;

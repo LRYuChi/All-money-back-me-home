@@ -11,6 +11,7 @@ from typing import Any, Protocol
 from uuid import UUID, uuid4
 
 from smart_money.store.schema import (
+    PaperTrade,
     Ranking,
     SkippedSignal,
     Trade,
@@ -61,6 +62,29 @@ class TradeStore(Protocol):
         limit: int | None = None,
     ) -> list[Ranking]: ...
 
+    # -- paper trades (P4c shadow simulator) --------------------------
+    def open_paper_trade(self, trade: PaperTrade) -> int: ...
+    def close_paper_trade(
+        self,
+        trade_id: int,
+        *,
+        exit_price: float,
+        pnl: float,
+        closed_at: datetime,
+        exit_reason: str | None = None,
+    ) -> bool: ...
+    def find_open_paper_trades(
+        self,
+        source_wallet_id: UUID,
+        symbol: str | None = None,
+    ) -> list[PaperTrade]: ...
+    def list_paper_trades(
+        self,
+        *,
+        since: datetime | None = None,
+        limit: int | None = None,
+    ) -> list[PaperTrade]: ...
+
 
 # ------------------------------------------------------------------ #
 # InMemoryStore — 測試 & local runs
@@ -77,6 +101,9 @@ class InMemoryStore:
         # P4b: per-(wallet, symbol) position state + skipped signals audit log
         self._positions: dict[tuple[UUID, str], WalletPosition] = {}
         self._skipped: list[SkippedSignal] = []
+        # P4c: paper trades (auto-increment id)
+        self._paper_trades: dict[int, PaperTrade] = {}
+        self._paper_next_id: int = 1
 
     # -- wallets -----------------------------------------------------------
     def upsert_wallet(self, address: str, *, seen_at: datetime) -> Wallet:
@@ -183,6 +210,55 @@ class InMemoryStore:
     # -- skipped signals (P4b) ----------------------------------------
     def record_skipped_signal(self, skipped: SkippedSignal) -> None:
         self._skipped.append(skipped)
+
+    # -- paper trades (P4c) -------------------------------------------
+    def open_paper_trade(self, trade: PaperTrade) -> int:
+        trade.id = self._paper_next_id
+        self._paper_next_id += 1
+        self._paper_trades[trade.id] = trade
+        return trade.id
+
+    def close_paper_trade(
+        self,
+        trade_id: int,
+        *,
+        exit_price: float,
+        pnl: float,
+        closed_at: datetime,
+        exit_reason: str | None = None,
+    ) -> bool:
+        t = self._paper_trades.get(trade_id)
+        if t is None or t.closed_at is not None:
+            return False
+        t.exit_price = exit_price
+        t.pnl = pnl
+        t.closed_at = closed_at.astimezone(timezone.utc)
+        t.exit_reason = exit_reason
+        return True
+
+    def find_open_paper_trades(
+        self,
+        source_wallet_id: UUID,
+        symbol: str | None = None,
+    ) -> list[PaperTrade]:
+        out = [
+            t for t in self._paper_trades.values()
+            if t.source_wallet_id == source_wallet_id and t.closed_at is None
+        ]
+        if symbol is not None:
+            out = [t for t in out if t.symbol == symbol]
+        return sorted(out, key=lambda t: t.opened_at)
+
+    def list_paper_trades(
+        self,
+        *,
+        since: datetime | None = None,
+        limit: int | None = None,
+    ) -> list[PaperTrade]:
+        rows = sorted(self._paper_trades.values(), key=lambda t: t.opened_at, reverse=True)
+        if since is not None:
+            rows = [t for t in rows if t.opened_at >= since]
+        return rows[:limit] if limit is not None else rows
 
 
 # ------------------------------------------------------------------ #
@@ -396,6 +472,104 @@ class SupabaseStore:
             q = q.limit(limit)
         res = q.execute()
         return [_row_to_ranking(r) for r in (res.data or [])]
+
+    # -- P4c: paper trades --------------------------------------------
+    def open_paper_trade(self, trade: PaperTrade) -> int:
+        row = {
+            "source_wallet_id": str(trade.source_wallet_id) if trade.source_wallet_id else None,
+            "symbol": trade.symbol,
+            "side": trade.side,
+            "size": trade.size,
+            "entry_price": trade.entry_price,
+            "signal_latency_ms": trade.signal_latency_ms,
+            "opened_at": trade.opened_at.astimezone(timezone.utc).isoformat(),
+            "signal_mode": trade.signal_mode,
+            "source_wallets": (
+                [str(w) for w in trade.source_wallets] if trade.source_wallets else None
+            ),
+        }
+        res = self._client.table("sm_paper_trades").insert(row).execute()
+        tid = int(res.data[0]["id"]) if res.data else 0
+        trade.id = tid
+        return tid
+
+    def close_paper_trade(
+        self,
+        trade_id: int,
+        *,
+        exit_price: float,
+        pnl: float,
+        closed_at: datetime,
+        exit_reason: str | None = None,
+    ) -> bool:
+        res = (
+            self._client.table("sm_paper_trades")
+            .update({
+                "exit_price": exit_price,
+                "pnl": pnl,
+                "closed_at": closed_at.astimezone(timezone.utc).isoformat(),
+                "exit_reason": exit_reason,
+            })
+            .eq("id", trade_id)
+            .is_("closed_at", "null")
+            .execute()
+        )
+        return bool(res.data)
+
+    def find_open_paper_trades(
+        self,
+        source_wallet_id: UUID,
+        symbol: str | None = None,
+    ) -> list[PaperTrade]:
+        q = (
+            self._client.table("sm_paper_trades")
+            .select("*")
+            .eq("source_wallet_id", str(source_wallet_id))
+            .is_("closed_at", "null")
+        )
+        if symbol is not None:
+            q = q.eq("symbol", symbol)
+        res = q.order("opened_at").execute()
+        return [_row_to_paper_trade(r) for r in (res.data or [])]
+
+    def list_paper_trades(
+        self,
+        *,
+        since: datetime | None = None,
+        limit: int | None = None,
+    ) -> list[PaperTrade]:
+        q = self._client.table("sm_paper_trades").select("*")
+        if since is not None:
+            q = q.gte("opened_at", since.astimezone(timezone.utc).isoformat())
+        q = q.order("opened_at", desc=True)
+        if limit is not None:
+            q = q.limit(limit)
+        res = q.execute()
+        return [_row_to_paper_trade(r) for r in (res.data or [])]
+
+
+def _row_to_paper_trade(row: dict[str, Any]) -> PaperTrade:
+    return PaperTrade(
+        id=int(row["id"]) if row.get("id") is not None else None,
+        source_wallet_id=(UUID(row["source_wallet_id"]) if row.get("source_wallet_id") else None),
+        symbol=row["symbol"],
+        side=row["side"],
+        size=float(row["size"]),
+        entry_price=float(row["entry_price"]),
+        opened_at=datetime.fromisoformat(row["opened_at"].replace("Z", "+00:00")),
+        exit_price=(float(row["exit_price"]) if row.get("exit_price") is not None else None),
+        pnl=(float(row["pnl"]) if row.get("pnl") is not None else None),
+        signal_latency_ms=row.get("signal_latency_ms"),
+        closed_at=(
+            datetime.fromisoformat(row["closed_at"].replace("Z", "+00:00"))
+            if row.get("closed_at") else None
+        ),
+        signal_mode=row.get("signal_mode"),
+        source_wallets=(
+            [UUID(w) for w in row["source_wallets"]] if row.get("source_wallets") else None
+        ),
+        exit_reason=row.get("exit_reason"),
+    )
 
 
 def _row_to_position(row: dict[str, Any]) -> WalletPosition:
@@ -787,6 +961,117 @@ class PostgresStore:
                 ai_analysis=(dict(r[5]) if r[5] else None),
             ))
         return out
+
+    # -- P4c: paper trades --------------------------------------------
+    def open_paper_trade(self, trade: PaperTrade) -> int:
+        sql = (
+            "insert into sm_paper_trades "
+            "(source_wallet_id, symbol, side, size, entry_price, signal_latency_ms, "
+            " opened_at, signal_mode, source_wallets) "
+            "values (%s, %s, %s, %s, %s, %s, %s, %s, %s) returning id"
+        )
+        src_wallets = (
+            [str(w) for w in trade.source_wallets] if trade.source_wallets else None
+        )
+        with self._conn() as conn, conn.cursor() as cur:
+            cur.execute(sql, (
+                str(trade.source_wallet_id) if trade.source_wallet_id else None,
+                trade.symbol, trade.side, trade.size, trade.entry_price,
+                trade.signal_latency_ms,
+                trade.opened_at.astimezone(timezone.utc),
+                trade.signal_mode, src_wallets,
+            ))
+            row = cur.fetchone()
+            conn.commit()
+        tid = int(row[0])
+        trade.id = tid
+        return tid
+
+    def close_paper_trade(
+        self,
+        trade_id: int,
+        *,
+        exit_price: float,
+        pnl: float,
+        closed_at: datetime,
+        exit_reason: str | None = None,
+    ) -> bool:
+        sql = (
+            "update sm_paper_trades set "
+            "exit_price = %s, pnl = %s, closed_at = %s, exit_reason = %s "
+            "where id = %s and closed_at is null"
+        )
+        with self._conn() as conn, conn.cursor() as cur:
+            cur.execute(sql, (
+                exit_price, pnl,
+                closed_at.astimezone(timezone.utc),
+                exit_reason, trade_id,
+            ))
+            affected = cur.rowcount
+            conn.commit()
+        return affected > 0
+
+    def find_open_paper_trades(
+        self,
+        source_wallet_id: UUID,
+        symbol: str | None = None,
+    ) -> list[PaperTrade]:
+        sql = (
+            "select id, source_wallet_id, symbol, side, size, entry_price, exit_price, "
+            "pnl, signal_latency_ms, opened_at, closed_at, signal_mode, source_wallets, "
+            "exit_reason from sm_paper_trades "
+            "where source_wallet_id = %s and closed_at is null"
+        )
+        params: list[Any] = [str(source_wallet_id)]
+        if symbol is not None:
+            sql += " and symbol = %s"
+            params.append(symbol)
+        sql += " order by opened_at asc"
+        with self._conn() as conn, conn.cursor() as cur:
+            cur.execute(sql, params)
+            rows = cur.fetchall()
+        return [_pg_row_to_paper(r) for r in rows]
+
+    def list_paper_trades(
+        self,
+        *,
+        since: datetime | None = None,
+        limit: int | None = None,
+    ) -> list[PaperTrade]:
+        sql = (
+            "select id, source_wallet_id, symbol, side, size, entry_price, exit_price, "
+            "pnl, signal_latency_ms, opened_at, closed_at, signal_mode, source_wallets, "
+            "exit_reason from sm_paper_trades"
+        )
+        params: list[Any] = []
+        if since is not None:
+            sql += " where opened_at >= %s"
+            params.append(since.astimezone(timezone.utc))
+        sql += " order by opened_at desc"
+        if limit is not None:
+            sql += " limit %s"
+            params.append(limit)
+        with self._conn() as conn, conn.cursor() as cur:
+            cur.execute(sql, params)
+            rows = cur.fetchall()
+        return [_pg_row_to_paper(r) for r in rows]
+
+
+def _pg_row_to_paper(r: tuple) -> PaperTrade:
+    return PaperTrade(
+        id=int(r[0]),
+        source_wallet_id=UUID(str(r[1])) if r[1] else None,
+        symbol=r[2], side=r[3], size=float(r[4]),
+        entry_price=float(r[5]),
+        exit_price=(float(r[6]) if r[6] is not None else None),
+        pnl=(float(r[7]) if r[7] is not None else None),
+        signal_latency_ms=r[8],
+        opened_at=r[9],
+        closed_at=r[10],
+        signal_mode=r[11],
+        source_wallets=([UUID(str(w)) for w in r[12]] if r[12] else None),
+        exit_reason=r[13],
+    )
 
 
 # ------------------------------------------------------------------ #

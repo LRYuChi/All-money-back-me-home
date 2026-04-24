@@ -1,0 +1,91 @@
+# Smart Money — Hyperliquid → OKX symbol map
+#
+# HL uses bare coin symbols ("BTC"); OKX perpetuals are quoted as
+# "BTC/USDT:USDT" via ccxt. Any HL coin not listed here will be
+# skipped at the mapper stage (sm_skipped_signals reason=symbol_unsupported).
+#
+# `min_notional_usd` = minimum order notional accepted by the mapper/guards
+# pipeline. Set conservatively — OKX's absolute minimum varies per instrument
+# but $10 is a safe floor.
+#
+# Curated list — review weekly, update when HL adds a new perp or OKX delists.
+
+BTC:
+  okx: "BTC/USDT:USDT"
+  min_notional_usd: 10
+
+ETH:
+  okx: "ETH/USDT:USDT"
+  min_notional_usd: 10
+
+SOL:
+  okx: "SOL/USDT:USDT"
+  min_notional_usd: 10
+
+AVAX:
+  okx: "AVAX/USDT:USDT"
+  min_notional_usd: 10
+
+DOGE:
+  okx: "DOGE/USDT:USDT"
+  min_notional_usd: 10
+
+XRP:
+  okx: "XRP/USDT:USDT"
+  min_notional_usd: 10
+
+DOT:
+  okx: "DOT/USDT:USDT"
+  min_notional_usd: 10
+
+ADA:
+  okx: "ADA/USDT:USDT"
+  min_notional_usd: 10
+
+LINK:
+  okx: "LINK/USDT:USDT"
+  min_notional_usd: 10
+
+MATIC:
+  okx: "MATIC/USDT:USDT"
+  min_notional_usd: 10
+
+LTC:
+  okx: "LTC/USDT:USDT"
+  min_notional_usd: 10
+
+BNB:
+  okx: "BNB/USDT:USDT"
+  min_notional_usd: 10
+
+NEAR:
+  okx: "NEAR/USDT:USDT"
+  min_notional_usd: 10
+
+ATOM:
+  okx: "ATOM/USDT:USDT"
+  min_notional_usd: 10
+
+UNI:
+  okx: "UNI/USDT:USDT"
+  min_notional_usd: 10
+
+AAVE:
+  okx: "AAVE/USDT:USDT"
+  min_notional_usd: 10
+
+ARB:
+  okx: "ARB/USDT:USDT"
+  min_notional_usd: 10
+
+OP:
+  okx: "OP/USDT:USDT"
+  min_notional_usd: 10
+
+APT:
+  okx: "APT/USDT:USDT"
+  min_notional_usd: 10
+
+SUI:
+  okx: "SUI/USDT:USDT"
+  min_notional_usd: 10
