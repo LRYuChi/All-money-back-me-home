@@ -1078,6 +1078,8 @@ function PerformanceTab({
   perf: PerformanceData | null;
   data: PaperTradeData;
 }) {
+  const { streaks, byPair } = useMemo(() => computePerfExtras(data.closed_trades), [data.closed_trades]);
+
   if (!perf || perf.total_trades === 0) {
     return (
       <div className="rounded-xl bg-gray-800/40 border border-gray-700 p-12 text-center text-gray-500">
@@ -1085,8 +1087,6 @@ function PerformanceTab({
       </div>
     );
   }
-
-  const { streaks, byPair } = useMemo(() => computePerfExtras(data.closed_trades), [data.closed_trades]);
 
   return (
     <div className="space-y-6">
