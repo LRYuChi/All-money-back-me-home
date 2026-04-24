@@ -36,7 +36,7 @@
 | **B. 基礎設施** | ✅ (基本完成) | UniversalSignal ✅；signal_history migration ✅；SM adapter ✅；dual-write ✅；persistence helper ✅；Notifier 抽象 ✅；Reflection validator core ✅；Supabase/PG IO + CLI ✅；Strategy Snapshot ✅；Credential 加密 ✅；Redis ⬜（暫緩，動 prod 部署） | 144 新 tests 全綠 |
 | **C. Kronos 整合** | 🟡 | **HL PriceFetcher ✅（reflection 真能用）**；Kronos predictor / signal converter / dashboard ⬜ | 需 R1 拍板才能進 Kronos 預測 |
 | **D. AI + 融合** | ⬜ | — | 需 R2 拍板 |
-| **E. 策略 DSL** | 🟡 | **YAML schema + predicate language + loader ✅**；evaluator + multi-strategy registry / DB persistence / dashboard ⬜ | R5 用建議預設 (YAML + minimal CEL subset) |
+| **E. 策略 DSL** | 🟡 | YAML schema ✅；predicate language ✅；loader ✅；**evaluator (long/short/conflict/sizing/exit) ✅**；**registry × 4 + migration 019 ✅**；live engine integration / dashboard / first 3 strategies ⬜ | R5 用建議預設；下輪先 wire 到 fusion 層 |
 | **F. 跨市場** | ⬜ | — | 需 R3/R4 拍板 |
 | **G. 風險統一** | ⬜ | — | — |
 | **H. Live ramp** | ⬜ | — | — |
@@ -60,7 +60,8 @@
 | 2026-04-25 03:37 UTC | #7 | QD P2-8 — Credential 加密 (Fernet + 4 stores + key rotation grace + migration 018 + gen_key CLI + 25 tests) | ✅ 完成 |
 | 2026-04-25 04:07 UTC | #8 | Phase C 起步 — HLPriceFetcher (HL candles_snapshot + interval picker + cache + symbol parser + 20 tests) + validate CLI 接入 | ✅ 完成 |
 | 2026-04-25 04:37 UTC | #9 | Phase E 起步 — Strategy DSL (YAML schema + minimal predicate parser + evaluator + 51 tests) | ✅ 完成 |
-| — | — | **下輪待辦**：Strategy registry + DB persistence (Phase E continued) OR Kronos predictor (Phase C, 需 R1 拍板) OR Regime detector (Phase D 起點) | ⬜ |
+| 2026-04-25 05:07 UTC | #10 | Phase E 續 — evaluator (long/short/conflict/3 sizing 方法/Kelly/exit) + registry × 4 + migration 019 + 29 tests | ✅ 完成 |
+| — | — | **下輪待辦**：Regime detector (Phase D 起點，純規則無 LLM 依賴) OR Kronos predictor (需 R1) OR audit log hook | ⬜ |
 
 ---
 

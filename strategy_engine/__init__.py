@@ -45,17 +45,41 @@ from strategy_engine.dsl import (
     load_strategy,
     load_strategy_str,
 )
+from strategy_engine.evaluator import (
+    EvaluationError,
+    evaluate,
+    should_exit,
+)
+from strategy_engine.registry import (
+    InMemoryStrategyRegistry,
+    PostgresStrategyRegistry,
+    StrategyNotFound,
+    StrategyRecord,
+    StrategyRegistry,
+    SupabaseStrategyRegistry,
+    build_registry,
+)
 
 __all__ = [
     "DSLError",
     "EntryRules",
+    "EvaluationError",
     "ExitRules",
+    "InMemoryStrategyRegistry",
     "PositionSizing",
+    "PostgresStrategyRegistry",
     "PredicateError",
     "StrategyDef",
+    "StrategyNotFound",
+    "StrategyRecord",
+    "StrategyRegistry",
+    "SupabaseStrategyRegistry",
     "UnsupportedExpression",
+    "build_registry",
+    "evaluate",
     "evaluate_predicate",
     "load_strategy",
     "load_strategy_str",
     "parse_predicate",
+    "should_exit",
 ]
