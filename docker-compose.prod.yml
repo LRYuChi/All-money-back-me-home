@@ -90,6 +90,12 @@ services:
       - COINGLASS_API_KEY=${COINGLASS_API_KEY}
       - TELEGRAM_TOKEN=${TELEGRAM_TOKEN}
       - TELEGRAM_CHAT_ID=${TELEGRAM_CHAT_ID}
+      # Freqtrade 2024+ 支援 FREQTRADE__<SECTION>__<KEY> 形式 env vars
+      # 覆蓋 config_telegram.json 的空 token/chat_id
+      # 與 ambmh telegram-bot 共用同一個 bot（訊息會混在同一對話）
+      - FREQTRADE__TELEGRAM__ENABLED=true
+      - FREQTRADE__TELEGRAM__TOKEN=${TELEGRAM_TOKEN}
+      - FREQTRADE__TELEGRAM__CHAT_ID=${TELEGRAM_CHAT_ID}
       - SUPABASE_URL=${SUPABASE_URL}
       - SUPABASE_KEY=${SUPABASE_SERVICE_ROLE_KEY}
     ports:
