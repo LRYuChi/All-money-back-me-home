@@ -35,8 +35,8 @@
 | **A. SM P4/P5 收斂** | 🟡 | P4a-c ✅；**Notifier 抽象 ✅ (QD P0-3)**；P4 Gate 🔁 等 14d shadow；P5a-c ⬜ | migration 015 ⏸ 手動 |
 | **B. 基礎設施** | ✅ (基本完成) | UniversalSignal ✅；signal_history migration ✅；SM adapter ✅；dual-write ✅；persistence helper ✅；Notifier 抽象 ✅；Reflection validator core ✅；Supabase/PG IO + CLI ✅；Strategy Snapshot ✅；Credential 加密 ✅；Redis ⬜（暫緩，動 prod 部署） | 144 新 tests 全綠 |
 | **C. Kronos 整合** | 🟡 | **HL PriceFetcher ✅（reflection 真能用）**；Kronos predictor / signal converter / dashboard ⬜ | 需 R1 拍板才能進 Kronos 預測 |
-| **D. AI + 融合** | 🟡 | Regime detector ✅；**SignalFuser + weights yaml + 衝突偵測 + 過期降權 + 端到端 ✅**；AI LLM 整合 ⬜ | R2 (LLM 供應) 仍待拍板；fuser 已可上線 |
-| **E. 策略 DSL** | ✅ basic | DSL ✅；evaluator ✅；registry ✅；首個 prod 策略 ✅；e2e 整合 ✅；**StrategyRuntime + shadow daemon wiring ✅**；dashboard / 多策略 / 真實 regime provider ⬜ | rule-only 鏈路 daemon 內已可跑 |
+| **D. AI + 融合** | ✅ basic | Regime ✅；SignalFuser ✅；**MarketContext provider (HL daily 200d + MA200/slope/vol/DD + 可選 VIX + TTL cache) ✅**；AI LLM 整合 ⬜ | R2 (LLM 供應) 仍待拍板 |
+| **E. 策略 DSL** | ✅ basic | DSL ✅；evaluator ✅；registry ✅；首個 prod 策略 ✅；e2e 整合 ✅；StrategyRuntime + daemon wiring ✅；**daemon 接真實 regime ✅**；dashboard / 多策略 ⬜ | rule-only 鏈路 daemon 內全程可跑 |
 | **F. 跨市場** | ⬜ | — | 需 R3/R4 拍板 |
 | **G. 風險統一** | ⬜ | — | — |
 | **H. Live ramp** | ⬜ | — | — |
@@ -65,7 +65,8 @@
 | 2026-04-25 06:07 UTC | #12 | Phase D 續 — SignalFuser (regime × source 加權 + 衝突偵測 + 過期降權 + weights yaml loader + 21 tests) | ✅ 完成 |
 | 2026-04-25 06:37 UTC | #13 | E2E 整合 — 首個 prod strategy YAML (crypto_btc_smart_money_v1) + 端到端整合測試 (SM→universal→regime→fuse→strategy→intent, 9 cases) | ✅ 完成 |
 | 2026-04-25 07:07 UTC | #14 | Daemon wiring — StrategyRuntime (thread-safe ingest + tick eval + stats) + shadow daemon hook (--strategies flag) + 16 tests | ✅ 完成 |
-| — | — | **下輪待辦**：Real MarketContext + regime_provider for daemon (Phase D 收尾) OR Pending Orders middleware (Phase F start, QD P0-1) OR Kronos | ⬜ |
+| 2026-04-25 07:37 UTC | #15 | Phase D 收尾 — MarketContextProvider (Static + Cached + HLBTC + yfinance VIX) + shadow daemon `--real-market-context` + 18 tests | ✅ 完成 |
+| — | — | **下輪待辦**：Pending Orders middleware (QD P0-1, Phase F start) OR Audit log hook OR Kronos | ⬜ |
 
 ---
 

@@ -25,7 +25,17 @@ import sys
 from pathlib import Path
 from uuid import UUID
 
-from fusion import Regime, SignalFuser, load_weights
+from fusion import (
+    CachedContextProvider,
+    HLBTCContextProvider,
+    Regime,
+    SignalFuser,
+    StaticContextProvider,
+    detect_regime,
+    load_weights,
+    yfinance_vix_provider,
+)
+from fusion.regime import MarketContext
 from shared.signals.adapters import from_smart_money
 from shared.signals.history import SignalHistoryWriter, build_writer, record_safe
 from smart_money.config import settings
@@ -117,6 +127,20 @@ def build_parser() -> argparse.ArgumentParser:
         "--shadow-capital", type=float, default=10_000.0,
         help="Notional capital used for fixed_pct sizing (default 10000).",
     )
+    parser.add_argument(
+        "--real-market-context", action="store_true",
+        help="Use HLBTCContextProvider for live regime detection. Without "
+             "this flag the daemon uses an empty MarketContext (regime=UNKNOWN).",
+    )
+    parser.add_argument(
+        "--enable-vix", action="store_true",
+        help="When --real-market-context, also pull ^VIX from yfinance "
+             "(needs yfinance installed in the container).",
+    )
+    parser.add_argument(
+        "--context-cache-ttl", type=int, default=300,
+        help="Seconds to cache MarketContext lookups (default 300).",
+    )
     parser.add_argument("--log-level", default="INFO",
                         choices=["DEBUG", "INFO", "WARNING", "ERROR"])
     return parser
@@ -160,13 +184,22 @@ def _maybe_build_strategy_runtime(args: argparse.Namespace) -> StrategyRuntime |
     fuser = SignalFuser(weights)
     capital = args.shadow_capital
 
-    # P4c shadow daemon: regime is provided by Phase D regime detector,
-    # but we don't have a live MarketContext source yet (Phase C/F work).
-    # Use SIDEWAYS_HIGH_VOL as conservative default until MarketContext
-    # is wired — strategies that gate on regime will see this consistent
-    # value and behave predictably. Rounds 15+ wire a real provider.
+    # Round 15: real MarketContext provider — pulls BTC daily candles from HL,
+    # computes MA200 / slope / vol / DD, optionally pulls VIX from yfinance.
+    # Wrapped in 5-min TTL cache so we don't hammer HL each strategy tick.
+    # Falls back to StaticContextProvider(SIDEWAYS_HIGH_VOL) if HL init fails,
+    # so daemon still runs (predictable but conservative regime).
+    context_provider = _build_context_provider(args)
+
     def _regime_provider() -> Regime:
-        return Regime.SIDEWAYS_HIGH_VOL
+        try:
+            ctx = context_provider.get()
+            return detect_regime(ctx)
+        except Exception as e:
+            logger.warning(
+                "regime_provider: failed (%s) — fallback SIDEWAYS_HIGH_VOL", e,
+            )
+            return Regime.SIDEWAYS_HIGH_VOL
 
     runtime = StrategyRuntime(
         registry=registry,
@@ -176,10 +209,32 @@ def _maybe_build_strategy_runtime(args: argparse.Namespace) -> StrategyRuntime |
     )
     logger.info(
         "strategy runtime: enabled (%d active strategies, capital=$%.0f, "
-        "regime=SIDEWAYS_HIGH_VOL fallback)",
-        len(active), capital,
+        "context_provider=%s)",
+        len(active), capital, type(context_provider).__name__,
     )
     return runtime
+
+
+def _build_context_provider(args: argparse.Namespace):
+    """Construct MarketContextProvider per args. Falls back to Static
+    when HL SDK init fails (so daemon stays usable in offline tests)."""
+    if not args.real_market_context:
+        # Conservative deterministic default — what daemon used pre-round-15
+        return StaticContextProvider(MarketContext())  # all None → UNKNOWN regime
+
+    try:
+        from hyperliquid.info import Info
+        info = Info(base_url="https://api.hyperliquid.xyz", skip_ws=True)
+    except Exception as e:
+        logger.warning(
+            "real_market_context requested but HL Info init failed (%s) — "
+            "falling back to StaticContextProvider", e,
+        )
+        return StaticContextProvider(MarketContext())
+
+    vix_fn = yfinance_vix_provider if args.enable_vix else None
+    upstream = HLBTCContextProvider(info, vix_provider=vix_fn)
+    return CachedContextProvider(upstream, ttl_seconds=args.context_cache_ttl)
 
 
 def _resolve_whitelist(

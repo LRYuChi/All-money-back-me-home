@@ -29,6 +29,14 @@ from fusion.fuser import (
     FuserConfig,
     SignalFuser,
 )
+from fusion.context_provider import (
+    CachedContextProvider,
+    HLBTCContextProvider,
+    MarketContextProvider,
+    StaticContextProvider,
+    build_default_provider,
+    yfinance_vix_provider,
+)
 
 __all__ = [
     "MarketContext",
@@ -42,4 +50,10 @@ __all__ = [
     "SignalFuser",
     "FuserConfig",
     "DEFAULT_CONFLICT_RATIO",
+    "MarketContextProvider",
+    "StaticContextProvider",
+    "CachedContextProvider",
+    "HLBTCContextProvider",
+    "yfinance_vix_provider",
+    "build_default_provider",
 ]
