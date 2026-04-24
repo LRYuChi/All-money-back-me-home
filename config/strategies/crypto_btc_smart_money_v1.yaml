@@ -1,0 +1,60 @@
+# First production-shape strategy. Follows BTC whales when:
+#   - Fused signal direction = long
+#   - Ensemble strength >= 0.5 (modest bar; tighten after data)
+#   - At least 2 distinct sources contributed (avoids lone-source bets)
+#   - No conflict between sources
+#   - Not in CRISIS or BEAR_TRENDING regime
+#
+# Sizing: 5% of capital, capped at $500. Conservative for shadow + early
+# live ramp; raise once Phase G reflection establishes win rate.
+#
+# Exits:
+#   - SL 2% (catastrophic protection)
+#   - Mirror exit when fused signal flips to short
+#   - Time stop 48h (don't bag-hold a stale follow)
+
+id: crypto_btc_smart_money_v1
+description: "Follow whitelisted whales on BTC when fusion + regime agree"
+market: crypto
+symbol: "crypto:hyperliquid:BTC"
+timeframe: 15m
+enabled: true
+mode: shadow
+
+entry:
+  long:
+    all_of:
+      - 'fused.direction == "long"'
+      - fused.ensemble_score >= 0.5
+      - fused.sources_count >= 2
+      - fused.conflict == false
+    none_of:
+      - 'regime == "CRISIS"'
+      - 'regime == "BEAR_TRENDING"'
+  short:
+    all_of:
+      - 'fused.direction == "short"'
+      - fused.ensemble_score >= 0.6        # tighter for shorts
+      - fused.sources_count >= 2
+      - fused.conflict == false
+    none_of:
+      - 'regime == "CRISIS"'
+      - 'regime == "BULL_TRENDING"'
+
+position_sizing:
+  method: fixed_pct
+  fixed_pct: 0.05            # 5% of capital
+  max_size_usd: 500
+  max_leverage: 1
+
+exit:
+  stop_loss: 0.02            # 2% catastrophic SL
+  take_profit: null          # let signals drive exits
+  exit_on:
+    - 'fused.direction == "short"'
+  time_stop_hours: 48
+
+tags:
+  - crypto
+  - smart_money
+  - shadow
