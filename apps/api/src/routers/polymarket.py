@@ -1054,6 +1054,156 @@ def list_paper_trades(
     return result
 
 
+@router.get("/paper-trades/follower-health")
+def paper_trades_follower_health() -> dict:
+    """Follower 健康度 + 離觸發最近的錢包.
+
+    設計用途：當 paper_trades 為空時，給 UI 「為何還沒有紙上單」的透明度。
+    綠 / 黃 / 紅三級健康度基於「距離上次 follower 觸發」的時間。
+
+    near_miss 回傳離 tier C/B/A 門檻最近、尚未進入白名單的錢包 —
+    讓使用者知道系統不是壞掉，只是在等鯨魚達門檻。
+    """
+    cache_key = "paper_trades_follower_health"
+    if cached := _cache_get(cache_key):
+        return cached
+
+    import datetime as _dt
+
+    with _connect() as conn:
+        last_fire_row = conn.execute(
+            "SELECT MAX(entry_time) AS last_fire, COUNT(*) AS total FROM paper_trades"
+        ).fetchone()
+        last_fire_at = last_fire_row["last_fire"]
+        total_paper_trades = int(last_fire_row["total"] or 0)
+
+        last_decision_row = conn.execute(
+            "SELECT MAX(decided_at) AS last_decision, COUNT(*) AS n FROM follower_decisions"
+        ).fetchone()
+        last_decision_at = last_decision_row["last_decision"]
+        total_decisions = int(last_decision_row["n"] or 0)
+
+        # 距離上次觸發多久
+        health = "dormant"
+        age_hours: float | None = None
+        if last_fire_at:
+            try:
+                t = _dt.datetime.fromisoformat(last_fire_at.replace("Z", "+00:00"))
+                if t.tzinfo is None:
+                    t = t.replace(tzinfo=_dt.timezone.utc)
+                age_hours = (
+                    _dt.datetime.now(_dt.timezone.utc) - t
+                ).total_seconds() / 3600
+                if age_hours < 24:
+                    health = "green"
+                elif age_hours < 168:  # 7d
+                    health = "yellow"
+                else:
+                    health = "red"
+            except ValueError:
+                pass
+
+        # Tier 分布
+        tier_rows = conn.execute(
+            "SELECT tier, COUNT(*) AS c FROM whale_stats GROUP BY tier"
+        ).fetchall()
+        tier_distribution = {r["tier"]: r["c"] for r in tier_rows}
+        qualifying = sum(
+            tier_distribution.get(t, 0) for t in ("A", "B", "C", "emerging")
+        )
+
+        # Near-miss: 錢包有通過 sample_size 但卡在一兩個門檻上
+        # tier C 門檻：trades≥10, wr≥0.50, pnl≥$2000, avg≥$100
+        near_miss_rows = conn.execute(
+            """
+            SELECT wallet_address, tier, trade_count_90d, win_rate,
+                   cumulative_pnl, avg_trade_size, resolved_count, last_trade_at
+            FROM whale_stats
+            WHERE tier IN ('volatile', 'excluded')
+              AND trade_count_90d >= 10
+              AND win_rate >= 0.50
+              AND (cumulative_pnl >= 1000 OR avg_trade_size >= 80)
+            ORDER BY cumulative_pnl DESC
+            LIMIT 15
+            """
+        ).fetchall()
+
+    # 計算每個 near-miss 距離 tier C 的 "miss list"
+    C_MIN_TRADES = 10
+    C_MIN_WR = 0.50
+    C_MIN_PNL = 2000
+    C_MIN_AVG = 100
+
+    near_miss: list[dict] = []
+    for r in near_miss_rows:
+        misses: list[dict] = []
+        if r["trade_count_90d"] < C_MIN_TRADES:
+            misses.append({"field": "trade_count_90d", "have": r["trade_count_90d"], "need": C_MIN_TRADES})
+        if r["win_rate"] < C_MIN_WR:
+            misses.append(
+                {"field": "win_rate", "have": round(r["win_rate"], 4), "need": C_MIN_WR}
+            )
+        if r["cumulative_pnl"] < C_MIN_PNL:
+            misses.append(
+                {
+                    "field": "cumulative_pnl",
+                    "have": round(r["cumulative_pnl"], 2),
+                    "need": C_MIN_PNL,
+                    "gap_pct": round(
+                        (C_MIN_PNL - r["cumulative_pnl"]) / C_MIN_PNL * 100, 2
+                    ),
+                }
+            )
+        if r["avg_trade_size"] < C_MIN_AVG:
+            misses.append(
+                {
+                    "field": "avg_trade_size",
+                    "have": round(r["avg_trade_size"], 2),
+                    "need": C_MIN_AVG,
+                    "gap_pct": round(
+                        (C_MIN_AVG - r["avg_trade_size"]) / C_MIN_AVG * 100, 2
+                    ),
+                }
+            )
+
+        near_miss.append(
+            {
+                "wallet_address": r["wallet_address"],
+                "tier": r["tier"],
+                "trade_count_90d": r["trade_count_90d"],
+                "win_rate": r["win_rate"],
+                "cumulative_pnl": r["cumulative_pnl"],
+                "avg_trade_size": r["avg_trade_size"],
+                "resolved_count": r["resolved_count"],
+                "last_trade_at": r["last_trade_at"],
+                "misses": misses,
+                "misses_count": len(misses),
+            }
+        )
+
+    result = {
+        "health": health,  # green | yellow | red | dormant
+        "last_follower_fire_at": last_fire_at,
+        "last_decision_at": last_decision_at,
+        "hours_since_last_fire": age_hours,
+        "total_paper_trades": total_paper_trades,
+        "total_decisions": total_decisions,
+        "tier_distribution": tier_distribution,
+        "qualifying_whales": qualifying,
+        "near_miss": near_miss,
+        "thresholds_ref": {
+            "tier_C": {
+                "min_trades_90d": C_MIN_TRADES,
+                "min_win_rate": C_MIN_WR,
+                "min_cumulative_pnl_usdc": C_MIN_PNL,
+                "min_avg_trade_size_usdc": C_MIN_AVG,
+            },
+        },
+    }
+    _cache_set(cache_key, result, ttl=60.0)
+    return result
+
+
 @router.get("/paper-trades/stats")
 def paper_trades_stats(
     follower: str | None = Query(default=None, description="Filter by follower_name"),

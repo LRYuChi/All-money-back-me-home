@@ -84,6 +84,46 @@ interface StatsPayload extends PaperBookSummary {
   }>;
 }
 
+interface MissInfo {
+  field: string;
+  have: number;
+  need: number;
+  gap_pct?: number;
+}
+
+interface NearMissWhale {
+  wallet_address: string;
+  tier: string;
+  trade_count_90d: number;
+  win_rate: number;
+  cumulative_pnl: number;
+  avg_trade_size: number;
+  resolved_count: number;
+  last_trade_at: string | null;
+  misses: MissInfo[];
+  misses_count: number;
+}
+
+interface HealthPayload {
+  health: 'green' | 'yellow' | 'red' | 'dormant';
+  last_follower_fire_at: string | null;
+  last_decision_at: string | null;
+  hours_since_last_fire: number | null;
+  total_paper_trades: number;
+  total_decisions: number;
+  tier_distribution: Record<string, number>;
+  qualifying_whales: number;
+  near_miss: NearMissWhale[];
+  thresholds_ref: {
+    tier_C: {
+      min_trades_90d: number;
+      min_win_rate: number;
+      min_cumulative_pnl_usdc: number;
+      min_avg_trade_size_usdc: number;
+    };
+  };
+}
+
 type TabKey = 'all' | 'open' | 'closed';
 
 const REFRESH_MS = 20_000;
@@ -92,6 +132,7 @@ export default function PaperTradesPage() {
   const [tab, setTab] = useState<TabKey>('all');
   const [trades, setTrades] = useState<TradesPayload | null>(null);
   const [stats, setStats] = useState<StatsPayload | null>(null);
+  const [health, setHealth] = useState<HealthPayload | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [lastUpdate, setLastUpdate] = useState<Date | null>(null);
@@ -100,14 +141,18 @@ export default function PaperTradesPage() {
 
   const fetchAll = useCallback(async () => {
     try {
-      const [t, s] = await Promise.all([
+      const [t, s, h] = await Promise.all([
         apiClient.get<TradesPayload>('/api/polymarket/paper-trades', {
           params: { status: statusParam, limit: '200' },
         }),
         apiClient.get<StatsPayload>('/api/polymarket/paper-trades/stats'),
+        apiClient
+          .get<HealthPayload>('/api/polymarket/paper-trades/follower-health')
+          .catch(() => null),
       ]);
       setTrades(t);
       setStats(s);
+      setHealth(h);
       setLastUpdate(new Date());
       setError(null);
     } catch (e: unknown) {
@@ -141,6 +186,12 @@ export default function PaperTradesPage() {
 
         {stats && <StatsBar stats={stats} />}
 
+        {health && stats && stats.summary.total === 0 && (
+          <div style={{ marginTop: 16 }}>
+            <FollowerHealthBanner health={health} />
+          </div>
+        )}
+
         {stats && (
           <div style={{ marginTop: 16 }}>
             <Tabs tab={tab} setTab={setTab} stats={stats} />
@@ -157,6 +208,7 @@ export default function PaperTradesPage() {
         >
           <TradesTable trades={trades?.trades ?? []} tab={tab} loading={loading} />
           <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
+            {health && <FollowerHealthCard health={health} />}
             {stats && <TierBreakdown data={stats.by_tier} />}
             {stats && <TopSourceWallets data={stats.top_source_wallets} />}
             {stats && stats.by_follower.length > 1 && (
@@ -519,6 +571,264 @@ function TradeRow({ trade }: { trade: PaperTrade }) {
       </Td>
     </tr>
   );
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// Follower Health — 0 紙上單時的「透明度」區塊
+// ─────────────────────────────────────────────────────────────────────
+function FollowerHealthBanner({ health }: { health: HealthPayload }) {
+  const tierC = health.thresholds_ref.tier_C;
+  return (
+    <Card accentColor={healthColor(health.health)}>
+      <CardHeader
+        eyebrow={`⚙️ Follower 狀態 · ${healthLabel(health.health)}`}
+        title="為何還沒有紙上單"
+        subtitle={
+          health.qualifying_whales > 0
+            ? `${health.qualifying_whales} 個錢包已進入跟單白名單，等下次交易訊號`
+            : `${Object.values(health.tier_distribution).reduce((a, b) => a + b, 0)} 個錢包分類中，0 個達 A/B/C/emerging 門檻`
+        }
+        divider
+      />
+      <CardBody>
+        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 24, alignItems: 'flex-start' }}>
+          <div style={{ flex: '1 1 300px' }}>
+            <div style={{ fontSize: 12, color: fg.secondary, lineHeight: 1.6 }}>
+              <p style={{ marginBottom: 8 }}>
+                Follower 僅對已分類為 <strong>A / B / C / emerging</strong> tier 的錢包跟單。
+                目前鯨魚分布：
+              </p>
+              <ul style={{ listStyle: 'none', padding: 0, margin: 0 }}>
+                {Object.entries(health.tier_distribution)
+                  .sort((a, b) => b[1] - a[1])
+                  .map(([tier, count]) => (
+                    <li
+                      key={tier}
+                      style={{
+                        display: 'flex',
+                        justifyContent: 'space-between',
+                        padding: '3px 0',
+                      }}
+                    >
+                      <span>
+                        <TierBadge tier={tier} size="sm" />
+                      </span>
+                      <span style={{ fontVariantNumeric: 'tabular-nums' }}>{count}</span>
+                    </li>
+                  ))}
+              </ul>
+            </div>
+          </div>
+
+          <div style={{ flex: '2 1 500px' }}>
+            <div
+              style={{
+                fontSize: 11,
+                color: fg.tertiary,
+                marginBottom: 8,
+                textTransform: 'uppercase',
+                letterSpacing: 0.5,
+              }}
+            >
+              Tier C 最低門檻 · 距離最近的 {health.near_miss.length} 個錢包
+            </div>
+            <div style={{ fontSize: 11, color: fg.secondary, marginBottom: 8 }}>
+              {tierC.min_trades_90d} trades · winrate ≥{' '}
+              {(tierC.min_win_rate * 100).toFixed(0)}% · pnl ≥ ${tierC.min_cumulative_pnl_usdc} ·
+              avg ≥ ${tierC.min_avg_trade_size_usdc}
+            </div>
+            {health.near_miss.length === 0 ? (
+              <div style={{ padding: 12, color: fg.tertiary, fontSize: 12 }}>
+                無錢包接近門檻 — 系統在等活躍鯨魚累積。
+              </div>
+            ) : (
+              <NearMissList near_miss={health.near_miss.slice(0, 6)} />
+            )}
+          </div>
+        </div>
+      </CardBody>
+    </Card>
+  );
+}
+
+function FollowerHealthCard({ health }: { health: HealthPayload }) {
+  const color = healthColor(health.health);
+  return (
+    <Card accentColor={color}>
+      <CardHeader title="Follower 健康度" divider />
+      <CardBody>
+        <div
+          style={{
+            display: 'flex',
+            alignItems: 'center',
+            gap: 10,
+            marginBottom: 10,
+          }}
+        >
+          <span
+            style={{
+              width: 12,
+              height: 12,
+              borderRadius: '50%',
+              backgroundColor: color,
+              display: 'inline-block',
+            }}
+          />
+          <span style={{ fontSize: 13, fontWeight: 500, color: fg.primary }}>
+            {healthLabel(health.health)}
+          </span>
+        </div>
+        <div style={{ fontSize: 12, color: fg.secondary, lineHeight: 1.6 }}>
+          <div>
+            上次觸發：
+            <span style={{ color: fg.primary }}>
+              {health.last_follower_fire_at
+                ? `${formatAge(health.hours_since_last_fire)} 前`
+                : '從未'}
+            </span>
+          </div>
+          <div>
+            決策累計：
+            <span style={{ color: fg.primary, fontVariantNumeric: 'tabular-nums' }}>
+              {health.total_decisions}
+            </span>
+          </div>
+          <div>
+            白名單：
+            <span style={{ color: fg.primary, fontVariantNumeric: 'tabular-nums' }}>
+              {health.qualifying_whales} 錢包
+            </span>
+          </div>
+        </div>
+      </CardBody>
+    </Card>
+  );
+}
+
+function NearMissList({ near_miss }: { near_miss: NearMissWhale[] }) {
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+      {near_miss.map((w) => (
+        <div
+          key={w.wallet_address}
+          style={{
+            padding: '10px 12px',
+            borderRadius: 6,
+            border: `1px solid ${borderColor.hair}`,
+            backgroundColor: layer['01'],
+            display: 'flex',
+            gap: 12,
+            alignItems: 'center',
+            flexWrap: 'wrap',
+          }}
+        >
+          <Link
+            href={`/polymarket/wallet/${w.wallet_address}`}
+            style={{
+              fontFamily: 'ui-monospace, monospace',
+              fontSize: 11,
+              color: semantic.live,
+              textDecoration: 'none',
+              minWidth: 110,
+            }}
+          >
+            {shortAddr(w.wallet_address)}
+          </Link>
+          <TierBadge tier={w.tier} size="sm" />
+          <div
+            style={{
+              fontSize: 11,
+              color: fg.secondary,
+              fontVariantNumeric: 'tabular-nums',
+              flex: 1,
+            }}
+          >
+            tr={w.trade_count_90d} · wr={(w.win_rate * 100).toFixed(0)}% · pnl=$
+            {Math.round(w.cumulative_pnl).toLocaleString()} · avg=$
+            {w.avg_trade_size.toFixed(0)}
+          </div>
+          <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+            {w.misses.length === 0 ? (
+              <span
+                style={{
+                  padding: '3px 8px',
+                  borderRadius: 10,
+                  fontSize: 10,
+                  color: semantic.live,
+                  backgroundColor: 'oklch(95% 0.04 150 / 0.15)',
+                  border: `1px solid ${semantic.live}`,
+                }}
+              >
+                符合 tier C ✓（等 stability）
+              </span>
+            ) : (
+              w.misses.map((m) => (
+                <span
+                  key={m.field}
+                  style={{
+                    padding: '3px 8px',
+                    borderRadius: 10,
+                    fontSize: 10,
+                    color: semantic.error,
+                    backgroundColor: 'oklch(95% 0.04 25 / 0.1)',
+                    border: `1px solid ${semantic.error}`,
+                    fontVariantNumeric: 'tabular-nums',
+                  }}
+                >
+                  {fieldLabel(m.field)} {m.gap_pct != null ? `-${m.gap_pct.toFixed(0)}%` : '缺'}
+                </span>
+              ))
+            )}
+          </div>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function healthColor(h: HealthPayload['health']): string {
+  switch (h) {
+    case 'green':
+      return semantic.live;
+    case 'yellow':
+      return 'oklch(75% 0.15 80)';
+    case 'red':
+      return semantic.error;
+    case 'dormant':
+    default:
+      return fg.tertiary;
+  }
+}
+
+function healthLabel(h: HealthPayload['health']): string {
+  switch (h) {
+    case 'green':
+      return '活躍 (24h 內有觸發)';
+    case 'yellow':
+      return '緩慢 (1-7 天未觸發)';
+    case 'red':
+      return '停滯 (> 7 天未觸發)';
+    case 'dormant':
+    default:
+      return '尚未觸發過';
+  }
+}
+
+function formatAge(hours: number | null): string {
+  if (hours == null) return '—';
+  if (hours < 1) return `${Math.floor(hours * 60)} 分鐘`;
+  if (hours < 24) return `${Math.floor(hours)} 小時`;
+  return `${Math.floor(hours / 24)} 天`;
+}
+
+function fieldLabel(f: string): string {
+  const m: Record<string, string> = {
+    trade_count_90d: '筆數',
+    win_rate: '勝率',
+    cumulative_pnl: 'PnL',
+    avg_trade_size: '平均尺寸',
+  };
+  return m[f] ?? f;
 }
 
 // ─────────────────────────────────────────────────────────────────────
