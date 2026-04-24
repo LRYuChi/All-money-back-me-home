@@ -119,7 +119,9 @@ def main():
     report_lines.append("【系統狀態】")
     if config:
         report_lines.append(f"  Freqtrade: {config.get('state', '?')}")
-        pairs = config.get("exchange", {}).get("pair_whitelist", [])
+        # Freqtrade 2026.x: pair list 從 /whitelist 端點取得
+        wl = ft_get("whitelist") or {}
+        pairs = wl.get("whitelist", []) if isinstance(wl, dict) else []
         report_lines.append(f"  交易對: {len(pairs)} ({', '.join(p.split('/')[0] for p in pairs)})")
     report_lines.append(f"  報告時間: {now.strftime('%Y-%m-%d %H:%M')}")
 

@@ -67,7 +67,9 @@ def main():
         state = config.get("state", "")
         is_dry_run = config.get("dry_run", True)
         strategy = config.get("strategy", "未知")
-        pairs = config.get("exchange", {}).get("pair_whitelist", [])
+        # Freqtrade 2026.x: exchange 是 string 不是 dict，pair list 改走 /whitelist
+        wl = ft_get("whitelist") or {}
+        pairs = wl.get("whitelist", []) if isinstance(wl, dict) else []
         print(f"  機器人: {state} ({'模擬' if is_dry_run else '實盤'})")
         print(f"  策略: {strategy}")
         print(f"  交易對: {len(pairs)} ({', '.join(p.split('/')[0] for p in pairs)})")

@@ -33,10 +33,16 @@ else
     echo "[3/5] Supabase CLI not found — skipping migrations"
 fi
 
-# 5. Restart services
-echo "[4/5] Restarting services..."
-docker compose -f docker-compose.prod.yml down
-docker compose -f docker-compose.prod.yml up -d
+# 5. Apply changes without full teardown.
+#
+# `up -d --build` lets docker compose reconcile: only services whose image
+# OR compose definition changed get recreated. Unchanged services keep running.
+#
+# Why this matters: Supertrend (freqtrade container) is signal-rare — every
+# full restart wipes its in-memory signal history. We used to `down && up -d`
+# which disturbed freqtrade on every unrelated deploy and cost trades.
+echo "[4/5] Applying changes (reconcile, only recreate what changed)..."
+docker compose -f docker-compose.prod.yml up -d --build --remove-orphans
 
 # 6. Health check
 echo "[5/5] Waiting for services..."
@@ -56,19 +62,23 @@ else
     docker compose -f docker-compose.prod.yml logs --tail=20 web
 fi
 
-# Freqtrade bots health check (may take longer to start)
-echo "  Waiting for Freqtrade bots (10s)..."
-sleep 10
+# Freqtrade health — single container on 127.0.0.1:8080
+# (legacy two-bot trend/scalp setup retired 2026-Q2)
+echo "  Checking freqtrade..."
+sleep 3
 
-for bot in "freqtrade-trend:8080" "freqtrade-scalp:8081"; do
-    name="${bot%%:*}"
-    port="${bot##*:}"
-    if curl -sf -u freqtrade:freqtrade "http://localhost:${port}/api/v1/show_config" > /dev/null 2>&1; then
-        echo "  ${name}: OK"
-    else
-        echo "  ${name}: STARTING (check logs: docker compose -f docker-compose.prod.yml logs ${name})"
-    fi
-done
+if [ -f .env ]; then
+    FT_USER=$(grep -E '^FT_USER=' .env | cut -d= -f2- || echo freqtrade)
+    FT_PASS=$(grep -E '^FT_PASS=' .env | cut -d= -f2- || echo freqtrade)
+fi
+FT_USER=${FT_USER:-freqtrade}
+FT_PASS=${FT_PASS:-freqtrade}
+
+if curl -sf -u "${FT_USER}:${FT_PASS}" "http://127.0.0.1:8080/api/v1/ping" > /dev/null 2>&1; then
+    echo "  freqtrade: OK"
+else
+    echo "  freqtrade: STARTING (docker logs ambmh-freqtrade-1)"
+fi
 
 echo ""
 echo "=== Deploy complete! ==="

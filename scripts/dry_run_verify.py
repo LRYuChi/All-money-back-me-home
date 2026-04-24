@@ -134,12 +134,14 @@ def main():
     print(f"[{now.strftime('%Y-%m-%d %H:%M')}] 模擬交易驗證開始...\n")
 
     # ── 1. 取得交易對列表 ──
-    config = ft_get("show_config")
-    if not config:
+    # Freqtrade 2026.x 的 /show_config 把 exchange 回成字串(交易所名稱)
+    # 而非 dict。pair whitelist 要用 /whitelist 端點。
+    wl = ft_get("whitelist")
+    if not wl:
         print("❌ 無法連接 Freqtrade API，驗證中止")
         return
 
-    pairs = config.get("exchange", {}).get("pair_whitelist", [])
+    pairs = wl.get("whitelist", []) if isinstance(wl, dict) else []
     if not pairs:
         print("⚠️ 交易對列表為空")
         return
