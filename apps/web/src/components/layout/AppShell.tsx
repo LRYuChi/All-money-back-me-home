@@ -29,23 +29,53 @@ interface NavItem {
   matchPrefix?: string[];
 }
 
-const NAV: NavItem[] = [
-  { href: '/', icon: '◎', label: 'Overview' },
+interface NavSection {
+  label: string;
+  items: NavItem[];
+}
+
+const NAV_SECTIONS: NavSection[] = [
   {
-    href: '/polymarket',
-    icon: '◈',
-    label: 'Polymarket',
-    matchPrefix: ['/polymarket/wallet'],
+    label: 'Markets',
+    items: [
+      { href: '/', icon: '◎', label: 'Overview' },
+      {
+        href: '/market/crypto',
+        icon: '◐',
+        label: 'Markets',
+        matchPrefix: ['/market', '/symbol'],
+      },
+    ],
   },
   {
-    href: '/polymarket/paper-trades',
-    icon: '▦',
-    label: 'Paper Book',
-    matchPrefix: ['/polymarket/paper-trades'],
+    label: 'Trading',
+    items: [
+      {
+        href: '/trades',
+        icon: '≡',
+        label: 'Supertrend',
+      },
+      {
+        href: '/polymarket/paper-trades',
+        icon: '▦',
+        label: 'Poly Paper',
+        matchPrefix: ['/polymarket/paper-trades'],
+      },
+    ],
   },
-  { href: '/smart-money', icon: '⟨⟩', label: 'Smart Money' },
-  { href: '/trades', icon: '≡', label: 'Trades' },
-  { href: '/backtest', icon: '⟳', label: 'Backtest' },
+  {
+    label: 'Research',
+    items: [
+      {
+        href: '/polymarket',
+        icon: '◈',
+        label: 'Poly Whales',
+        matchPrefix: ['/polymarket/wallet'],
+      },
+      { href: '/smart-money', icon: '⟨⟩', label: 'Smart Money' },
+      { href: '/backtest', icon: '⟳', label: 'Backtest' },
+    ],
+  },
 ];
 
 interface AppShellProps {
@@ -220,52 +250,77 @@ function SideNav() {
   return (
     <nav
       style={{
-        width: 72,
+        width: 80,
         borderRight: `1px solid ${borderColor.hair}`,
         backgroundColor: layer['01'],
         display: 'flex',
         flexDirection: 'column',
-        padding: '8px 0',
+        padding: '4px 0',
         flexShrink: 0,
+        overflowY: 'auto',
       }}
     >
-      {NAV.map((item) => {
-        const active =
-          pathname === item.href ||
-          (item.matchPrefix?.some((p) => pathname.startsWith(p)) ?? false);
-        return (
-          <Link
-            key={item.href}
-            href={item.href}
-            title={item.label}
+      {NAV_SECTIONS.map((section, sIdx) => (
+        <div key={section.label} style={{ marginTop: sIdx === 0 ? 4 : 10 }}>
+          <div
             style={{
-              display: 'flex',
-              flexDirection: 'column',
-              alignItems: 'center',
-              gap: 4,
-              padding: '10px 4px',
-              borderLeft: `2px solid ${active ? semantic.live : 'transparent'}`,
-              color: active ? fg.primary : fg.secondary,
-              textDecoration: 'none',
-              transition: 'color 120ms cubic-bezier(0,0,0.2,1)',
-              backgroundColor: active ? layer['02'] : 'transparent',
+              padding: '4px 6px',
+              fontSize: 9,
+              color: fg.tertiary,
+              letterSpacing: 1,
+              textTransform: 'uppercase',
+              textAlign: 'center',
+              fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace',
             }}
           >
-            <span
-              style={{
-                fontSize: 16,
-                fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace',
-                color: active ? semantic.live : fg.secondary,
-              }}
-            >
-              {item.icon}
-            </span>
-            <span style={{ fontSize: 9, letterSpacing: 0.3, textAlign: 'center', lineHeight: 1.2 }}>
-              {item.label}
-            </span>
-          </Link>
-        );
-      })}
+            {section.label}
+          </div>
+          {section.items.map((item) => {
+            const active =
+              pathname === item.href ||
+              (item.matchPrefix?.some((p) => pathname.startsWith(p)) ?? false);
+            return (
+              <Link
+                key={item.href}
+                href={item.href}
+                title={item.label}
+                style={{
+                  display: 'flex',
+                  flexDirection: 'column',
+                  alignItems: 'center',
+                  gap: 3,
+                  padding: '8px 4px',
+                  borderLeft: `2px solid ${active ? semantic.live : 'transparent'}`,
+                  color: active ? fg.primary : fg.secondary,
+                  textDecoration: 'none',
+                  transition: 'color 120ms cubic-bezier(0,0,0.2,1)',
+                  backgroundColor: active ? layer['02'] : 'transparent',
+                }}
+              >
+                <span
+                  style={{
+                    fontSize: 15,
+                    fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace',
+                    color: active ? semantic.live : fg.secondary,
+                  }}
+                >
+                  {item.icon}
+                </span>
+                <span
+                  style={{
+                    fontSize: 9,
+                    letterSpacing: 0.2,
+                    textAlign: 'center',
+                    lineHeight: 1.1,
+                  }}
+                >
+                  {item.label}
+                </span>
+              </Link>
+            );
+          })}
+        </div>
+      ))}
     </nav>
   );
 }

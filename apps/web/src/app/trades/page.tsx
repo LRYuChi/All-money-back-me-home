@@ -2,6 +2,7 @@
 
 import { useEffect, useState, useCallback } from 'react';
 import { apiClient } from '@/lib/api-client';
+import { AppShell } from '@/components/layout/AppShell';
 
 interface PaperTradeData {
   capital: number;
@@ -108,6 +109,8 @@ function sign(v: number): string {
 
 type Tab = 'overview' | 'positions' | 'history' | 'journal' | 'performance';
 
+const REFRESH_MS = 60_000;
+
 export default function TradesPage() {
   const [data, setData] = useState<PaperTradeData | null>(null);
   const [perf, setPerf] = useState<PerformanceData | null>(null);
@@ -116,6 +119,7 @@ export default function TradesPage() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [tab, setTab] = useState<Tab>('overview');
+  const [lastUpdateDate, setLastUpdateDate] = useState<Date | null>(null);
 
   const fetchAll = useCallback(async () => {
     try {
@@ -132,6 +136,7 @@ export default function TradesPage() {
       setPerf(perfData);
       setEquity(eqData);
       setJournal(journalData);
+      setLastUpdateDate(new Date());
       setError(null);
     } catch (err) {
       setError(err instanceof Error ? err.message : '無法載入交易資料');
@@ -142,23 +147,23 @@ export default function TradesPage() {
 
   useEffect(() => {
     fetchAll();
-    const interval = setInterval(fetchAll, 60_000);
+    const interval = setInterval(fetchAll, REFRESH_MS);
     return () => clearInterval(interval);
   }, [fetchAll]);
 
   if (loading) {
     return (
-      <div className="flex items-center justify-center py-32">
-        <div className="text-gray-400 text-lg animate-pulse">載入交易資料中...</div>
-      </div>
+      <AppShell pageTitle="Supertrend · Paper Trading">
+        <div style={{ padding: 40, textAlign: 'center', color: '#9ca3af' }}>載入交易資料中...</div>
+      </AppShell>
     );
   }
 
   if (error) {
     return (
-      <div className="flex items-center justify-center py-32">
-        <div className="text-red-400 text-lg">{error}</div>
-      </div>
+      <AppShell pageTitle="Supertrend · Paper Trading">
+        <div style={{ padding: 40, textAlign: 'center', color: '#f87171' }}>{error}</div>
+      </AppShell>
     );
   }
 
@@ -173,26 +178,11 @@ export default function TradesPage() {
   ];
 
   return (
-    <div className="space-y-6">
-      {/* Header */}
-      <section className="flex items-center justify-between">
-        <div>
-          <h1 className="text-3xl font-bold text-white">模擬交易</h1>
-          <p className="text-gray-500 text-sm mt-1">
-            {data.last_updated
-              ? `最後更新：${new Date(data.last_updated).toLocaleString('zh-TW')}`
-              : 'Paper Trading'}
-          </p>
-        </div>
-        <div className="text-right">
-          <div className="text-sm text-gray-400">淨值</div>
-          <div className="text-2xl font-bold text-white">${fmt(data.capital)}</div>
-          <div className={`text-sm ${pnlClass(data.total_pnl)}`}>
-            {sign(data.total_pnl)}${fmt(data.total_pnl)} ({sign(data.total_pnl_pct)}{fmt(data.total_pnl_pct)}%)
-          </div>
-        </div>
-      </section>
-
+    <AppShell
+      pageTitle="Supertrend · Paper Trading"
+      dataFreshness={{ lastUpdate: lastUpdateDate, refreshMs: REFRESH_MS, onRefresh: fetchAll }}
+    >
+      <div style={{ padding: 16 }} className="space-y-4">
       {/* Summary Cards */}
       <section className="grid grid-cols-2 sm:grid-cols-4 gap-3">
         <StatCard label="資金" value={`$${fmt(data.capital)}`} sub={`初始 $${fmt(data.initial_capital)}`} />
@@ -230,7 +220,8 @@ export default function TradesPage() {
       {tab === 'history' && <HistoryTab trades={data.closed_trades} />}
       {tab === 'journal' && <JournalTab journal={journal} />}
       {tab === 'performance' && <PerformanceTab perf={perf} data={data} />}
-    </div>
+      </div>
+    </AppShell>
   );
 }
 

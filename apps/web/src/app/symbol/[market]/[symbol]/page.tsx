@@ -3,6 +3,7 @@
 import { useEffect, useState, useCallback } from 'react';
 import dynamic from 'next/dynamic';
 import { apiClient } from '@/lib/api-client';
+import { AppShell } from '@/components/layout/AppShell';
 import type { OHLCV } from '@/types/market';
 
 const CandlestickChart = dynamic(
@@ -127,21 +128,16 @@ export default function SymbolPage({
   const timeframes = ['1h', '4h', '1d'];
 
   return (
-    <div className="space-y-6">
-      {/* Header */}
-      <div className="flex items-center justify-between">
-        <div className="flex items-center space-x-3">
-          <span className="px-3 py-1 bg-gray-800 rounded-full text-sm text-gray-300">
-            {marketName}
-          </span>
-          <h1 className="text-3xl font-bold text-white">{symbol.toUpperCase()}</h1>
-        </div>
-        <div className="flex space-x-1 bg-gray-800 rounded-lg p-1">
+    <AppShell pageTitle={`${marketName} · ${symbol.toUpperCase()}`}>
+      <div style={{ padding: 16 }} className="space-y-4">
+      {/* Timeframe toggle */}
+      <div className="flex items-center justify-end">
+        <div className="flex space-x-1 bg-gray-800 rounded-md p-0.5">
           {timeframes.map((tf) => (
             <button
               key={tf}
               onClick={() => setTimeframe(tf)}
-              className={`px-3 py-1 text-sm rounded-md transition-colors ${
+              className={`px-3 py-1 text-xs rounded transition-colors font-mono ${
                 timeframe === tf ? 'bg-blue-600 text-white' : 'text-gray-400 hover:text-white'
               }`}
             >
@@ -292,6 +288,7 @@ export default function SymbolPage({
           </div>
         </div>
       )}
-    </div>
+      </div>
+    </AppShell>
   );
 }

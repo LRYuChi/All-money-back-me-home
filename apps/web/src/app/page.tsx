@@ -3,6 +3,7 @@
 import { useEffect, useState, useCallback } from 'react';
 import Link from 'next/link';
 import { apiClient } from '@/lib/api-client';
+import { AppShell } from '@/components/layout/AppShell';
 import { TickerTape } from '@/components/dashboard/TickerTape';
 import { ConfidencePanel } from '@/components/dashboard/ConfidencePanel';
 import { MarketTable } from '@/components/dashboard/MarketTable';
@@ -47,42 +48,43 @@ interface DashboardData {
   }>;
 }
 
+const REFRESH_MS = 5 * 60 * 1000;
+
 export default function DashboardPage() {
   const [data, setData] = useState<DashboardData | null>(null);
   const [loading, setLoading] = useState(true);
-  const [lastUpdate, setLastUpdate] = useState('');
+  const [lastUpdateDate, setLastUpdateDate] = useState<Date | null>(null);
 
   const fetchData = useCallback(async () => {
     try {
       const d = await apiClient.get<DashboardData>('/api/dashboard');
       setData(d);
-      setLastUpdate(new Date().toLocaleTimeString('zh-TW'));
+      setLastUpdateDate(new Date());
     } catch { /* keep stale */ }
     finally { setLoading(false); }
   }, []);
 
   useEffect(() => {
     fetchData();
-    const id = setInterval(fetchData, 5 * 60 * 1000);
+    const id = setInterval(fetchData, REFRESH_MS);
     return () => clearInterval(id);
   }, [fetchData]);
 
   if (loading && !data) {
     return (
-      <div className="-mx-4 -mt-4">
-        <div className="h-8 bg-gray-900/50 border-b border-gray-800 animate-pulse" />
-        <div className="px-4 py-3 space-y-3 max-w-7xl mx-auto">
+      <AppShell pageTitle="Overview · Trading Dashboard">
+        <div style={{ padding: 16 }}>
           <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
             <SkeletonCard />
             <SkeletonCard />
           </div>
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-3 mt-3">
             <div className="md:col-span-2"><SkeletonCard tall /></div>
             <SkeletonCard tall />
           </div>
           <div className="text-center text-xs text-gray-600 pt-4 animate-pulse">載入儀表板…</div>
         </div>
-      </div>
+      </AppShell>
     );
   }
   if (!data) return null;
@@ -128,31 +130,15 @@ export default function DashboardPage() {
   }));
 
   return (
-    <div className="-mx-4 -mt-4">
-      {/* Ticker Tape */}
+    <AppShell
+      pageTitle="Overview · Trading Dashboard"
+      dataFreshness={{ lastUpdate: lastUpdateDate, refreshMs: REFRESH_MS, onRefresh: fetchData }}
+    >
+      {/* Ticker tape sits flush below TopBar, edge-to-edge */}
       <TickerTape items={tickerItems} />
 
-      <div className="px-4 py-4 space-y-4 max-w-7xl mx-auto">
-        {/* Header */}
-        <header className="flex items-end justify-between flex-wrap gap-2">
-          <div>
-            <h1 className="text-2xl font-semibold text-white tracking-tight">Trading Dashboard</h1>
-            <div className="text-xs text-gray-500 mt-1">
-              加密期貨交易引擎 · Polymarket 鯨魚情報 · 多市場宏觀監控
-            </div>
-          </div>
-          <div className="flex items-center gap-3 text-xs text-gray-500 font-mono">
-            {lastUpdate && <span>更新 {lastUpdate}</span>}
-            <button
-              onClick={fetchData}
-              className="px-2.5 py-1 rounded-md border border-gray-800 hover:border-gray-700 hover:text-gray-300 transition-colors"
-            >
-              ↻ 刷新
-            </button>
-          </div>
-        </header>
-
-        {/* Row 0: System Health Bar (NEW — 雙系統並列) */}
+      <div style={{ padding: 16 }} className="space-y-3">
+        {/* System Health Bar (crypto + polymarket 雙系統並列) */}
         <SystemHealthBar
           crypto={{
             botState: data.freqtrade.state,
@@ -203,7 +189,7 @@ export default function DashboardPage() {
           <QuickLinks />
         </div>
       </div>
-    </div>
+    </AppShell>
   );
 }
 

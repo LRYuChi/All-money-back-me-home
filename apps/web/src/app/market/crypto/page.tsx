@@ -3,6 +3,7 @@
 import { useEffect, useState, useCallback } from 'react';
 import Link from 'next/link';
 import { apiClient } from '@/lib/api-client';
+import { AppShell } from '@/components/layout/AppShell';
 
 interface MarketInfo {
   symbol: string;
@@ -107,18 +108,18 @@ export default function CryptoMarketPage() {
   const timeframes = ['1h', '4h', '1d'];
 
   return (
-    <div className="space-y-6">
+    <AppShell pageTitle="Markets · 加密貨幣市場結構">
+      <div style={{ padding: 16 }} className="space-y-4">
       <div className="flex items-center justify-between">
         <div>
-          <h1 className="text-3xl font-bold text-white">加密貨幣市場</h1>
-          <p className="text-gray-400 mt-1">即時市場結構 & 策略信號</p>
+          <p className="text-gray-400 text-sm">即時市場結構 & 策略信號</p>
         </div>
-        <div className="flex space-x-1 bg-gray-800 rounded-lg p-1">
+        <div className="flex space-x-1 bg-gray-800 rounded-md p-0.5">
           {timeframes.map((tf) => (
             <button
               key={tf}
               onClick={() => setTimeframe(tf)}
-              className={`px-3 py-1 text-sm rounded-md transition-colors ${
+              className={`px-3 py-1 text-xs rounded transition-colors font-mono ${
                 timeframe === tf ? 'bg-blue-600 text-white' : 'text-gray-400 hover:text-white'
               }`}
             >
@@ -208,6 +209,7 @@ export default function CryptoMarketPage() {
           </Link>
         ))}
       </div>
-    </div>
+      </div>
+    </AppShell>
   );
 }

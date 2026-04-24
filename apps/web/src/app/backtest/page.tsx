@@ -2,6 +2,7 @@
 
 import { useEffect, useState, useCallback } from 'react';
 import { apiClient } from '@/lib/api-client';
+import { AppShell } from '@/components/layout/AppShell';
 
 interface BacktestRun {
   id: string;
@@ -40,11 +41,13 @@ export default function BacktestPage() {
   const [runs, setRuns] = useState<BacktestRun[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [lastUpdateDate, setLastUpdateDate] = useState<Date | null>(null);
 
   const fetchRuns = useCallback(async () => {
     try {
       const data = await apiClient.get<BacktestRun[]>('/api/strategy/backtest/runs');
       setRuns(data);
+      setLastUpdateDate(new Date());
       setError(null);
     } catch (err) {
       setError(err instanceof Error ? err.message : '無法載入回測結果');
@@ -58,11 +61,11 @@ export default function BacktestPage() {
   }, [fetchRuns]);
 
   return (
-    <div className="space-y-6">
-      <div>
-        <h1 className="text-3xl font-bold text-white">回測結果</h1>
-        <p className="text-gray-400 mt-1">策略回測歷史紀錄</p>
-      </div>
+    <AppShell
+      pageTitle="Backtest · 策略回測紀錄"
+      dataFreshness={{ lastUpdate: lastUpdateDate, refreshMs: 0, onRefresh: fetchRuns }}
+    >
+      <div style={{ padding: 16 }} className="space-y-4">
 
       {loading && (
         <div className="text-center py-16 text-gray-400 animate-pulse">載入中...</div>
@@ -149,7 +152,8 @@ export default function BacktestPage() {
           ))}
         </div>
       )}
-    </div>
+      </div>
+    </AppShell>
   );
 }
 

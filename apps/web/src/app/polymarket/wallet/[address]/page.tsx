@@ -5,6 +5,7 @@ import Link from 'next/link';
 import { useParams } from 'next/navigation';
 import { apiClient } from '@/lib/api-client';
 import { borderColor, fg, layer, semantic } from '@/lib/polymarket/tokens';
+import { AppShell } from '@/components/layout/AppShell';
 import { Card, CardHeader, CardBody } from '@/components/polymarket/Card';
 import { TierBadge } from '@/components/polymarket/TierBadge';
 import { ConsistencyTag } from '@/components/polymarket/SpecialistTag';
@@ -128,24 +129,26 @@ export default function WalletDetailPage() {
   }, [load]);
 
   if (loading && !data) {
-    return <CenteredMessage>讀取錢包資料中…</CenteredMessage>;
+    return (
+      <AppShell pageTitle="Wallet · Polymarket">
+        <CenteredMessage>讀取錢包資料中…</CenteredMessage>
+      </AppShell>
+    );
   }
   if (error) {
-    return <CenteredMessage error>錯誤：{error}</CenteredMessage>;
+    return (
+      <AppShell pageTitle="Wallet · Polymarket">
+        <CenteredMessage error>錯誤：{error}</CenteredMessage>
+      </AppShell>
+    );
   }
   if (!data) return null;
 
   return (
-    <main
-      style={{
-        backgroundColor: layer['00'],
-        minHeight: '100vh',
-        padding: '24px 32px 48px',
-        color: fg.primary,
-      }}
-    >
+    <AppShell pageTitle={`Wallet · ${data.wallet_address.substring(0, 10)}…`}>
+      <div style={{ padding: 16 }}>
       {/* Breadcrumb */}
-      <nav style={{ fontSize: '12px', color: fg.tertiary, marginBottom: '16px' }}>
+      <nav style={{ fontSize: '11px', color: fg.tertiary, marginBottom: '12px' }}>
         <Link href="/polymarket" style={{ color: fg.tertiary }}>
           ← 鯨魚目錄
         </Link>
@@ -218,7 +221,8 @@ export default function WalletDetailPage() {
       <div style={{ marginTop: '16px' }}>
         <RecentTradesCard trades={data.recent_trades} />
       </div>
-    </main>
+      </div>
+    </AppShell>
   );
 }
 

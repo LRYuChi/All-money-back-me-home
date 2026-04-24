@@ -4,9 +4,10 @@ import { useCallback, useEffect, useState } from 'react';
 import Link from 'next/link';
 import { useParams } from 'next/navigation';
 import { apiClient } from '@/lib/api-client';
-import { borderColor, fg, layer, semantic } from '@/lib/polymarket/tokens';
+import { borderColor, fg, semantic } from '@/lib/polymarket/tokens';
 import { Card, CardHeader, CardBody } from '@/components/polymarket/Card';
 import { TierBadge } from '@/components/polymarket/TierBadge';
+import { AppShell } from '@/components/layout/AppShell';
 
 /**
  * /polymarket/paper-trades/[id] — 單筆紙上跟單詳情
@@ -110,16 +111,14 @@ export default function PaperTradeDetailPage() {
   }, [fetchDetail]);
 
   return (
-    <div
-      className="min-h-screen"
-      style={{
-        backgroundColor: layer['00'],
-        color: fg.primary,
-        fontFamily: 'Inter, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif',
-      }}
-    >
-      <div className="max-w-[1200px] mx-auto" style={{ padding: '24px 28px' }}>
-        <Header id={id ?? ''} />
+    <AppShell pageTitle={`Paper Trade #${id ?? ''}`}>
+      <div style={{ padding: 16 }}>
+        <Link
+          href="/polymarket/paper-trades"
+          style={{ fontSize: 11, color: semantic.live, textDecoration: 'none' }}
+        >
+          ← 回紙上單列表
+        </Link>
 
         {loading && !data && (
           <div style={{ padding: 40, color: fg.tertiary, fontSize: 13 }}>載入中…</div>
@@ -171,24 +170,7 @@ export default function PaperTradeDetailPage() {
           紙上跟單細節 · 絕無真實下單
         </footer>
       </div>
-    </div>
-  );
-}
-
-function Header({ id }: { id: string }) {
-  return (
-    <header style={{ marginBottom: 16 }}>
-      <div style={{ fontSize: 11, color: fg.tertiary, letterSpacing: 1 }}>POLYMARKET</div>
-      <h1 style={{ fontSize: 22, fontWeight: 600, marginTop: 4 }}>
-        📘 紙上單 #{id}
-      </h1>
-      <Link
-        href="/polymarket/paper-trades"
-        style={{ fontSize: 12, color: semantic.live, textDecoration: 'none' }}
-      >
-        ← 回列表
-      </Link>
-    </header>
+    </AppShell>
   );
 }
 
