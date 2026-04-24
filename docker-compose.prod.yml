@@ -146,6 +146,25 @@ services:
         max-size: "10m"
         max-file: "3"
 
+  smart-money:
+    build: ./apps/smart-money
+    command: ["sleep", "infinity"]
+    volumes:
+      - ./smart_money:/app/smart_money:ro
+      - ./data:/app/data:rw
+    environment:
+      - DATABASE_URL=${SM_DATABASE_URL:-}
+      - SUPABASE_URL=${SUPABASE_URL}
+      - SUPABASE_SERVICE_KEY=${SUPABASE_SERVICE_ROLE_KEY}
+      - HL_API_URL=${HL_API_URL:-https://api.hyperliquid.xyz}
+      - LOG_LEVEL=${LOG_LEVEL:-INFO}
+    restart: unless-stopped
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
 volumes:
   trade-data:
   ft-data:
