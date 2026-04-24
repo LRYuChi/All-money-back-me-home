@@ -25,12 +25,47 @@ fi
 echo "[2/5] Building Docker images..."
 docker compose -f docker-compose.prod.yml build
 
-# 4. Run database migrations (if Supabase CLI available)
+# 4. Run database migrations.
+#
+# Three-tier fallback:
+#   1. supabase CLI if available (team's preferred path)
+#   2. psycopg inside already-running smart-money container (zero extra deps,
+#      just needs DATABASE_URL set in compose env)
+#   3. skip + warn (first-ever deploy, smart-money not yet up)
+#
+# All migration files in supabase/migrations/*.sql MUST be idempotent
+# (create table if not exists / add column if not exists); they are replayed
+# on every deploy without harm.
 if command -v supabase &> /dev/null; then
-    echo "[3/5] Running database migrations..."
+    echo "[3/5] Running database migrations via supabase CLI..."
     supabase db push || echo "  Migration skipped (check Supabase config)"
+elif docker compose -f docker-compose.prod.yml ps smart-money 2>/dev/null | grep -q " Up "; then
+    echo "[3/5] Running database migrations via smart-money container..."
+    migration_count=0
+    migration_failed=0
+    for f in supabase/migrations/*.sql; do
+        [ -f "$f" ] || continue
+        migration_count=$((migration_count + 1))
+        echo "  applying $(basename "$f")..."
+        if ! cat "$f" | docker compose -f docker-compose.prod.yml exec -T smart-money python -c '
+import sys, os, psycopg
+sql = sys.stdin.read()
+url = os.environ.get("DATABASE_URL", "")
+if not url:
+    print("ERR: DATABASE_URL not set in container", file=sys.stderr)
+    sys.exit(1)
+with psycopg.connect(url, autocommit=True) as c, c.cursor() as cur:
+    cur.execute(sql)
+'; then
+            echo "    FAILED — continuing"
+            migration_failed=$((migration_failed + 1))
+        fi
+    done
+    echo "  migrations: $migration_count attempted, $migration_failed failed"
 else
-    echo "[3/5] Supabase CLI not found — skipping migrations"
+    echo "[3/5] No supabase CLI and smart-money container not running —"
+    echo "      skipping migrations. Next deploy will pick them up once"
+    echo "      smart-money comes online."
 fi
 
 # 5. Apply changes without full teardown.
