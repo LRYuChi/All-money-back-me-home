@@ -59,20 +59,30 @@ from strategy_engine.registry import (
     SupabaseStrategyRegistry,
     build_registry,
 )
+from strategy_engine.runtime import (
+    CapitalProvider,
+    IntentCallback,
+    RegimeProvider,
+    StrategyRuntime,
+)
 
 __all__ = [
+    "CapitalProvider",
     "DSLError",
     "EntryRules",
     "EvaluationError",
     "ExitRules",
     "InMemoryStrategyRegistry",
+    "IntentCallback",
     "PositionSizing",
     "PostgresStrategyRegistry",
     "PredicateError",
+    "RegimeProvider",
     "StrategyDef",
     "StrategyNotFound",
     "StrategyRecord",
     "StrategyRegistry",
+    "StrategyRuntime",
     "SupabaseStrategyRegistry",
     "UnsupportedExpression",
     "build_registry",

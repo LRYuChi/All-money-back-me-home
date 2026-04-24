@@ -25,9 +25,11 @@ import sys
 from pathlib import Path
 from uuid import UUID
 
+from fusion import Regime, SignalFuser, load_weights
 from shared.signals.adapters import from_smart_money
 from shared.signals.history import SignalHistoryWriter, build_writer, record_safe
 from smart_money.config import settings
+from strategy_engine import StrategyRuntime, build_registry
 from smart_money.execution.mapper import SymbolMapper
 from smart_money.scanner.reconciler import FillsReconciler
 from smart_money.scanner.realtime import HLFillsListener
@@ -101,9 +103,83 @@ def build_parser() -> argparse.ArgumentParser:
         default=Path("config/smart_money/symbol_map.yaml"),
         help="HL → OKX symbol mapping YAML.",
     )
+    parser.add_argument(
+        "--strategies", action="store_true",
+        help="Enable Phase D/E rule chain (fuser + strategy runtime). "
+             "When set, requires config/fusion/weights.yaml + at least one "
+             "enabled row in `strategies` table.",
+    )
+    parser.add_argument(
+        "--strategy-eval-interval", type=int, default=30,
+        help="Seconds between strategy_eval ticks (default 30).",
+    )
+    parser.add_argument(
+        "--shadow-capital", type=float, default=10_000.0,
+        help="Notional capital used for fixed_pct sizing (default 10000).",
+    )
     parser.add_argument("--log-level", default="INFO",
                         choices=["DEBUG", "INFO", "WARNING", "ERROR"])
     return parser
+
+
+def _maybe_build_strategy_runtime(args: argparse.Namespace) -> StrategyRuntime | None:
+    """Build StrategyRuntime if --strategies is set + at least one strategy
+    is enabled. Returns None to fall back to legacy daemon behaviour."""
+    if not args.strategies:
+        return None
+
+    from pathlib import Path
+    from fusion import DEFAULT_WEIGHTS_PATH
+    weights_path = Path(DEFAULT_WEIGHTS_PATH)
+    if not weights_path.exists():
+        logger.warning(
+            "strategy runtime: %s not found — skipping strategies", weights_path,
+        )
+        return None
+
+    try:
+        weights = load_weights(weights_path)
+    except Exception as e:
+        logger.error("strategy runtime: weights load failed: %s — skipping", e)
+        return None
+
+    try:
+        registry = build_registry(settings)
+    except Exception as e:
+        logger.error("strategy runtime: registry init failed: %s — skipping", e)
+        return None
+
+    active = registry.list_active()
+    if not active:
+        logger.warning(
+            "strategy runtime: no active strategies in registry — skipping. "
+            "Upsert one with `python -c 'from strategy_engine import ...'`.",
+        )
+        return None
+
+    fuser = SignalFuser(weights)
+    capital = args.shadow_capital
+
+    # P4c shadow daemon: regime is provided by Phase D regime detector,
+    # but we don't have a live MarketContext source yet (Phase C/F work).
+    # Use SIDEWAYS_HIGH_VOL as conservative default until MarketContext
+    # is wired — strategies that gate on regime will see this consistent
+    # value and behave predictably. Rounds 15+ wire a real provider.
+    def _regime_provider() -> Regime:
+        return Regime.SIDEWAYS_HIGH_VOL
+
+    runtime = StrategyRuntime(
+        registry=registry,
+        fuser=fuser,
+        regime_provider=_regime_provider,
+        capital_provider=lambda: capital,
+    )
+    logger.info(
+        "strategy runtime: enabled (%d active strategies, capital=$%.0f, "
+        "regime=SIDEWAYS_HIGH_VOL fallback)",
+        len(active), capital,
+    )
+    return runtime
 
 
 def _resolve_whitelist(
@@ -150,6 +226,7 @@ async def _drain_loop(
     aggregator: SignalAggregator,
     simulator: ShadowSimulator,
     history_writer: SignalHistoryWriter,
+    strategy_runtime: StrategyRuntime | None,
     stop: asyncio.Event,
 ) -> None:
     """Full pipeline: RawFillEvent → classifier → aggregator → simulator.
@@ -203,7 +280,16 @@ async def _drain_loop(
         # Failure is logged but never propagated — history is observability,
         # not the primary pipeline. Watch-only wallets still count: we want
         # their signals in history for recovery-detection analysis.
-        record_safe(history_writer, from_smart_money(sig))
+        universal = from_smart_money(sig)
+        record_safe(history_writer, universal)
+
+        # Feed Phase D/E rule chain: fuser + strategy runtime (round 14).
+        # Errors swallowed: rule chain failure must not break SM aggregator.
+        if strategy_runtime is not None:
+            try:
+                strategy_runtime.ingest(universal)
+            except Exception as e:
+                logger.warning("strategy_runtime.ingest failed: %s", e)
 
         if not is_tradeable:
             # Watch-only: state updated, no shadow trade
@@ -226,6 +312,28 @@ async def _aggregator_flush_loop(
         except asyncio.CancelledError:
             break
         aggregator.flush_expired(now_ms=now_ms())
+
+
+async def _strategy_eval_loop(
+    runtime: StrategyRuntime,
+    stop: asyncio.Event,
+    interval_sec: int = 30,
+) -> None:
+    """Periodically run StrategyRuntime.evaluate_all() — fuses buffered signals
+    + dispatches StrategyIntents via on_intent callback. P4c daemon runs this
+    in shadow mode (intents only logged); Phase F live daemon will swap
+    on_intent to push pending_orders."""
+    while not stop.is_set():
+        try:
+            await asyncio.sleep(interval_sec)
+        except asyncio.CancelledError:
+            break
+        try:
+            intents = runtime.evaluate_all()
+            if intents:
+                logger.info("strategy_eval: %d intent(s) fired", len(intents))
+        except Exception as e:
+            logger.warning("strategy_eval failed: %s", e)
 
 
 async def run_shadow_daemon(args: argparse.Namespace) -> int:
@@ -283,6 +391,11 @@ async def run_shadow_daemon(args: argparse.Namespace) -> int:
     # Writer picks itself based on settings (Postgres > Supabase > NoOp).
     history_writer = build_writer(settings)
 
+    # Phase D + E: build StrategyRuntime if --strategies flag is set + at
+    # least one strategy is enabled. Otherwise skip the entire chain
+    # (legacy daemon behaviour, useful for shadow-only smoke runs).
+    strategy_runtime = _maybe_build_strategy_runtime(args)
+
     loop = asyncio.get_running_loop()
     event_queue: asyncio.Queue[RawFillEvent] = asyncio.Queue()
 
@@ -318,9 +431,15 @@ async def run_shadow_daemon(args: argparse.Namespace) -> int:
 
     drain_task = asyncio.create_task(_drain_loop(
         event_queue, store, address_to_wallet,
-        aggregator, simulator, history_writer, stop,
+        aggregator, simulator, history_writer, strategy_runtime, stop,
     ))
     flush_task = asyncio.create_task(_aggregator_flush_loop(aggregator, stop))
+
+    strategy_eval_task: asyncio.Task | None = None
+    if strategy_runtime is not None:
+        strategy_eval_task = asyncio.create_task(_strategy_eval_loop(
+            strategy_runtime, stop, interval_sec=args.strategy_eval_interval,
+        ))
 
     try:
         await stop.wait()
@@ -329,8 +448,13 @@ async def run_shadow_daemon(args: argparse.Namespace) -> int:
         reconciler_task.cancel()
         drain_task.cancel()
         flush_task.cancel()
+        if strategy_eval_task is not None:
+            strategy_eval_task.cancel()
         await listener.stop()
-        for t in (reconciler_task, drain_task, flush_task):
+        cancellable = [reconciler_task, drain_task, flush_task]
+        if strategy_eval_task is not None:
+            cancellable.append(strategy_eval_task)
+        for t in cancellable:
             try:
                 await t
             except asyncio.CancelledError:
