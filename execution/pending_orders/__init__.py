@@ -13,6 +13,15 @@ from execution.pending_orders.types import (
     PendingOrder,
     PendingOrderStatus,
 )
+from execution.pending_orders.events import (
+    EventLogger,
+    InMemoryEventLogger,
+    NoOpEventLogger,
+    OrderEvent,
+    PostgresEventLogger,
+    SupabaseEventLogger,
+    build_event_logger,
+)
 from execution.pending_orders.queue import (
     InMemoryPendingOrderQueue,
     NoOpPendingOrderQueue,
@@ -53,6 +62,14 @@ __all__ = [
     "PostgresPendingOrderQueue",
     "SupabasePendingOrderQueue",
     "build_queue",
+    # event logger (round 36)
+    "EventLogger",
+    "OrderEvent",
+    "NoOpEventLogger",
+    "InMemoryEventLogger",
+    "PostgresEventLogger",
+    "SupabaseEventLogger",
+    "build_event_logger",
     # dispatcher (intent → pending row)
     "intent_to_pending",
     "make_intent_callback",

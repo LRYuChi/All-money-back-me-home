@@ -7,6 +7,11 @@ Workers (Phase F.1+) poll `claim_next_pending(mode)` to pick up work
 atomically — implementations must be safe for multiple consumers when
 that becomes relevant (Phase H scale-out). For now Postgres uses a
 SELECT FOR UPDATE SKIP LOCKED pattern; InMemory uses a simple lock.
+
+Round 36: every backend now takes an optional `event_logger` and writes
+to `pending_order_events` on every status transition (initial enqueue,
+claim, terminal). Failures are fire-and-forget to keep trading flowing
+when the audit table has a hiccup.
 """
 from __future__ import annotations
 
@@ -15,6 +20,11 @@ import threading
 from datetime import datetime, timezone
 from typing import Any, Protocol
 
+from execution.pending_orders.events import (
+    EventLogger,
+    NoOpEventLogger,
+    build_event_logger,
+)
 from execution.pending_orders.types import (
     ExecutionMode,
     PendingOrder,
@@ -26,6 +36,30 @@ logger = logging.getLogger(__name__)
 
 class PendingOrderNotFound(KeyError):
     """No row with that id."""
+
+
+def _safe_log_event(
+    event_logger: EventLogger | None,
+    order_id: int | None,
+    from_status: PendingOrderStatus | None,
+    to_status: PendingOrderStatus,
+    *,
+    reason: str | None = None,
+    detail: dict | None = None,
+) -> None:
+    """Defence: never let an event logger failure break the trade path."""
+    if event_logger is None or order_id is None:
+        return
+    try:
+        event_logger.record(
+            order_id, from_status, to_status,
+            reason=reason, detail=detail,
+        )
+    except Exception as e:
+        logger.warning(
+            "event_logger.record raised (%s) for order %s %s→%s — swallowing",
+            e, order_id, from_status, to_status,
+        )
 
 
 class PendingOrderQueue(Protocol):
@@ -82,10 +116,11 @@ class NoOpPendingOrderQueue:
 class InMemoryPendingOrderQueue:
     """Thread-safe dict-backed queue. Workers can claim via FIFO order."""
 
-    def __init__(self) -> None:
+    def __init__(self, *, event_logger: EventLogger | None = None) -> None:
         self._orders: dict[int, PendingOrder] = {}
         self._next_id: int = 1
         self._lock = threading.Lock()
+        self._events = event_logger or NoOpEventLogger()
 
     def enqueue(self, order: PendingOrder) -> int:
         with self._lock:
@@ -97,7 +132,15 @@ class InMemoryPendingOrderQueue:
             order.id = self._next_id
             self._next_id += 1
             self._orders[order.id] = order
-            return order.id
+        # Event recorded outside the lock so a slow audit can't stall enqueues
+        _safe_log_event(
+            self._events, order.id, None, PendingOrderStatus.PENDING,
+            reason="initial enqueue",
+            detail={"strategy_id": order.strategy_id, "symbol": order.symbol,
+                    "side": order.side, "mode": order.mode,
+                    "notional_usd": order.target_notional_usd},
+        )
+        return order.id
 
     def get(self, order_id: int) -> PendingOrder:
         with self._lock:
@@ -107,6 +150,7 @@ class InMemoryPendingOrderQueue:
             return order
 
     def claim_next_pending(self, mode: ExecutionMode) -> PendingOrder | None:
+        claimed: PendingOrder | None = None
         with self._lock:
             for order in sorted(self._orders.values(), key=lambda o: o.created_at):
                 if order.status == PendingOrderStatus.PENDING and order.mode == mode:
@@ -114,8 +158,16 @@ class InMemoryPendingOrderQueue:
                     order.attempts += 1
                     order.dispatched_at = datetime.now(timezone.utc)
                     order.updated_at = datetime.now(timezone.utc)
-                    return order
-            return None
+                    claimed = order
+                    break
+        if claimed is not None:
+            _safe_log_event(
+                self._events, claimed.id,
+                PendingOrderStatus.PENDING, PendingOrderStatus.DISPATCHING,
+                reason="claimed by worker",
+                detail={"attempt": claimed.attempts},
+            )
+        return claimed
 
     def update_status(
         self,
@@ -129,6 +181,7 @@ class InMemoryPendingOrderQueue:
             order = self._orders.get(order_id)
             if order is None:
                 raise PendingOrderNotFound(order_id)
+            from_status = order.status
             order.status = status
             if last_error is not None:
                 order.last_error = last_error
@@ -137,6 +190,11 @@ class InMemoryPendingOrderQueue:
             order.updated_at = datetime.now(timezone.utc)
             if order.is_terminal:
                 order.completed_at = order.updated_at
+        if from_status != status:
+            _safe_log_event(
+                self._events, order_id, from_status, status,
+                reason=last_error,
+            )
 
     def list_recent(
         self,
@@ -160,8 +218,11 @@ class InMemoryPendingOrderQueue:
 class SupabasePendingOrderQueue:
     TABLE = "pending_orders"
 
-    def __init__(self, client: Any):
+    def __init__(
+        self, client: Any, *, event_logger: EventLogger | None = None,
+    ):
         self._client = client
+        self._events = event_logger or NoOpEventLogger()
 
     def enqueue(self, order: PendingOrder) -> int:
         # Idempotency: if client_order_id supplied + already exists, return its id
@@ -180,6 +241,13 @@ class SupabasePendingOrderQueue:
         res = self._client.table(self.TABLE).insert(row).execute()
         new_id = int(res.data[0]["id"]) if res.data else 0
         order.id = new_id
+        _safe_log_event(
+            self._events, new_id, None, PendingOrderStatus.PENDING,
+            reason="initial enqueue",
+            detail={"strategy_id": order.strategy_id, "symbol": order.symbol,
+                    "side": order.side, "mode": order.mode,
+                    "notional_usd": order.target_notional_usd},
+        )
         return new_id
 
     def get(self, order_id: int) -> PendingOrder:
@@ -203,6 +271,7 @@ class SupabasePendingOrderQueue:
             return None
         row = res.data[0]
         order = _row_to_order(row)
+        # update_status emits the event for us
         self.update_status(
             order.id, PendingOrderStatus.DISPATCHING, increment_attempts=True,
         )
@@ -218,6 +287,18 @@ class SupabasePendingOrderQueue:
         last_error: str | None = None,
         increment_attempts: bool = False,
     ) -> None:
+        # Read current status BEFORE the update so the event has from_status
+        from_status: PendingOrderStatus | None = None
+        try:
+            res = (
+                self._client.table(self.TABLE).select("status")
+                .eq("id", order_id).limit(1).execute()
+            )
+            if res.data:
+                from_status = PendingOrderStatus(res.data[0]["status"])
+        except Exception:
+            pass
+
         now = datetime.now(timezone.utc).isoformat()
         payload: dict[str, Any] = {
             "status": status.value,
@@ -230,6 +311,11 @@ class SupabasePendingOrderQueue:
             payload["last_error"] = last_error
         # increment_attempts ignored for Supabase (would need rpc); test path uses InMemory
         self._client.table(self.TABLE).update(payload).eq("id", order_id).execute()
+        if from_status != status:
+            _safe_log_event(
+                self._events, order_id, from_status, status,
+                reason=last_error,
+            )
 
     def list_recent(
         self,
@@ -248,8 +334,11 @@ class SupabasePendingOrderQueue:
 # Postgres direct
 # ================================================================== #
 class PostgresPendingOrderQueue:
-    def __init__(self, dsn: str):
+    def __init__(
+        self, dsn: str, *, event_logger: EventLogger | None = None,
+    ):
         self._dsn = dsn
+        self._events = event_logger or NoOpEventLogger()
 
     def _conn(self):
         import psycopg
@@ -264,7 +353,7 @@ class PostgresPendingOrderQueue:
             "values (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, now(), now()) "
             "on conflict (client_order_id) do update set "
             "  updated_at = now() "
-            "returning id"
+            "returning id, (xmax = 0) as inserted"
         )
         with self._conn() as conn, conn.cursor() as cur:
             cur.execute(sql, (
@@ -274,9 +363,21 @@ class PostgresPendingOrderQueue:
                 order.mode, order.status.value, order.attempts, order.last_error,
                 order.fused_signal_id, order.client_order_id,
             ))
-            new_id = int(cur.fetchone()[0])
+            row = cur.fetchone()
+            new_id = int(row[0])
+            inserted = bool(row[1])
             conn.commit()
         order.id = new_id
+        # Only log enqueue event for genuinely-new rows; idempotent retries
+        # of the same client_order_id are not state changes.
+        if inserted:
+            _safe_log_event(
+                self._events, new_id, None, PendingOrderStatus.PENDING,
+                reason="initial enqueue",
+                detail={"strategy_id": order.strategy_id, "symbol": order.symbol,
+                        "side": order.side, "mode": order.mode,
+                        "notional_usd": float(order.target_notional_usd)},
+            )
         return new_id
 
     def get(self, order_id: int) -> PendingOrder:
@@ -316,7 +417,16 @@ class PostgresPendingOrderQueue:
             cur.execute(sql, (mode,))
             row = cur.fetchone()
             conn.commit()
-        return _pg_row_to_order(row) if row else None
+        if not row:
+            return None
+        order = _pg_row_to_order(row)
+        _safe_log_event(
+            self._events, order.id,
+            PendingOrderStatus.PENDING, PendingOrderStatus.DISPATCHING,
+            reason="claimed by worker",
+            detail={"attempt": order.attempts},
+        )
+        return order
 
     def update_status(
         self,
@@ -327,18 +437,34 @@ class PostgresPendingOrderQueue:
         increment_attempts: bool = False,
     ) -> None:
         terminal = status.value in {"filled", "rejected", "cancelled", "expired"}
-        sql = (
-            "update pending_orders set "
-            "  status = %s, "
-            f"  attempts = attempts + {1 if increment_attempts else 0}, "
-            "  last_error = coalesce(%s, last_error), "
-            "  updated_at = now()"
-            f"  {', completed_at = now()' if terminal else ''} "
-            "where id = %s"
-        )
+        # Read current status BEFORE the update so the event has from_status.
+        # Single-trip alternative: a CTE returning the old status, but this
+        # path is plenty fast (the row is hot in cache from the worker's
+        # claim).
+        from_status: PendingOrderStatus | None = None
         with self._conn() as conn, conn.cursor() as cur:
-            cur.execute(sql, (status.value, last_error, order_id))
+            cur.execute(
+                "select status from pending_orders where id = %s", (order_id,),
+            )
+            r = cur.fetchone()
+            if r is not None:
+                from_status = PendingOrderStatus(r[0])
+            update_sql = (
+                "update pending_orders set "
+                "  status = %s, "
+                f"  attempts = attempts + {1 if increment_attempts else 0}, "
+                "  last_error = coalesce(%s, last_error), "
+                "  updated_at = now()"
+                f"  {', completed_at = now()' if terminal else ''} "
+                "where id = %s"
+            )
+            cur.execute(update_sql, (status.value, last_error, order_id))
             conn.commit()
+        if from_status != status:
+            _safe_log_event(
+                self._events, order_id, from_status, status,
+                reason=last_error,
+            )
 
     def list_recent(
         self,
@@ -422,11 +548,14 @@ def _parse_iso(s: str | None) -> datetime | None:
 
 
 def build_queue(settings) -> PendingOrderQueue:  # noqa: ANN001
-    """Factory mirroring signals.history priority."""
+    """Factory mirroring signals.history priority. Wires a matching
+    EventLogger automatically (round 36) so every status transition lands
+    in `pending_order_events`."""
+    events = build_event_logger(settings)
     dsn = (getattr(settings, "database_url", "") or "").strip()
     if dsn:
-        logger.info("pending order queue: PostgresPendingOrderQueue")
-        return PostgresPendingOrderQueue(dsn)
+        logger.info("pending order queue: PostgresPendingOrderQueue (events=PG)")
+        return PostgresPendingOrderQueue(dsn, event_logger=events)
 
     sb_url = (getattr(settings, "supabase_url", "") or "").strip()
     sb_key = (getattr(settings, "supabase_service_key", "") or "").strip()
@@ -434,8 +563,8 @@ def build_queue(settings) -> PendingOrderQueue:  # noqa: ANN001
         try:
             from supabase import create_client
             client = create_client(sb_url, sb_key)
-            logger.info("pending order queue: SupabasePendingOrderQueue")
-            return SupabasePendingOrderQueue(client)
+            logger.info("pending order queue: SupabasePendingOrderQueue (events=Supabase)")
+            return SupabasePendingOrderQueue(client, event_logger=events)
         except ImportError:
             logger.warning("pending order queue: supabase-py missing")
 
