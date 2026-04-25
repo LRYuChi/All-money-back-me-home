@@ -180,6 +180,39 @@ services:
         max-size: "10m"
         max-file: "3"
 
+  # ----------------------------------------------------------------
+  # Supertrend cron sidecar (R56): long-running scheduler that fires
+  # daily summary (00:05 UTC), weekly review (Mon 00:30 UTC), and
+  # 6h regime check (00/06/12/18 UTC). Reads journal via shared volume.
+  # State persisted at /app/data/cron_state.json so restarts within the
+  # same minute don't double-fire jobs.
+  # ----------------------------------------------------------------
+  supertrend-cron:
+    build: ./apps/api
+    command: python -u -m strategies.cli.cron_sidecar
+    depends_on:
+      - freqtrade
+    volumes:
+      - ./strategies:/app/strategies:ro
+      - ./market_monitor:/app/market_monitor:ro
+      - ./guards:/app/guards:ro
+      - ./trading_log:/app/trading_log
+      - trade-data:/app/data
+    environment:
+      - PYTHONUNBUFFERED=1
+      - SUPERTREND_JOURNAL_DIR=/app/trading_log/journal
+      - CRON_STATE_FILE=/app/data/cron_state.json
+      - TELEGRAM_TOKEN=${TELEGRAM_TOKEN}
+      - TELEGRAM_CHAT_ID=${TELEGRAM_CHAT_ID}
+      - TG_AI_BOT_TOKEN=${TG_AI_BOT_TOKEN}
+      - LOG_LEVEL=${LOG_LEVEL:-INFO}
+    restart: unless-stopped
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
   smart-money:
     build: ./apps/smart-money
     command: ["sleep", "infinity"]
