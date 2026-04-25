@@ -131,6 +131,63 @@ def test_cold_start_dominant_silent_at_low_volume():
 
 
 # =================================================================== #
+# R76: CLOSE_WITHOUT_OPEN_DOMINANT (simulator-level cold start)
+# =================================================================== #
+def test_close_without_open_dominant_alert_fires():
+    """When >30% of skips are close_without_open, fire the alert."""
+    alerts = _build_shadow_alerts(
+        **_healthy_inputs(
+            skipped_reasons={
+                "close_without_open": 50,
+                "unknown_symbol": 30,
+            },
+        ),
+    )
+    assert any("CLOSE_WITHOUT_OPEN_DOMINANT" in a and "50/80" in a
+               for a in alerts)
+    # Educational text mentions paper book + resolution path
+    cwo_alert = next(a for a in alerts if "CLOSE_WITHOUT_OPEN" in a)
+    assert "shadow simulator paper book" in cwo_alert
+    assert "fresh open→close cycles" in cwo_alert
+
+
+def test_close_without_open_silent_below_30pct_threshold():
+    alerts = _build_shadow_alerts(
+        **_healthy_inputs(
+            skipped_reasons={
+                "close_without_open": 5,
+                "unknown_symbol": 50,
+            },
+        ),
+    )
+    assert not any("CLOSE_WITHOUT_OPEN_DOMINANT" in a for a in alerts)
+
+
+def test_close_without_open_silent_at_low_total_volume():
+    """Total < 20 skips → not enough sample."""
+    alerts = _build_shadow_alerts(
+        **_healthy_inputs(
+            skipped_reasons={"close_without_open": 10},
+        ),
+    )
+    assert not any("CLOSE_WITHOUT_OPEN_DOMINANT" in a for a in alerts)
+
+
+def test_both_cold_start_and_close_without_open_fire_independently():
+    """Both rules can fire simultaneously — they describe different layers."""
+    alerts = _build_shadow_alerts(
+        **_healthy_inputs(
+            skipped_reasons={
+                "cold_start_drift": 60,    # >50% triggers COLD_START
+                "close_without_open": 40,  # >30% triggers CLOSE_WITHOUT_OPEN
+            },
+        ),
+    )
+    assert any("COLD_START_DRIFT_DOMINANT" in a for a in alerts)
+    assert any("CLOSE_WITHOUT_OPEN_DOMINANT" in a for a in alerts)
+
+
+# =================================================================== #
 # ALL_SKIPPED_NO_PAPER
 # =================================================================== #
 def test_all_skipped_no_paper_alert_fires():

@@ -239,7 +239,7 @@ def _build_shadow_alerts(
             "WS connection or DB writes are slow; check Supabase health"
         )
 
-    # cold_start_drift dominance
+    # cold_start_drift dominance (classifier-level state cold start)
     total_24h_skips = sum(skipped_reasons.values()) if skipped_reasons else 0
     cold = skipped_reasons.get("cold_start_drift", 0)
     if total_24h_skips >= 20 and cold / max(total_24h_skips, 1) > 0.5:
@@ -247,6 +247,21 @@ def _build_shadow_alerts(
             f"COLD_START_DRIFT_DOMINANT — {cold}/{total_24h_skips} skips "
             "are cold_start_drift; consider running R72 warmup "
             "(redeploy supertrend-cron or smart-money-shadow)"
+        )
+
+    # R76: close_without_open dominance (simulator-level paper book cold start)
+    # Distinct from cold_start_drift — classifier knew the position via R72
+    # warmup, but shadow simulator's paper trade book never had the
+    # corresponding OPEN (because we started watching after the wallet
+    # already had a position). Resolves naturally as wallets cycle through
+    # full open→close pairs within the observation window.
+    cwo = skipped_reasons.get("close_without_open", 0)
+    if total_24h_skips >= 20 and cwo / max(total_24h_skips, 1) > 0.3:
+        alerts.append(
+            f"CLOSE_WITHOUT_OPEN_DOMINANT — {cwo}/{total_24h_skips} skips "
+            "are close_without_open; shadow simulator paper book lacks the "
+            "OPEN side because wallet already held position when we started "
+            "observing. Resolves as wallets complete fresh open→close cycles."
         )
 
     # All-skip-no-paper anomaly (1h window)

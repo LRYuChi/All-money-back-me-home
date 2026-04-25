@@ -178,6 +178,15 @@ def test_shadow_latency_alert_is_known_degraded_not_hard():
     assert res["problems"] == []
 
 
+def test_shadow_close_without_open_is_known_degraded_not_hard():
+    """R76: simulator-level cold start expected — don't block iteration."""
+    p = _healthy_shadow_payload()
+    p["alerts"] = ["CLOSE_WITHOUT_OPEN_DOMINANT — 50/100 skips"]
+    res = hc.evaluate_shadow(p)
+    assert res["problems"] == []
+    assert "CLOSE_WITHOUT_OPEN_DOMINANT" in res["alerts"][0]
+
+
 # =================================================================== #
 # has_hard_problems
 # =================================================================== #
