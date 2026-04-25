@@ -716,7 +716,7 @@ def supertrend_operations(
                 "n_trades": snap.n_trades,
                 "win_rate": snap.win_rate,
                 "sum_pnl_usd": snap.sum_pnl_usd,
-                "max_drawdown_usd": snap.max_drawdown_usd,
+                "max_drawdown_pct": snap.max_drawdown_pct,
             }
         except Exception as e:
             out["errors"]["performance"] = str(e)
