@@ -38,7 +38,7 @@
 | **D. AI + 融合** | ✅ basic | Regime ✅；SignalFuser ✅；**MarketContext provider (HL daily 200d + MA200/slope/vol/DD + 可選 VIX + TTL cache) ✅**；AI LLM 整合 ⬜ | R2 (LLM 供應) 仍待拍板 |
 | **E. 策略 DSL** | ✅ basic | DSL ✅；evaluator ✅；registry ✅；首個 prod 策略 ✅；e2e 整合 ✅；StrategyRuntime + daemon wiring ✅；**daemon 接真實 regime ✅**；dashboard / 多策略 ⬜ | rule-only 鏈路 daemon 內全程可跑 |
 | **F. 跨市場** | 🟡 | Pending Orders middleware ✅；**Worker (claim → dispatch → mark + LogOnlyDispatcher + CLI + async run_forever) ✅**；OKX live adapter / IBKR / TW broker ⬜ | QD P0-1+pending_order_worker 借鑒；shadow/notify mode 全循環可跑 |
-| **G. 風險統一** | ✅ basic | GuardPipeline + 5 builtin guards ✅；Worker 接 pipeline ✅；**PnL aggregator × 4 + G8 DailyLossCB (UTC midnight boundary, fail-open on agg error, integrates with pipeline) ✅**；G2/G7/G9/G10 ⬜ | 6/10 guards 完整 |
+| **G. 風險統一** | ✅ basic | GuardPipeline + 6 guards ✅；Worker 接 pipeline ✅；PnL aggregator × 4 ✅；**ExposureProvider × 4 + make_context_provider + cli/work.py --with-guards ✅**；G2/G7/G9/G10 ⬜ | 6/10 guards 完整 + production wiring |
 | **H. Live ramp** | ⬜ | — | — |
 
 ### ⏸ 待手動介入清單（loop 自動跳過）
@@ -71,7 +71,8 @@
 | 2026-04-25 09:07 UTC | #18 | Phase G 起點 — Risk Guard pipeline + 5 builtin guards (latency / min_size / strategy_exposure / market_exposure / global_exposure) + scale-mutate semantics + 24 tests | ✅ 完成 |
 | 2026-04-25 09:37 UTC | #19 | Phase G 續 — Worker 接 GuardPipeline (DENY 短路 / SCALE mutate / context_provider / pipeline-crash fail-safe / 8 stats counters) + 10 tests | ✅ 完成 |
 | (manual) | #20 | Phase G 續 — PnL aggregator × 4 + G8 DailyLossCircuitBreaker (UTC midnight boundary / fail-open on agg error / pipeline integration) + 16 tests | ✅ 完成 |
-| — | — | **下輪待辦**：G9 ConsecutiveLossCB OR Worker 接 PnL aggregator/G8 進 daemon (smart_money/cli/shadow.py) OR OKX adapter (F.1, 需 R6) OR Kronos (需 R1) | ⬜ |
+| (manual) | #21 | Phase G 續 — ExposureProvider × 4 (sm_paper_trades + live_trades 開倉聚合 by strategy/market/global) + make_context_provider + cli/work.py `--with-guards` + 18 tests | ✅ 完成 |
+| — | — | **下輪待辦**：G9 ConsecutiveLossCB OR Audit log hook (round 7 leftover) OR signal_age provider (G1 真實啟用) OR OKX adapter (F.1 需 R6) OR Kronos (R1) | ⬜ |
 
 ---
 

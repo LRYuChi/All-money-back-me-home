@@ -47,6 +47,15 @@ from risk.pnl_aggregator import (
     build_pnl_aggregator,
     day_boundary_utc,
 )
+from risk.exposure_provider import (
+    ExposureProvider,
+    InMemoryExposureProvider,
+    NoOpExposureProvider,
+    PostgresExposureProvider,
+    SupabaseExposureProvider,
+    build_exposure_provider,
+    make_context_provider,
+)
 
 __all__ = [
     # framework
@@ -70,4 +79,12 @@ __all__ = [
     "PostgresPnLAggregator",
     "build_pnl_aggregator",
     "day_boundary_utc",
+    # exposure provider
+    "ExposureProvider",
+    "NoOpExposureProvider",
+    "InMemoryExposureProvider",
+    "SupabaseExposureProvider",
+    "PostgresExposureProvider",
+    "build_exposure_provider",
+    "make_context_provider",
 ]
