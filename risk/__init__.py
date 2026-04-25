@@ -31,6 +31,7 @@ from risk.guards import (
     GuardResult,
 )
 from risk.builtin_guards import (
+    ConsecutiveLossDaysGuard,
     DailyLossCircuitBreakerGuard,
     GlobalExposureGuard,
     LatencyBudgetGuard,
@@ -65,6 +66,7 @@ __all__ = [
     "GuardPipeline",
     "GuardResult",
     # built-in guards
+    "ConsecutiveLossDaysGuard",
     "DailyLossCircuitBreakerGuard",
     "GlobalExposureGuard",
     "LatencyBudgetGuard",

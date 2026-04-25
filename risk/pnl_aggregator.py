@@ -28,6 +28,9 @@ class PnLAggregator(Protocol):
     def realised_window_usd(
         self, *, hours: int, now: datetime | None = None,
     ) -> float: ...
+    def daily_pnl_history(
+        self, *, days: int, now: datetime | None = None,
+    ) -> list[float]: ...
 
 
 def day_boundary_utc(now: datetime | None = None) -> datetime:
@@ -51,6 +54,11 @@ class NoOpPnLAggregator:
         self, *, hours: int, now: datetime | None = None,
     ) -> float:
         return 0.0
+
+    def daily_pnl_history(
+        self, *, days: int, now: datetime | None = None,
+    ) -> list[float]:
+        return []
 
 
 # ================================================================== #
@@ -82,6 +90,29 @@ class InMemoryPnLAggregator:
         cutoff = n - timedelta(hours=hours)
         return sum(p for ts, p in self._trades if ts >= cutoff)
 
+    def daily_pnl_history(
+        self, *, days: int, now: datetime | None = None,
+    ) -> list[float]:
+        """Returns N completed UTC days' realised PnL in [oldest..newest]
+        order. Today (in-progress) is NOT included.
+
+        For days=3 at now=2026-04-25 14:00, returns:
+            [pnl(2026-04-22), pnl(2026-04-23), pnl(2026-04-24)]
+        """
+        if days <= 0:
+            return []
+        today_start = day_boundary_utc(now)
+        out: list[float] = []
+        for d_offset in range(days, 0, -1):
+            day_start = today_start - timedelta(days=d_offset)
+            day_end = day_start + timedelta(days=1)
+            pnl = sum(
+                p for ts, p in self._trades
+                if day_start <= ts < day_end
+            )
+            out.append(pnl)
+        return out
+
 
 # ================================================================== #
 # Supabase REST
@@ -108,6 +139,42 @@ class SupabasePnLAggregator:
     ) -> float:
         n = now or datetime.now(timezone.utc)
         return self._sum_since(n - timedelta(hours=hours))
+
+    def daily_pnl_history(
+        self, *, days: int, now: datetime | None = None,
+    ) -> list[float]:
+        if days <= 0:
+            return []
+        today_start = day_boundary_utc(now)
+        out: list[float] = []
+        for d_offset in range(days, 0, -1):
+            day_start = today_start - timedelta(days=d_offset)
+            day_end = day_start + timedelta(days=1)
+            out.append(self._sum_between(day_start, day_end))
+        return out
+
+    def _sum_between(self, start: datetime, end: datetime) -> float:
+        start_iso = start.astimezone(timezone.utc).isoformat()
+        end_iso = end.astimezone(timezone.utc).isoformat()
+        total = 0.0
+        for tbl in self._tables():
+            try:
+                res = (
+                    self._client.table(tbl).select("pnl,closed_at")
+                    .gte("closed_at", start_iso)
+                    .lt("closed_at", end_iso)
+                    .not_.is_("pnl", "null")
+                    .execute()
+                )
+                total += sum(
+                    float(r["pnl"]) for r in (res.data or [])
+                    if r.get("pnl") is not None
+                )
+            except Exception as e:
+                logger.warning(
+                    "PnL daily_pnl_history: %s query failed (%s)", tbl, e,
+                )
+        return total
 
     def _sum_since(self, since: datetime) -> float:
         iso = since.astimezone(timezone.utc).isoformat()
@@ -157,6 +224,47 @@ class PostgresPnLAggregator:
     ) -> float:
         n = now or datetime.now(timezone.utc)
         return self._sum_since(n - timedelta(hours=hours))
+
+    def daily_pnl_history(
+        self, *, days: int, now: datetime | None = None,
+    ) -> list[float]:
+        if days <= 0:
+            return []
+        today_start = day_boundary_utc(now)
+        out: list[float] = []
+        for d_offset in range(days, 0, -1):
+            day_start = today_start - timedelta(days=d_offset)
+            day_end = day_start + timedelta(days=1)
+            out.append(self._sum_between_pg(day_start, day_end))
+        return out
+
+    def _sum_between_pg(self, start: datetime, end: datetime) -> float:
+        sql_paper = (
+            "select coalesce(sum(pnl), 0) "
+            "from sm_paper_trades "
+            "where closed_at >= %s and closed_at < %s and pnl is not null"
+        )
+        sql_live = (
+            "select coalesce(sum(pnl), 0) "
+            "from live_trades "
+            "where closed_at >= %s and closed_at < %s and pnl is not null"
+        )
+        s = start.astimezone(timezone.utc)
+        e = end.astimezone(timezone.utc)
+        total = 0.0
+        with self._conn() as conn, conn.cursor() as cur:
+            try:
+                cur.execute(sql_paper, (s, e))
+                total += float(cur.fetchone()[0] or 0)
+            except Exception as e2:
+                logger.warning("PnL daily paper query failed: %s", e2)
+            if self._include_live:
+                try:
+                    cur.execute(sql_live, (s, e))
+                    total += float(cur.fetchone()[0] or 0)
+                except Exception as e2:
+                    logger.warning("PnL daily live query failed: %s", e2)
+        return total
 
     def _sum_since(self, since: datetime) -> float:
         ts = since.astimezone(timezone.utc)

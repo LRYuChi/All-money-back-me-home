@@ -28,6 +28,7 @@ from execution.pending_orders import (
     build_queue,
 )
 from risk import (
+    ConsecutiveLossDaysGuard,
     DailyLossCircuitBreakerGuard,
     GlobalExposureGuard,
     GuardPipeline,
@@ -99,6 +100,10 @@ def build_parser() -> argparse.ArgumentParser:
         "--latency-budget-sec", type=float, default=15.0,
         help="G1 latency budget in seconds (default 15).",
     )
+    p.add_argument(
+        "--consecutive-loss-days", type=int, default=3,
+        help="G9 consecutive losing days threshold (default 3 — matches D7).",
+    )
     p.add_argument("--log-level", default="INFO",
                    choices=["DEBUG", "INFO", "WARNING", "ERROR"])
     return p
@@ -119,6 +124,10 @@ def _build_guard_pipeline(args: argparse.Namespace):
         MinSizeGuard(default_min_usd=args.min_notional_usd),
         DailyLossCircuitBreakerGuard(
             loss_threshold_pct=args.daily_loss_pct,
+            pnl_aggregator=pnl_agg,
+        ),
+        ConsecutiveLossDaysGuard(
+            max_consecutive_losses=args.consecutive_loss_days,
             pnl_aggregator=pnl_agg,
         ),
         PerStrategyExposureGuard(cap_pct_of_capital=args.max_strategy_pct),

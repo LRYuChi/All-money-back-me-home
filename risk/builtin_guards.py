@@ -1,4 +1,4 @@
-"""Built-in guards (G1, G3, G4, G5, G6 — round 18; G8 — round 20)."""
+"""Built-in guards (G1, G3, G4, G5, G6 — round 18; G8 — round 20; G9 — round 22)."""
 from __future__ import annotations
 
 from dataclasses import dataclass, field
@@ -259,6 +259,93 @@ class DailyLossCircuitBreakerGuard:
 
 
 # ================================================================== #
+# G9 ConsecutiveLossDays
+# ================================================================== #
+@dataclass(slots=True, frozen=True)
+class ConsecutiveLossDaysGuard:
+    """G9: deny when N consecutive UTC days have realised PnL < 0.
+
+    Defaults to 3 (matches §15 D7 'consecutive 3 days → manual unlock').
+    Once tripped, requires human reset — but this guard alone doesn't
+    persist that decision; daemon should also alert via Notifier and
+    flip the strategy registry to disabled (human re-enables) for now.
+
+    Insufficient history (< N completed days available) → ALLOW (we can't
+    tell if losses are genuinely consecutive). G9 only fires once we
+    have a clear N-day streak.
+
+    Aggregator failures → fail open (same rationale as G8).
+    """
+
+    name: str = "consecutive_loss_cb"
+    max_consecutive_losses: int = 3
+    pnl_aggregator: Any = None
+
+    def __post_init__(self):
+        if self.pnl_aggregator is None:
+            raise ValueError(
+                "ConsecutiveLossDaysGuard requires a pnl_aggregator"
+            )
+        if self.max_consecutive_losses < 1:
+            raise ValueError(
+                f"max_consecutive_losses must be >= 1, got {self.max_consecutive_losses}"
+            )
+
+    def check(self, order: PendingOrder, ctx: GuardContext) -> GuardDecision:
+        try:
+            history = list(self.pnl_aggregator.daily_pnl_history(
+                days=self.max_consecutive_losses,
+            ))
+        except Exception as e:
+            return GuardDecision(
+                self.name, GuardResult.ALLOW,
+                reason=f"pnl_aggregator failed: {type(e).__name__}: {e} — fail-open",
+            )
+
+        # Insufficient data — can't yet detect a streak
+        if len(history) < self.max_consecutive_losses:
+            return GuardDecision(
+                self.name, GuardResult.ALLOW,
+                reason=f"only {len(history)}/{self.max_consecutive_losses} days available",
+                detail={"history": history,
+                        "required_days": self.max_consecutive_losses},
+            )
+
+        # All N most-recent completed days negative → trip
+        recent = history[-self.max_consecutive_losses:]
+        if all(p < 0 for p in recent):
+            return GuardDecision(
+                self.name, GuardResult.DENY,
+                reason=(
+                    f"{self.max_consecutive_losses} consecutive losing days "
+                    f"({recent}) — human review required"
+                ),
+                detail={
+                    "history": history,
+                    "recent_losses": recent,
+                    "max_consecutive_losses": self.max_consecutive_losses,
+                },
+            )
+
+        return GuardDecision(
+            self.name, GuardResult.ALLOW,
+            detail={"history": history, "recent_losses_streak": _trailing_loss_streak(history)},
+        )
+
+
+def _trailing_loss_streak(history: list[float]) -> int:
+    """Count negative values from the right end of the list, stopping at
+    first non-negative."""
+    streak = 0
+    for p in reversed(history):
+        if p < 0:
+            streak += 1
+        else:
+            break
+    return streak
+
+
+# ================================================================== #
 # Helpers
 # ================================================================== #
 def _market_from_symbol(symbol: str) -> str:
@@ -271,6 +358,7 @@ def _market_from_symbol(symbol: str) -> str:
 
 
 __all__ = [
+    "ConsecutiveLossDaysGuard",
     "DailyLossCircuitBreakerGuard",
     "GlobalExposureGuard",
     "LatencyBudgetGuard",
