@@ -96,25 +96,6 @@ services:
         fi;
         pip install --no-cache-dir smartmoneyconcepts --no-deps -q 2>/dev/null;
         pip install --no-cache-dir yfinance fredapi -q 2>/dev/null;
-        # R60: belt-and-suspenders — background a curl /start after API
-        # is reachable. Freqtrade ignores config "initial_state" at runtime,
-        # so the only reliable autostart path is hitting the REST API.
-        # 30s wait + 5min retry budget covers slow container boots.
-        ( for i in $$(seq 1 60); do
-            sleep 5;
-            if curl -sf -u $${FT_USER:-freqtrade}:$${FT_PASS:-freqtrade} \
-                http://127.0.0.1:8080/api/v1/show_config 2>/dev/null \
-                | grep -q "stopped"; then
-                echo "[autostart] bot stopped — issuing /start";
-                curl -sf -u $${FT_USER:-freqtrade}:$${FT_PASS:-freqtrade} \
-                    -X POST http://127.0.0.1:8080/api/v1/start && break;
-            elif curl -sf -u $${FT_USER:-freqtrade}:$${FT_PASS:-freqtrade} \
-                http://127.0.0.1:8080/api/v1/show_config 2>/dev/null \
-                | grep -q "running"; then
-                echo "[autostart] bot already running ($$i ticks)";
-                break;
-            fi;
-          done ) &
         freqtrade trade
         --strategy SupertrendStrategy
         -c /freqtrade/config/config_dry.json
@@ -263,6 +244,12 @@ services:
       - TELEGRAM_CHAT_ID=${TELEGRAM_CHAT_ID}
       - TG_AI_BOT_TOKEN=${TG_AI_BOT_TOKEN}
       - LOG_LEVEL=${LOG_LEVEL:-INFO}
+      # R60: cron sidecar polls freqtrade every tick and POSTs /start
+      # if state=stopped. Reaches freqtrade via compose-internal DNS.
+      - FREQTRADE_API_URL=http://freqtrade:8080
+      - FT_USER=${FT_USER:-freqtrade}
+      - FT_PASS=${FT_PASS:-freqtrade}
+      - SUPERTREND_AUTOSTART_FREQTRADE=${SUPERTREND_AUTOSTART_FREQTRADE:-1}
     restart: unless-stopped
     logging:
       driver: json-file

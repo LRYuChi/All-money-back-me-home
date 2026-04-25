@@ -149,6 +149,63 @@ def _send_telegram(text: str, dry_run: bool) -> None:
 # =================================================================== #
 # Tick logic — checks all jobs each minute
 # =================================================================== #
+def _ensure_freqtrade_running(*, dry_run: bool) -> None:
+    """R60: poll freqtrade REST API; POST /start if state=stopped.
+
+    Runs every tick (30s). Cheap — single GET. Defensive: any error is
+    logged at debug and silently swallowed (freqtrade may be booting,
+    auth may be misconfigured, network may be flaky — never fatal).
+
+    Reads freqtrade host/auth from FREQTRADE_API_URL / FT_USER / FT_PASS.
+    Defaults to docker compose-internal http://freqtrade:8080 + freqtrade/freqtrade.
+    """
+    if dry_run:
+        return
+    if os.environ.get("SUPERTREND_AUTOSTART_FREQTRADE", "1") != "1":
+        return
+    import base64
+    import json as _json
+    import urllib.error
+    import urllib.request
+
+    api = os.environ.get("FREQTRADE_API_URL", "http://freqtrade:8080").rstrip("/")
+    user = os.environ.get("FT_USER", "freqtrade")
+    pwd = os.environ.get("FT_PASS", "freqtrade")
+    auth = base64.b64encode(f"{user}:{pwd}".encode()).decode()
+    headers = {"Authorization": f"Basic {auth}"}
+
+    try:
+        req = urllib.request.Request(
+            f"{api}/api/v1/show_config", headers=headers,
+        )
+        with urllib.request.urlopen(req, timeout=5) as resp:
+            data = _json.loads(resp.read().decode())
+        st = data.get("state", "")
+        if st == "running":
+            return
+        if st != "stopped":
+            logger.debug("freqtrade state=%s — not stopped, leaving alone", st)
+            return
+    except (urllib.error.URLError, urllib.error.HTTPError, OSError) as e:
+        logger.debug("freqtrade show_config probe failed: %s", e)
+        return
+    except Exception as e:
+        logger.debug("freqtrade probe unexpected error: %s", e)
+        return
+
+    # State is "stopped" — issue /start
+    try:
+        req = urllib.request.Request(
+            f"{api}/api/v1/start", headers=headers, method="POST",
+            data=b"",
+        )
+        with urllib.request.urlopen(req, timeout=10) as resp:
+            resp.read()
+        logger.info("freqtrade was stopped — issued /start (R60 autostart)")
+    except Exception as e:
+        logger.warning("freqtrade /start failed: %s", e)
+
+
 def tick(now_utc: datetime, state: CronState, *, dry_run: bool) -> bool:
     """Run any due jobs. Returns True if state changed (caller persists)."""
     changed = False
@@ -156,6 +213,10 @@ def tick(now_utc: datetime, state: CronState, *, dry_run: bool) -> bool:
     hour = now_utc.hour
     minute = now_utc.minute
     weekday = now_utc.weekday()   # 0 = Mon
+
+    # R60: every tick, ensure the freqtrade bot is in running state.
+    # Cheap probe (one HTTP GET); only POSTs when actually stopped.
+    _ensure_freqtrade_running(dry_run=dry_run)
 
     # --- daily_summary at 00:05 UTC ---------------------------------- #
     if hour == 0 and minute >= 5 and state.last_daily_date != today:

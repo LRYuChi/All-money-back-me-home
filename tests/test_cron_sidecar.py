@@ -4,7 +4,7 @@ from __future__ import annotations
 import json
 from datetime import datetime, timezone
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 import pytest
 
@@ -240,3 +240,107 @@ def test_dry_run_does_not_invoke_subprocess():
     assert sp.call_count == 0
     # State still updates (dry-run still records the fire)
     assert state.last_daily_date == "2026-04-25"
+
+
+# =================================================================== #
+# R60: freqtrade autostart probe
+# =================================================================== #
+from strategies.cli.cron_sidecar import _ensure_freqtrade_running
+
+
+def test_autostart_skips_in_dry_run(monkeypatch):
+    monkeypatch.setenv("SUPERTREND_AUTOSTART_FREQTRADE", "1")
+    with patch("urllib.request.urlopen") as up:
+        _ensure_freqtrade_running(dry_run=True)
+    up.assert_not_called()
+
+
+def test_autostart_skips_when_env_disabled(monkeypatch):
+    monkeypatch.setenv("SUPERTREND_AUTOSTART_FREQTRADE", "0")
+    with patch("urllib.request.urlopen") as up:
+        _ensure_freqtrade_running(dry_run=False)
+    up.assert_not_called()
+
+
+def test_autostart_no_action_when_already_running(monkeypatch):
+    monkeypatch.setenv("SUPERTREND_AUTOSTART_FREQTRADE", "1")
+    monkeypatch.setenv("FREQTRADE_API_URL", "http://freqtrade:8080")
+    monkeypatch.setenv("FT_USER", "u")
+    monkeypatch.setenv("FT_PASS", "p")
+
+    fake_resp = MagicMock()
+    fake_resp.read.return_value = b'{"state": "running"}'
+    fake_resp.__enter__ = lambda s: fake_resp
+    fake_resp.__exit__ = lambda *a: None
+
+    with patch("urllib.request.urlopen", return_value=fake_resp) as up:
+        _ensure_freqtrade_running(dry_run=False)
+    # Exactly one call (show_config), no /start
+    assert up.call_count == 1
+
+
+def test_autostart_posts_start_when_stopped(monkeypatch):
+    monkeypatch.setenv("SUPERTREND_AUTOSTART_FREQTRADE", "1")
+    monkeypatch.setenv("FT_USER", "u")
+    monkeypatch.setenv("FT_PASS", "p")
+
+    show_resp = MagicMock()
+    show_resp.read.return_value = b'{"state": "stopped"}'
+    show_resp.__enter__ = lambda s: show_resp
+    show_resp.__exit__ = lambda *a: None
+
+    start_resp = MagicMock()
+    start_resp.read.return_value = b'{"status": "starting trader"}'
+    start_resp.__enter__ = lambda s: start_resp
+    start_resp.__exit__ = lambda *a: None
+
+    with patch("urllib.request.urlopen", side_effect=[show_resp, start_resp]) as up:
+        _ensure_freqtrade_running(dry_run=False)
+    # Two calls: show_config GET + /start POST
+    assert up.call_count == 2
+    # Second call must be POST
+    second_req = up.call_args_list[1].args[0]
+    assert second_req.method == "POST"
+    assert "/api/v1/start" in second_req.full_url
+
+
+def test_autostart_silent_on_show_config_failure(monkeypatch):
+    monkeypatch.setenv("SUPERTREND_AUTOSTART_FREQTRADE", "1")
+    monkeypatch.setenv("FT_USER", "u")
+    monkeypatch.setenv("FT_PASS", "p")
+    import urllib.error
+    with patch(
+        "urllib.request.urlopen",
+        side_effect=urllib.error.URLError("connection refused"),
+    ) as up:
+        # Must not raise
+        _ensure_freqtrade_running(dry_run=False)
+    assert up.call_count == 1   # tried show_config, didn't try /start
+
+
+def test_autostart_handles_start_endpoint_failure(monkeypatch):
+    monkeypatch.setenv("SUPERTREND_AUTOSTART_FREQTRADE", "1")
+    monkeypatch.setenv("FT_USER", "u")
+    monkeypatch.setenv("FT_PASS", "p")
+
+    show_resp = MagicMock()
+    show_resp.read.return_value = b'{"state": "stopped"}'
+    show_resp.__enter__ = lambda s: show_resp
+    show_resp.__exit__ = lambda *a: None
+
+    with patch(
+        "urllib.request.urlopen",
+        side_effect=[show_resp, RuntimeError("server error")],
+    ):
+        _ensure_freqtrade_running(dry_run=False)   # must not raise
+
+
+def test_tick_invokes_autostart(monkeypatch):
+    """Every tick must call _ensure_freqtrade_running."""
+    state = CronState()
+    now = datetime(2026, 4, 25, 12, 30, tzinfo=timezone.utc)   # quiet slot
+    with patch(
+        "strategies.cli.cron_sidecar._ensure_freqtrade_running",
+    ) as ensure:
+        tick(now, state, dry_run=False)
+    ensure.assert_called_once()
