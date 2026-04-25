@@ -124,6 +124,32 @@ else
     echo "  freqtrade: STARTING (docker logs ambmh-freqtrade-1)"
 fi
 
+# R60: ensure freqtrade bot is in "running" state, not just "container up".
+# Defense-in-depth: config_dry.json sets initial_state="running" but if the
+# operator ever manually stopped the bot via API/UI, that state survives
+# container recreation. Re-affirm at every deploy.
+echo "  Verifying freqtrade bot state..."
+sleep 2
+ft_state=$(curl -sf -u "${FT_USER}:${FT_PASS}" \
+    "http://127.0.0.1:8080/api/v1/show_config" 2>/dev/null \
+    | python3 -c 'import json,sys; print(json.load(sys.stdin).get("state",""))' \
+    2>/dev/null || echo "unknown")
+case "$ft_state" in
+    running)
+        echo "  freqtrade bot: running ✓"
+        ;;
+    stopped)
+        echo "  freqtrade bot: stopped — issuing /start..."
+        curl -sf -u "${FT_USER}:${FT_PASS}" \
+            -X POST "http://127.0.0.1:8080/api/v1/start" > /dev/null \
+            && echo "  freqtrade bot: started ✓" \
+            || echo "  freqtrade bot: /start failed (check container logs)"
+        ;;
+    *)
+        echo "  freqtrade bot: state=$ft_state — not querying (likely still booting)"
+        ;;
+esac
+
 echo ""
 echo "=== Deploy complete! ==="
 docker compose -f docker-compose.prod.yml ps

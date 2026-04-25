@@ -7,6 +7,7 @@
     "tradable_balance_ratio": 0.99,
     "dry_run": true,
     "dry_run_wallet": 1000,
+    "initial_state": "running",
     "cancel_open_orders_on_exit": false,
     "fee": 0.0005,
     "unfilledtimeout": {
