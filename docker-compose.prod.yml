@@ -257,6 +257,10 @@ services:
       - FT_USER=${FT_USER:-freqtrade}
       - FT_PASS=${FT_PASS:-freqtrade}
       - SUPERTREND_AUTOSTART_FREQTRADE=${SUPERTREND_AUTOSTART_FREQTRADE:-1}
+      # R69: poll /api/supertrend/operations every 5min, broadcast alert
+      # delta (NEW + RESOLVED) to Telegram. Disable with =0.
+      - OPERATIONS_API_URL=http://api:8000/api/supertrend/operations
+      - SUPERTREND_ALERT_BROADCAST=${SUPERTREND_ALERT_BROADCAST:-1}
     restart: unless-stopped
     logging:
       driver: json-file

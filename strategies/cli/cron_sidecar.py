@@ -56,6 +56,13 @@ class CronState:
     last_weekly_date: str = ""       # YYYY-MM-DD UTC of last Monday fire
     last_regime_slot: str = ""       # YYYY-MM-DDTHH (00/06/12/18 hour bucket)
     last_regime_value: str = ""      # last regime string e.g. "trending"
+    # R69: alert dispatch state
+    last_alerts_seen: list = None    # type: ignore[assignment]  # list[str]
+    last_alerts_check_iso: str = ""  # iso timestamp of last poll
+
+    def __post_init__(self):
+        if self.last_alerts_seen is None:
+            self.last_alerts_seen = []
 
     @classmethod
     def load(cls, path: Path) -> "CronState":
@@ -63,7 +70,12 @@ class CronState:
             return cls()
         try:
             data = json.loads(path.read_text())
-            return cls(**{k: data.get(k, "") for k in cls.__dataclass_fields__})
+            # Coerce missing keys to defaults; tolerate older state files
+            kwargs = {}
+            for k in cls.__dataclass_fields__:
+                if k in data:
+                    kwargs[k] = data[k]
+            return cls(**kwargs)
         except Exception as e:
             logger.warning("state file %s unreadable (%s) — starting fresh",
                            path, e)
@@ -206,6 +218,83 @@ def _ensure_freqtrade_running(*, dry_run: bool) -> None:
         logger.warning("freqtrade /start failed: %s", e)
 
 
+# =================================================================== #
+# R69: poll /api/supertrend/operations + diff-broadcast alerts
+# =================================================================== #
+def _fetch_operations_alerts() -> list[str] | None:
+    """GET /operations from compose-internal API. Returns alert list or
+    None on failure (caller should skip — don't broadcast on probe error)."""
+    import json as _json
+    import urllib.error
+    import urllib.request
+
+    api = os.environ.get("OPERATIONS_API_URL",
+                         "http://api:8000/api/supertrend/operations")
+    try:
+        req = urllib.request.Request(api)
+        with urllib.request.urlopen(req, timeout=8) as resp:
+            data = _json.loads(resp.read().decode())
+        alerts = data.get("alerts", [])
+        if not isinstance(alerts, list):
+            return []
+        return [str(a) for a in alerts]
+    except (urllib.error.URLError, urllib.error.HTTPError, OSError) as e:
+        logger.debug("ops alerts probe failed: %s", e)
+        return None
+    except Exception as e:
+        logger.debug("ops alerts probe unexpected error: %s", e)
+        return None
+
+
+def check_operations_alerts(state: CronState, *, dry_run: bool,
+                             now_utc: datetime) -> bool:
+    """Diff current /operations alerts against last-seen, broadcast deltas.
+
+    Default poll cadence: every 5 min. Caller (tick) gates by minute mark.
+    Returns True if state changed.
+    """
+    if os.environ.get("SUPERTREND_ALERT_BROADCAST", "1") != "1":
+        return False
+    current = _fetch_operations_alerts()
+    if current is None:
+        return False   # probe failure — leave state unchanged
+
+    # Use sets for diff but preserve readability for broadcast
+    last_set = set(state.last_alerts_seen or [])
+    cur_set = set(current)
+
+    new_alerts = [a for a in current if a not in last_set]
+    resolved = [a for a in (state.last_alerts_seen or []) if a not in cur_set]
+
+    if not new_alerts and not resolved:
+        # Update check timestamp anyway for observability
+        state.last_alerts_check_iso = now_utc.isoformat()
+        return True
+
+    for alert in new_alerts:
+        msg = (
+            f"⚠️ *Supertrend Alert (NEW)*\n"
+            f"`{alert}`\n"
+            f"_{now_utc.strftime('%Y-%m-%d %H:%M UTC')}_\n"
+            f"_See /api/supertrend/operations for full snapshot_"
+        )
+        _send_telegram(msg, dry_run=dry_run)
+        logger.info("posted NEW alert to telegram: %s", alert[:80])
+
+    for alert in resolved:
+        msg = (
+            f"✅ *Supertrend Alert (RESOLVED)*\n"
+            f"`{alert}`\n"
+            f"_{now_utc.strftime('%Y-%m-%d %H:%M UTC')}_"
+        )
+        _send_telegram(msg, dry_run=dry_run)
+        logger.info("posted RESOLVED alert to telegram: %s", alert[:80])
+
+    state.last_alerts_seen = current
+    state.last_alerts_check_iso = now_utc.isoformat()
+    return True
+
+
 def tick(now_utc: datetime, state: CronState, *, dry_run: bool) -> bool:
     """Run any due jobs. Returns True if state changed (caller persists)."""
     changed = False
@@ -217,6 +306,12 @@ def tick(now_utc: datetime, state: CronState, *, dry_run: bool) -> bool:
     # R60: every tick, ensure the freqtrade bot is in running state.
     # Cheap probe (one HTTP GET); only POSTs when actually stopped.
     _ensure_freqtrade_running(dry_run=dry_run)
+
+    # R69: every 5 minutes, poll /operations alerts and broadcast diff
+    # to Telegram. Cheap probe; broadcast only on add/remove.
+    if minute % 5 == 0:
+        if check_operations_alerts(state, dry_run=dry_run, now_utc=now_utc):
+            changed = True
 
     # --- daily_summary at 00:05 UTC ---------------------------------- #
     if hour == 0 and minute >= 5 and state.last_daily_date != today:

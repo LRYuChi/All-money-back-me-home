@@ -344,3 +344,161 @@ def test_tick_invokes_autostart(monkeypatch):
     ) as ensure:
         tick(now, state, dry_run=False)
     ensure.assert_called_once()
+
+
+# =================================================================== #
+# R69: alert dispatch
+# =================================================================== #
+from strategies.cli.cron_sidecar import (
+    _fetch_operations_alerts,
+    check_operations_alerts,
+)
+
+
+def _stub_alerts(alerts: list[str] | None):
+    """Patch _fetch_operations_alerts to return a fixed list (or None)."""
+    return patch(
+        "strategies.cli.cron_sidecar._fetch_operations_alerts",
+        return_value=alerts,
+    )
+
+
+def test_alert_no_change_no_broadcast(monkeypatch):
+    """Same alerts as last time → no Telegram messages."""
+    state = CronState(last_alerts_seen=["A", "B"])
+    now = datetime(2026, 4, 25, 12, 0, tzinfo=timezone.utc)
+    with _stub_alerts(["A", "B"]):
+        with patch(
+            "strategies.cli.cron_sidecar._send_telegram",
+        ) as send:
+            check_operations_alerts(state, dry_run=False, now_utc=now)
+    assert send.call_count == 0
+    assert state.last_alerts_check_iso != ""
+
+
+def test_alert_new_one_broadcasts(monkeypatch):
+    state = CronState(last_alerts_seen=["A"])
+    now = datetime(2026, 4, 25, 12, 0, tzinfo=timezone.utc)
+    with _stub_alerts(["A", "B"]):
+        with patch(
+            "strategies.cli.cron_sidecar._send_telegram",
+        ) as send:
+            check_operations_alerts(state, dry_run=False, now_utc=now)
+    assert send.call_count == 1
+    msg = send.call_args.args[0]
+    assert "NEW" in msg
+    assert "B" in msg
+    assert state.last_alerts_seen == ["A", "B"]
+
+
+def test_alert_resolved_broadcasts(monkeypatch):
+    state = CronState(last_alerts_seen=["A", "B"])
+    now = datetime(2026, 4, 25, 12, 0, tzinfo=timezone.utc)
+    with _stub_alerts(["A"]):
+        with patch(
+            "strategies.cli.cron_sidecar._send_telegram",
+        ) as send:
+            check_operations_alerts(state, dry_run=False, now_utc=now)
+    assert send.call_count == 1
+    msg = send.call_args.args[0]
+    assert "RESOLVED" in msg
+    assert "B" in msg
+    assert state.last_alerts_seen == ["A"]
+
+
+def test_alert_new_and_resolved_both_broadcast():
+    state = CronState(last_alerts_seen=["A", "B"])
+    now = datetime(2026, 4, 25, 12, 0, tzinfo=timezone.utc)
+    with _stub_alerts(["A", "C"]):
+        with patch(
+            "strategies.cli.cron_sidecar._send_telegram",
+        ) as send:
+            check_operations_alerts(state, dry_run=False, now_utc=now)
+    # B resolved + C new → 2 messages
+    assert send.call_count == 2
+    msgs = " ".join(c.args[0] for c in send.call_args_list)
+    assert "NEW" in msgs and "C" in msgs
+    assert "RESOLVED" in msgs and "B" in msgs
+
+
+def test_alert_first_run_broadcasts_all_as_new():
+    state = CronState()   # last_alerts_seen empty
+    now = datetime(2026, 4, 25, 12, 0, tzinfo=timezone.utc)
+    with _stub_alerts(["A", "B"]):
+        with patch(
+            "strategies.cli.cron_sidecar._send_telegram",
+        ) as send:
+            check_operations_alerts(state, dry_run=False, now_utc=now)
+    assert send.call_count == 2
+
+
+def test_alert_probe_failure_does_not_change_state():
+    """If /operations is unreachable, state must remain unchanged."""
+    state = CronState(last_alerts_seen=["A"])
+    state_before = list(state.last_alerts_seen)
+    now = datetime(2026, 4, 25, 12, 0, tzinfo=timezone.utc)
+    with _stub_alerts(None):
+        with patch(
+            "strategies.cli.cron_sidecar._send_telegram",
+        ) as send:
+            check_operations_alerts(state, dry_run=False, now_utc=now)
+    assert send.call_count == 0
+    assert state.last_alerts_seen == state_before
+
+
+def test_alert_disabled_via_env(monkeypatch):
+    monkeypatch.setenv("SUPERTREND_ALERT_BROADCAST", "0")
+    state = CronState(last_alerts_seen=[])
+    now = datetime(2026, 4, 25, 12, 0, tzinfo=timezone.utc)
+    with _stub_alerts(["X"]):
+        with patch(
+            "strategies.cli.cron_sidecar._send_telegram",
+        ) as send:
+            check_operations_alerts(state, dry_run=False, now_utc=now)
+    assert send.call_count == 0
+
+
+def test_tick_invokes_alert_check_on_5min_marks(monkeypatch):
+    state = CronState()
+    now = datetime(2026, 4, 25, 12, 5, tzinfo=timezone.utc)   # min%5 == 0
+    with patch(
+        "strategies.cli.cron_sidecar.check_operations_alerts",
+        return_value=False,
+    ) as ck:
+        tick(now, state, dry_run=False)
+    ck.assert_called_once()
+
+
+def test_tick_skips_alert_check_off_minute(monkeypatch):
+    state = CronState()
+    now = datetime(2026, 4, 25, 12, 7, tzinfo=timezone.utc)   # min%5 != 0
+    with patch(
+        "strategies.cli.cron_sidecar.check_operations_alerts",
+    ) as ck:
+        tick(now, state, dry_run=False)
+    ck.assert_not_called()
+
+
+def test_state_tolerates_legacy_file_without_alert_keys(tmp_path):
+    """Older state.json files (R60-era) lack the new alert fields.
+    Loading must succeed with sensible defaults."""
+    legacy = tmp_path / "state.json"
+    legacy.write_text(json.dumps({
+        "last_daily_date": "2026-04-25",
+        "last_regime_value": "trending",
+        # No last_alerts_seen / last_alerts_check_iso
+    }))
+    s = CronState.load(legacy)
+    assert s.last_daily_date == "2026-04-25"
+    assert s.last_alerts_seen == []
+    assert s.last_alerts_check_iso == ""
+
+
+def test_state_save_load_roundtrip_preserves_alert_state(tmp_path):
+    s = CronState(last_alerts_seen=["alert-A", "alert-B"],
+                  last_alerts_check_iso="2026-04-25T12:00:00Z")
+    f = tmp_path / "state.json"
+    s.save(f)
+    loaded = CronState.load(f)
+    assert loaded.last_alerts_seen == ["alert-A", "alert-B"]
+    assert loaded.last_alerts_check_iso == "2026-04-25T12:00:00Z"
