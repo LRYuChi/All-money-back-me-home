@@ -462,6 +462,73 @@ def _likely_side(state: dict) -> str | None:
     return None
 
 
+def _latest_eval_per_pair(window_hours: float = 1.0) -> dict[str, dict]:
+    """Build a {pair: latest EvaluationEvent} map from journal.
+
+    Looks back `window_hours` (default 1h ≈ 4 candles at 15m). Returns
+    empty dict on any error — caller falls back gracefully.
+    """
+    journal_dir = _resolve_journal_dir()
+    if not journal_dir.exists():
+        return {}
+    try:
+        from strategies.journal import TradeJournal
+    except ImportError:
+        return {}
+    try:
+        journal = TradeJournal(journal_dir)
+        rows = journal.read_range(
+            from_date=datetime.now(timezone.utc) - timedelta(hours=window_hours),
+        )
+    except Exception:
+        return {}
+    latest: dict[str, dict] = {}
+    for r in rows:
+        if r.get("event_type") != "evaluation":
+            continue
+        p = r.get("pair", "")
+        if not p:
+            continue
+        ts = r.get("timestamp", "")
+        prev = latest.get(p)
+        if prev is None or ts > prev.get("timestamp", ""):
+            latest[p] = r
+    return latest
+
+
+def _closest_to_fire(eval_event: dict | None) -> dict[str, Any] | None:
+    """From an EvaluationEvent, find the tier with fewest unmet conditions.
+
+    Returns:
+      tier            — confirmed / scout / pre_scout / None
+      remaining       — list of failure reasons still unmet for that tier
+      fire_distance   — len(remaining); 0 means tier just fired
+      already_fired   — bool: was that tier's _fired flag True?
+
+    None when input is None (no recent evaluation for this pair).
+    """
+    if not eval_event:
+        return None
+    candidates = []
+    for tier in ("confirmed", "scout", "pre_scout"):
+        if eval_event.get(f"{tier}_fired") is True:
+            return {
+                "tier": tier, "remaining": [],
+                "fire_distance": 0, "already_fired": True,
+            }
+        fails = eval_event.get(f"{tier}_failures") or []
+        candidates.append((tier, len(fails), list(fails)))
+    if not candidates:
+        return None
+    # Closest = tier with fewest failures
+    candidates.sort(key=lambda c: c[1])
+    tier, n, fails = candidates[0]
+    return {
+        "tier": tier, "remaining": fails,
+        "fire_distance": n, "already_fired": False,
+    }
+
+
 @router.get("/scanner")
 def supertrend_scanner(
     timeframe: str = Query("15m", pattern="^(1m|5m|15m|1h|4h|1d)$"),
@@ -496,6 +563,9 @@ def supertrend_scanner(
     pairs_raw = wl.get("whitelist") or []
     out["n_pairs"] = len(pairs_raw)
 
+    # R71: prefetch latest EvaluationEvent per pair (1 journal scan vs N)
+    eval_by_pair = _latest_eval_per_pair(window_hours=1.0)
+
     # Fetch each pair's last candle. Sequential for simplicity — 30 pairs ×
     # ~50ms = 1.5s, acceptable for an ops endpoint refreshed manually.
     rows: list[dict[str, Any]] = []
@@ -512,22 +582,43 @@ def supertrend_scanner(
         if not indicators:
             out["errors"][pair] = "no candle data"
             continue
+        ctf = _closest_to_fire(eval_by_pair.get(pair))
         rows.append({
             "pair": pair,
             "alignment_count": _alignment_count(indicators),
             "likely_side": _likely_side(indicators),
+            "closest_to_fire": ctf,
             **indicators,
         })
 
-    # Surface near-firing pairs first
-    rows.sort(
-        key=lambda r: (
-            r["alignment_count"],
-            abs(r.get("direction_score") or 0.0),
-        ),
-        reverse=True,
-    )
+    # R71: primary sort = fire_distance asc (closest first), tiebreak by
+    # alignment_count desc + |direction_score| desc. Pairs without
+    # eval_event sink to the bottom (fire_distance treated as +inf).
+    def _sort_key(r):
+        ctf = r.get("closest_to_fire")
+        dist = ctf.get("fire_distance", 999) if ctf else 999
+        return (
+            dist,
+            -(r.get("alignment_count") or 0),
+            -abs(r.get("direction_score") or 0.0),
+        )
+    rows.sort(key=_sort_key)
     out["pairs"] = rows
+
+    # R71: top-of-response summary — top 5 pairs nearest to firing
+    near = []
+    for r in rows[:5]:
+        ctf = r.get("closest_to_fire")
+        if not ctf:
+            continue
+        near.append({
+            "pair": r["pair"],
+            "tier": ctf["tier"],
+            "fire_distance": ctf["fire_distance"],
+            "remaining": ctf["remaining"],
+            "likely_side": r.get("likely_side"),
+        })
+    out["pairs_near_fire"] = near
     return out
 
 

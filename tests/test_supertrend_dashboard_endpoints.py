@@ -16,7 +16,8 @@ if str(_API_SRC) not in sys.path:
 
 def _import_router():
     from src.routers.supertrend import (
-        _alignment_count, _build_ops_alerts, _extract_last_row, _likely_side,
+        _alignment_count, _build_ops_alerts, _closest_to_fire,
+        _extract_last_row, _latest_eval_per_pair, _likely_side,
         _resolve_journal_dir, _verify_entry_in_journal, router,
         supertrend_evaluations, supertrend_force_entry, supertrend_health,
         supertrend_operations, supertrend_scanner, supertrend_skipped,
@@ -38,6 +39,8 @@ def _import_router():
         "extract_last_row": _extract_last_row,
         "build_ops_alerts": _build_ops_alerts,
         "verify_entry_in_journal": _verify_entry_in_journal,
+        "closest_to_fire": _closest_to_fire,
+        "latest_eval_per_pair": _latest_eval_per_pair,
     }
 
 
@@ -1109,3 +1112,227 @@ def test_verify_entry_handles_missing_journal_dir(monkeypatch, tmp_path):
     res = mod["verify_entry_in_journal"]("BTC/USDT:USDT", timeout_sec=0.5,
                                           poll_interval=0.1)
     assert res is None
+
+
+# =================================================================== #
+# /scanner — R71 closest_to_fire enrichment
+# =================================================================== #
+def test_closest_to_fire_returns_none_for_no_event():
+    mod = _import_router()
+    assert mod["closest_to_fire"](None) is None
+
+
+def test_closest_to_fire_already_fired_returns_zero_distance():
+    mod = _import_router()
+    ev = {
+        "confirmed_fired": True, "confirmed_failures": [],
+        "scout_fired": False, "scout_failures": ["bull_just_formed=False"],
+        "pre_scout_fired": False, "pre_scout_failures": [],
+    }
+    res = mod["closest_to_fire"](ev)
+    assert res["tier"] == "confirmed"
+    assert res["fire_distance"] == 0
+    assert res["already_fired"] is True
+
+
+def test_closest_to_fire_picks_tier_with_fewest_failures():
+    mod = _import_router()
+    ev = {
+        "confirmed_fired": False,
+        "confirmed_failures": ["a", "b", "c", "d"],   # 4 fails
+        "scout_fired": False,
+        "scout_failures": ["x"],                       # 1 fail ← closest
+        "pre_scout_fired": False,
+        "pre_scout_failures": ["y", "z"],              # 2 fails
+    }
+    res = mod["closest_to_fire"](ev)
+    assert res["tier"] == "scout"
+    assert res["fire_distance"] == 1
+    assert res["remaining"] == ["x"]
+    assert res["already_fired"] is False
+
+
+def test_closest_to_fire_tiebreak_prefers_first_tier_alphabetically():
+    """When two tiers tie, sort puts confirmed first by enumeration order."""
+    mod = _import_router()
+    ev = {
+        "confirmed_fired": False, "confirmed_failures": ["a"],
+        "scout_fired": False, "scout_failures": ["b"],
+        "pre_scout_fired": False, "pre_scout_failures": [],
+    }
+    # pre_scout has 0 fails so it wins
+    res = mod["closest_to_fire"](ev)
+    assert res["tier"] == "pre_scout"
+    assert res["fire_distance"] == 0
+    # already_fired False because pre_scout_fired wasn't True
+    assert res["already_fired"] is False
+
+
+def test_latest_eval_per_pair_uses_newest_per_pair(monkeypatch, tmp_path):
+    """When same pair has multiple evaluations, only the newest wins."""
+    from datetime import datetime, timedelta, timezone
+    from strategies.journal import TradeJournal
+
+    monkeypatch.setenv("SUPERTREND_JOURNAL_DIR", str(tmp_path))
+    j = TradeJournal(tmp_path)
+    now = datetime.now(timezone.utc)
+    j.write({
+        "event_type": "evaluation",
+        "timestamp": (now - timedelta(minutes=30)).isoformat(),
+        "pair": "BTC/USDT:USDT",
+        "candle_ts": "old", "state": {},
+        "confirmed_fired": False, "confirmed_failures": ["a", "b", "c"],
+        "scout_fired": False, "scout_failures": [],
+        "pre_scout_fired": False, "pre_scout_failures": [],
+    })
+    j.write({
+        "event_type": "evaluation",
+        "timestamp": (now - timedelta(minutes=5)).isoformat(),
+        "pair": "BTC/USDT:USDT",
+        "candle_ts": "new", "state": {},
+        "confirmed_fired": False, "confirmed_failures": ["a"],
+        "scout_fired": False, "scout_failures": [],
+        "pre_scout_fired": False, "pre_scout_failures": [],
+    })
+    mod = _import_router()
+    latest = mod["latest_eval_per_pair"](window_hours=1.0)
+    assert "BTC/USDT:USDT" in latest
+    # Newest event wins → confirmed_failures has 1 entry
+    assert latest["BTC/USDT:USDT"]["confirmed_failures"] == ["a"]
+
+
+def test_latest_eval_per_pair_returns_empty_on_missing_journal(
+    monkeypatch, tmp_path,
+):
+    monkeypatch.setenv("SUPERTREND_JOURNAL_DIR", str(tmp_path / "missing"))
+    mod = _import_router()
+    assert mod["latest_eval_per_pair"]() == {}
+
+
+def test_scanner_sorts_by_fire_distance(monkeypatch, tmp_path):
+    """Pair with smaller fire_distance lands at top, even if alignment is lower."""
+    from datetime import datetime, timezone
+    from unittest.mock import patch
+    from strategies.journal import TradeJournal
+
+    monkeypatch.setenv("SUPERTREND_JOURNAL_DIR", str(tmp_path))
+    j = TradeJournal(tmp_path)
+    now = datetime.now(timezone.utc).isoformat()
+    # CLOSE pair has 1 failure; FAR pair has 4 failures (but higher alignment)
+    j.write({
+        "event_type": "evaluation", "timestamp": now,
+        "pair": "CLOSE/USDT:USDT", "candle_ts": now, "state": {},
+        "confirmed_fired": False, "confirmed_failures": ["st_buy=False"],
+        "scout_fired": False, "scout_failures": ["bull_just_formed=False"],
+        "pre_scout_fired": False, "pre_scout_failures": ["pair_bullish_2tf_just_formed=False"],
+    })
+    j.write({
+        "event_type": "evaluation", "timestamp": now,
+        "pair": "FAR/USDT:USDT", "candle_ts": now, "state": {},
+        "confirmed_fired": False,
+        "confirmed_failures": ["a", "b", "c", "d"],
+        "scout_fired": False,
+        "scout_failures": ["a", "b", "c", "d"],
+        "pre_scout_fired": False,
+        "pre_scout_failures": ["a", "b", "c", "d"],
+    })
+
+    wl = {"whitelist": ["CLOSE/USDT:USDT", "FAR/USDT:USDT"]}
+    candles = {
+        "CLOSE/USDT:USDT": {
+            "columns": ["st_1d", "dir_4h_score", "st_1h", "st_trend",
+                        "direction_score"],
+            "data": [[1, 0.5, 1, 1, 0.5]],   # alignment 4
+        },
+        "FAR/USDT:USDT": {
+            "columns": ["st_1d", "dir_4h_score", "st_1h", "st_trend",
+                        "direction_score"],
+            "data": [[1, 0.8, 1, 1, 0.9]],   # alignment 4 + higher dir
+        },
+    }
+    mod = _import_router()
+    with patch(
+        "src.routers.supertrend._ft_get",
+        side_effect=_mock_ft_get(wl, candles),
+    ):
+        out = mod["scanner"](timeframe="15m", limit=10)
+    # CLOSE first because fire_distance=1 vs FAR's 4
+    assert out["pairs"][0]["pair"] == "CLOSE/USDT:USDT"
+    assert out["pairs"][0]["closest_to_fire"]["fire_distance"] == 1
+    assert out["pairs"][1]["pair"] == "FAR/USDT:USDT"
+
+
+def test_scanner_includes_pairs_near_fire_summary(monkeypatch, tmp_path):
+    from datetime import datetime, timezone
+    from unittest.mock import patch
+    from strategies.journal import TradeJournal
+
+    monkeypatch.setenv("SUPERTREND_JOURNAL_DIR", str(tmp_path))
+    j = TradeJournal(tmp_path)
+    now = datetime.now(timezone.utc).isoformat()
+    j.write({
+        "event_type": "evaluation", "timestamp": now,
+        "pair": "BTC/USDT:USDT", "candle_ts": now, "state": {},
+        "confirmed_fired": False, "confirmed_failures": ["st_buy=False"],
+        "scout_fired": False, "scout_failures": [],
+        "pre_scout_fired": False, "pre_scout_failures": ["x"],
+    })
+
+    wl = {"whitelist": ["BTC/USDT:USDT"]}
+    candles = {
+        "BTC/USDT:USDT": {
+            "columns": ["st_1d", "direction_score"],
+            "data": [[1, 0.5]],
+        },
+    }
+    mod = _import_router()
+    with patch(
+        "src.routers.supertrend._ft_get",
+        side_effect=_mock_ft_get(wl, candles),
+    ):
+        out = mod["scanner"](timeframe="15m", limit=5)
+    assert "pairs_near_fire" in out
+    # Scout has 0 failures → already_fired=False but distance=0 → top
+    near = out["pairs_near_fire"]
+    assert len(near) == 1
+    assert near[0]["pair"] == "BTC/USDT:USDT"
+    assert near[0]["tier"] == "scout"
+    assert near[0]["fire_distance"] == 0
+
+
+def test_scanner_pairs_without_eval_sink_to_bottom(monkeypatch, tmp_path):
+    """Pair with no recent EvaluationEvent → fire_distance=999 → bottom."""
+    from datetime import datetime, timezone
+    from unittest.mock import patch
+    from strategies.journal import TradeJournal
+
+    monkeypatch.setenv("SUPERTREND_JOURNAL_DIR", str(tmp_path))
+    j = TradeJournal(tmp_path)
+    now = datetime.now(timezone.utc).isoformat()
+    j.write({
+        "event_type": "evaluation", "timestamp": now,
+        "pair": "WITH_EVAL/USDT:USDT", "candle_ts": now, "state": {},
+        "confirmed_fired": False, "confirmed_failures": ["st_buy=False"],
+        "scout_fired": False, "scout_failures": [],
+        "pre_scout_fired": False, "pre_scout_failures": [],
+    })
+
+    wl = {"whitelist": ["WITH_EVAL/USDT:USDT", "NO_EVAL/USDT:USDT"]}
+    candles = {
+        "WITH_EVAL/USDT:USDT": {
+            "columns": ["st_1d", "direction_score"], "data": [[1, 0.5]],
+        },
+        "NO_EVAL/USDT:USDT": {
+            "columns": ["st_1d", "direction_score"], "data": [[1, 0.9]],
+        },
+    }
+    mod = _import_router()
+    with patch(
+        "src.routers.supertrend._ft_get",
+        side_effect=_mock_ft_get(wl, candles),
+    ):
+        out = mod["scanner"](timeframe="15m", limit=5)
+    # WITH_EVAL first (fire_distance=0); NO_EVAL last (closest_to_fire=None)
+    assert out["pairs"][0]["pair"] == "WITH_EVAL/USDT:USDT"
+    assert out["pairs"][1]["pair"] == "NO_EVAL/USDT:USDT"
+    assert out["pairs"][1]["closest_to_fire"] is None
