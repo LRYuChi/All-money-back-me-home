@@ -5,7 +5,10 @@ Used by daemon to wire StrategyRuntime.on_intent → durable queue:
     queue = build_queue(settings)
     runtime = StrategyRuntime(
         ...,
-        on_intent=make_intent_callback(queue, mode="shadow"),
+        on_intent=make_intent_callback(
+            queue, mode="shadow",
+            deduper=WindowedIntentDeduper(window_sec=60),  # round 44
+        ),
     )
 """
 from __future__ import annotations
@@ -13,6 +16,7 @@ from __future__ import annotations
 import logging
 from typing import Callable
 
+from execution.pending_orders.dedup import IntentDeduper, NoOpIntentDeduper
 from execution.pending_orders.types import (
     ExecutionMode,
     PendingOrder,
@@ -72,6 +76,8 @@ def intent_to_pending(
 def make_intent_callback(
     queue: PendingOrderQueue,
     mode: ExecutionMode,
+    *,
+    deduper: IntentDeduper | None = None,
 ) -> Callable[[StrategyIntent], None]:
     """Build a callback suitable for StrategyRuntime.on_intent.
 
@@ -82,7 +88,15 @@ def make_intent_callback(
     Mode is fixed per callback; if you need per-strategy mode routing
     (e.g. some strategies live, others shadow), build separate callbacks
     and pick at evaluation time. For Phase F.1 we keep it simple.
+
+    Round 44: optional `deduper` skips intents that duplicate a recent
+    one (same strategy + symbol + side within the dedup window). Without
+    this, two near-simultaneous ticks open two positions because the
+    deterministic coid uses intent_ts and they differ by ms.
+    Default = NoOp (backwards compat).
     """
+    deduper = deduper or NoOpIntentDeduper()
+
     def _cb(intent: StrategyIntent) -> None:
         if intent.direction == Direction.NEUTRAL:
             logger.warning(
@@ -90,6 +104,25 @@ def make_intent_callback(
                 intent.strategy_id,
             )
             return
+        # Round 44: dedup BEFORE enqueue (deterministic coid is per-ts so
+        # same coid won't help here)
+        try:
+            if deduper.is_duplicate(intent):
+                logger.warning(
+                    "intent_callback: SKIP duplicate intent strategy=%s "
+                    "symbol=%s direction=%s ts=%s (dedup window hit)",
+                    intent.strategy_id, intent.symbol,
+                    intent.direction.value, intent.ts.isoformat(),
+                )
+                return
+        except Exception as e:
+            # Defensive: deduper failure should NOT block trading.
+            # Log + treat as not-duplicate (fail-open, matches guard convention).
+            logger.warning(
+                "intent_callback: deduper.is_duplicate raised (%s) — "
+                "treating as not-duplicate", e,
+            )
+
         try:
             order = intent_to_pending(intent, mode=mode)
             new_id = queue.enqueue(order)
@@ -98,6 +131,15 @@ def make_intent_callback(
                 new_id, intent.strategy_id, intent.symbol,
                 order.side, intent.target_notional_usd, mode,
             )
+            # Record AFTER successful enqueue; failed enqueue shouldn't
+            # consume the dedup slot (caller may retry the same intent).
+            try:
+                deduper.record(intent)
+            except Exception as e:
+                logger.warning(
+                    "intent_callback: deduper.record raised (%s) — "
+                    "ignored (record is best-effort)", e,
+                )
         except Exception as e:
             # Re-raise so StrategyRuntime can count the error in stats.
             # (StrategyRuntime catches it — this is just to keep stats accurate.)

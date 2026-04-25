@@ -13,6 +13,13 @@ from execution.pending_orders.types import (
     PendingOrder,
     PendingOrderStatus,
 )
+from execution.pending_orders.dedup import (
+    DedupKey,
+    IntentDeduper,
+    NoOpIntentDeduper,
+    QueueBasedIntentDeduper,
+    WindowedIntentDeduper,
+)
 from execution.pending_orders.events import (
     EventLogger,
     InMemoryEventLogger,
@@ -79,6 +86,12 @@ __all__ = [
     "PostgresEventLogger",
     "SupabaseEventLogger",
     "build_event_logger",
+    # intent deduper (round 44)
+    "DedupKey",
+    "IntentDeduper",
+    "NoOpIntentDeduper",
+    "WindowedIntentDeduper",
+    "QueueBasedIntentDeduper",
     # background sweeper (round 38)
     "SweepStats",
     "background_sweep_loop",
