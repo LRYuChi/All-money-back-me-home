@@ -260,6 +260,150 @@ class DailyLossCircuitBreakerGuard:
 
 
 # ================================================================== #
+# G10 KellyPositionSize (round 30)
+# ================================================================== #
+@dataclass(slots=True, frozen=True)
+class KellyPositionGuard:
+    """G10: cap order size at fractional Kelly recommendation.
+
+    Looks up `WinRateStats` for (strategy_id, symbol) over `lookback_days`,
+    computes Kelly fraction, applies `safety_factor` (default 0.25 =
+    quarter-Kelly), and caps the order at `capital_usd × kelly × factor`.
+
+    Decisions:
+      - Insufficient sample (n_trades < min_trades) → ALLOW (we don't trust
+        sparse stats; PerStrategy/PerMarket caps still apply)
+      - Provider returns None / raises → ALLOW (fail-open; matches G1/G8/G9)
+      - Negative-edge (kelly < 0) → DENY (don't trade a losing strategy)
+      - Order size ≤ kelly cap → ALLOW unchanged
+      - Order size > kelly cap → SCALE to cap (or DENY if scaled below floor)
+
+    `safety_factor` notes:
+      - 0.25 (default) = quarter-Kelly, conservative; tolerates the high
+        estimation noise typical of small samples
+      - 0.50 = half-Kelly, more aggressive
+      - 1.00 = full Kelly, only for very stable, well-calibrated edges
+    """
+
+    name: str = "kelly_size"
+    win_rate_provider: Any = None        # WinRateProvider (Protocol)
+    safety_factor: float = 0.25
+    min_trades: int = 30
+    lookback_days: int = 30
+    deny_floor_pct: float = 0.10
+    by_symbol: bool = False              # True → key on symbol; default keys
+                                         # on strategy_id
+
+    def __post_init__(self):
+        if self.win_rate_provider is None:
+            raise ValueError("KellyPositionGuard requires a win_rate_provider")
+        if not (0.0 < self.safety_factor <= 1.0):
+            raise ValueError(
+                f"safety_factor must be in (0,1]; got {self.safety_factor}"
+            )
+        if self.min_trades < 1:
+            raise ValueError(
+                f"min_trades must be ≥ 1; got {self.min_trades}"
+            )
+
+    def check(self, order: PendingOrder, ctx: GuardContext) -> GuardDecision:
+        try:
+            stats = self.win_rate_provider.stats(
+                strategy_id=order.strategy_id if not self.by_symbol else None,
+                symbol=order.symbol if self.by_symbol else None,
+                lookback_days=self.lookback_days,
+            )
+        except Exception as e:
+            return GuardDecision(
+                self.name, GuardResult.ALLOW,
+                reason=f"win_rate_provider failed: {type(e).__name__}: {e} — fail-open",
+            )
+
+        if stats is None:
+            return GuardDecision(
+                self.name, GuardResult.ALLOW,
+                reason="no win_rate stats available — fail-open",
+            )
+
+        if stats.n_trades < self.min_trades:
+            return GuardDecision(
+                self.name, GuardResult.ALLOW,
+                reason=(
+                    f"insufficient sample ({stats.n_trades} < "
+                    f"{self.min_trades} trades) — fail-open"
+                ),
+                detail={"n_trades": stats.n_trades, "min_trades": self.min_trades},
+            )
+
+        kelly = stats.kelly_fraction
+        if kelly <= 0:
+            return GuardDecision(
+                self.name, GuardResult.DENY,
+                reason=(
+                    f"negative-edge stats (Kelly={kelly:.3f}, "
+                    f"win_rate={stats.win_rate:.2%}, "
+                    f"avg_win={stats.avg_win_pct:.2%}, "
+                    f"avg_loss={stats.avg_loss_pct:.2%}) — strategy not "
+                    f"profitable, do not size"
+                ),
+                detail={
+                    "kelly_fraction": kelly,
+                    "win_rate": stats.win_rate,
+                    "avg_win_pct": stats.avg_win_pct,
+                    "avg_loss_pct": stats.avg_loss_pct,
+                    "n_trades": stats.n_trades,
+                },
+            )
+
+        cap_usd = ctx.capital_usd * kelly * self.safety_factor
+
+        if order.target_notional_usd <= cap_usd:
+            return GuardDecision(
+                self.name, GuardResult.ALLOW,
+                detail={
+                    "kelly_fraction": kelly,
+                    "safety_factor": self.safety_factor,
+                    "kelly_cap_usd": cap_usd,
+                    "request": order.target_notional_usd,
+                },
+            )
+
+        # Scale down to Kelly cap, with floor protection
+        floor = order.target_notional_usd * self.deny_floor_pct
+        if cap_usd < floor:
+            return GuardDecision(
+                self.name, GuardResult.DENY,
+                reason=(
+                    f"Kelly cap ${cap_usd:.2f} below {self.deny_floor_pct:.0%} "
+                    f"of request ${order.target_notional_usd:.2f}"
+                ),
+                detail={
+                    "kelly_fraction": kelly,
+                    "kelly_cap_usd": cap_usd,
+                    "request": order.target_notional_usd,
+                    "floor": floor,
+                },
+            )
+        return GuardDecision(
+            self.name, GuardResult.SCALE,
+            reason=(
+                f"scaled ${order.target_notional_usd:.2f} → ${cap_usd:.2f} "
+                f"(Kelly fraction {kelly:.3f} × safety {self.safety_factor:.2f}, "
+                f"n={stats.n_trades})"
+            ),
+            scaled_size_usd=cap_usd,
+            detail={
+                "kelly_fraction": kelly,
+                "safety_factor": self.safety_factor,
+                "kelly_cap_usd": cap_usd,
+                "original": order.target_notional_usd,
+                "scaled": cap_usd,
+                "n_trades": stats.n_trades,
+            },
+        )
+
+
+# ================================================================== #
 # G7 CorrelationCap (round 29)
 # ================================================================== #
 @dataclass(slots=True, frozen=True)
@@ -498,6 +642,7 @@ __all__ = [
     "CorrelationCapGuard",
     "DailyLossCircuitBreakerGuard",
     "GlobalExposureGuard",
+    "KellyPositionGuard",
     "LatencyBudgetGuard",
     "MinSizeGuard",
     "PerMarketExposureGuard",

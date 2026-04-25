@@ -36,15 +36,18 @@ from risk import (
     DailyLossCircuitBreakerGuard,
     GlobalExposureGuard,
     GuardPipeline,
+    KellyPositionGuard,
     LatencyBudgetGuard,
     MinSizeGuard,
     NoOpCorrelationMatrix,
+    NoOpWinRateProvider,
     PerMarketExposureGuard,
     PerStrategyExposureGuard,
     build_correlation_matrix,
     build_exposure_provider,
     build_pnl_aggregator,
     build_signal_age_provider,
+    build_win_rate_provider,
     chain_handlers,
     make_context_provider,
     make_g9_strategy_disabler,
@@ -128,6 +131,19 @@ def build_parser() -> argparse.ArgumentParser:
              "cluster (default 0.70).",
     )
     p.add_argument(
+        "--kelly-safety-factor", type=float, default=0.0,
+        help="G10 Kelly safety factor (0 = guard disabled, default 0; "
+             "0.25 = quarter-Kelly, recommended starting point).",
+    )
+    p.add_argument(
+        "--kelly-min-trades", type=int, default=30,
+        help="G10 minimum sample size before Kelly is applied (default 30).",
+    )
+    p.add_argument(
+        "--kelly-lookback-days", type=int, default=30,
+        help="G10 win-rate lookback window in days (default 30).",
+    )
+    p.add_argument(
         "--auto-disable-on-g9", action="store_true",
         help="When G9 trips, disable the order's strategy in the registry "
              "(audit row written via set_enabled). Manual unlock required.",
@@ -183,6 +199,23 @@ def _build_guard_pipeline(args: argparse.Namespace):
             matrix=matrix,
             correlation_threshold=args.correlation_threshold,
             cluster_cap_pct=args.correlation_cap_pct,
+        ))
+    # G10 placement: just before global exposure. Kelly cap is a
+    # per-strategy sanity check; global cap then enforces total leverage
+    # regardless of any individual Kelly recommendation.
+    if args.kelly_safety_factor > 0:
+        wr_provider = build_win_rate_provider(settings)
+        if isinstance(wr_provider, NoOpWinRateProvider):
+            logger.warning(
+                "G10 Kelly cap requested but win_rate_provider is NoOp "
+                "(no DATABASE_URL) — guard will fail-open until trade "
+                "history is queryable",
+            )
+        guards.append(KellyPositionGuard(
+            win_rate_provider=wr_provider,
+            safety_factor=args.kelly_safety_factor,
+            min_trades=args.kelly_min_trades,
+            lookback_days=args.kelly_lookback_days,
         ))
     guards.append(GlobalExposureGuard(capital_multiplier=args.max_leverage))
     pipeline = GuardPipeline(guards)

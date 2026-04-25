@@ -35,6 +35,7 @@ from risk.builtin_guards import (
     CorrelationCapGuard,
     DailyLossCircuitBreakerGuard,
     GlobalExposureGuard,
+    KellyPositionGuard,
     LatencyBudgetGuard,
     MinSizeGuard,
     PerMarketExposureGuard,
@@ -46,6 +47,14 @@ from risk.correlation_matrix import (
     NoOpCorrelationMatrix,
     YamlCorrelationMatrix,
     build_correlation_matrix,
+)
+from risk.win_rate_provider import (
+    InMemoryWinRateProvider,
+    NoOpWinRateProvider,
+    PostgresWinRateProvider,
+    WinRateProvider,
+    WinRateStats,
+    build_win_rate_provider,
 )
 from risk.pnl_aggregator import (
     InMemoryPnLAggregator,
@@ -92,6 +101,7 @@ __all__ = [
     "CorrelationCapGuard",
     "DailyLossCircuitBreakerGuard",
     "GlobalExposureGuard",
+    "KellyPositionGuard",
     "LatencyBudgetGuard",
     "MinSizeGuard",
     "PerMarketExposureGuard",
@@ -102,6 +112,13 @@ __all__ = [
     "InMemoryCorrelationMatrix",
     "YamlCorrelationMatrix",
     "build_correlation_matrix",
+    # win-rate provider (G10 input)
+    "WinRateProvider",
+    "WinRateStats",
+    "NoOpWinRateProvider",
+    "InMemoryWinRateProvider",
+    "PostgresWinRateProvider",
+    "build_win_rate_provider",
     # pnl aggregator
     "PnLAggregator",
     "NoOpPnLAggregator",
