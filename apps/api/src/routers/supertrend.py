@@ -643,11 +643,18 @@ def _ft_whitelist_size() -> int:
 def _build_ops_alerts(
     bot_state: str, n_pairs: int, eval_summary: dict,
     health: dict, recent_trades: int, journal_ok: bool,
+    observed_span_hours: float = 0.0,
+    expected_evals_per_hour_per_pair: float = 4.0,
 ) -> list[str]:
     """Compose the 'should I do something' list. Empty = all OK.
 
     Each alert is a short imperative string that points at a known
     failure mode the operator should investigate.
+
+    R75: observed_span_hours = oldest→newest event timestamp span in
+    the eval window (proxy for actual bot uptime within window).
+    expected_evals_per_hour_per_pair = 4 by default (15m timeframe →
+    4 candle closes per hour). Used by EVAL_RATE_LOW rule.
     """
     alerts: list[str] = []
 
@@ -691,6 +698,23 @@ def _build_ops_alerts(
             "NO_PIPELINE_ACTIVITY — bot may not be running populate_entry_trend; "
             "verify SUPERTREND_EVAL_JOURNAL=1 + freqtrade INFO logs"
         )
+
+    # R75: eval rate sanity. Catches "evaluation writes silently failing"
+    # — distinguishable from legitimately low counts due to short uptime
+    # because we measure expected against the ACTUAL observed event
+    # timespan (proxy for uptime in window), not a fixed 24h baseline.
+    # Need ≥0.5h sample to avoid false-fires during fresh container starts.
+    if observed_span_hours >= 0.5 and n_pairs > 0:
+        expected = observed_span_hours * n_pairs * expected_evals_per_hour_per_pair
+        if expected > 0 and (n_evals / expected) < 0.5:
+            ratio_pct = (n_evals / expected) * 100
+            alerts.append(
+                f"EVAL_RATE_LOW — {n_evals} evals over {observed_span_hours:.1f}h "
+                f"with {n_pairs} pairs, expected ≈{int(expected)} "
+                f"({ratio_pct:.0f}% of baseline). Possible silent journal "
+                f"write failures or populate_entry_trend exceptions; "
+                f"check freqtrade logs for swallowed errors."
+            )
 
     return alerts
 
@@ -784,14 +808,29 @@ def supertrend_operations(
             )
             if rows:
                 last_event_ts = max(r.get("timestamp", "") for r in rows)
+                first_event_ts = min(r.get("timestamp", "") for r in rows)
                 health = {
                     "ok": True, "last_event_ts": last_event_ts,
                     "events_in_window": len(rows),
                 }
+                # R75: span between oldest and newest event ≈ uptime in window
+                try:
+                    first_dt = datetime.fromisoformat(
+                        first_event_ts.replace("Z", "+00:00")
+                    )
+                    last_dt = datetime.fromisoformat(
+                        last_event_ts.replace("Z", "+00:00")
+                    )
+                    eval_summary["observed_span_hours"] = round(
+                        (last_dt - first_dt).total_seconds() / 3600.0, 2,
+                    )
+                except Exception:
+                    eval_summary["observed_span_hours"] = 0.0
             else:
                 health = {
                     "ok": False, "reason": f"no events in last {eval_window_days}d",
                 }
+                eval_summary["observed_span_hours"] = 0.0
         except Exception as e:
             out["errors"]["pipeline"] = str(e)
             health = {"ok": False, "reason": f"journal read failed: {e}"}
@@ -836,6 +875,7 @@ def supertrend_operations(
         health=health,
         recent_trades=n_recent_trades,
         journal_ok=journal_ok,
+        observed_span_hours=eval_summary.get("observed_span_hours", 0.0),
     )
     out["alert_count"] = len(out["alerts"])
     out["status"] = "ok" if not out["alerts"] else "degraded"

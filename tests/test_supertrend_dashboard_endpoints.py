@@ -884,6 +884,102 @@ def test_alerts_no_fires_alert_skipped_when_eval_count_low():
 
 
 # =================================================================== #
+# R75: EVAL_RATE_LOW alert
+# =================================================================== #
+def test_eval_rate_low_fires_when_actual_under_50pct():
+    """4h × 17 pairs × 4 evals/h = 272 expected. 100 actual = 37%, fires."""
+    mod = _import_router()
+    alerts = mod["build_ops_alerts"](
+        bot_state="running", n_pairs=17,
+        eval_summary={
+            "n_evaluations": 100,
+            "tier_fired_count": {"confirmed": 0, "scout": 0, "pre_scout": 0},
+            "failures_top": {},
+        },
+        health={"ok": True}, recent_trades=0, journal_ok=True,
+        observed_span_hours=4.0,
+    )
+    rate_alert = next((a for a in alerts if "EVAL_RATE_LOW" in a), None)
+    assert rate_alert is not None
+    assert "100 evals" in rate_alert
+    assert "4.0h" in rate_alert
+    assert "17 pairs" in rate_alert
+
+
+def test_eval_rate_low_silent_at_baseline():
+    """4h × 17 pairs × 4 = 272 expected. 280 actual = 102%, silent."""
+    mod = _import_router()
+    alerts = mod["build_ops_alerts"](
+        bot_state="running", n_pairs=17,
+        eval_summary={"n_evaluations": 280},
+        health={"ok": True}, recent_trades=0, journal_ok=True,
+        observed_span_hours=4.0,
+    )
+    assert not any("EVAL_RATE_LOW" in a for a in alerts)
+
+
+def test_eval_rate_low_silent_when_uptime_below_30min():
+    """Need 0.5h sample minimum to avoid false-fires on fresh starts."""
+    mod = _import_router()
+    alerts = mod["build_ops_alerts"](
+        bot_state="running", n_pairs=17,
+        eval_summary={"n_evaluations": 1},
+        health={"ok": True}, recent_trades=0, journal_ok=True,
+        observed_span_hours=0.4,   # under threshold
+    )
+    assert not any("EVAL_RATE_LOW" in a for a in alerts)
+
+
+def test_eval_rate_low_silent_when_no_pairs():
+    """Can't compute expected rate without pairs; rule abstains."""
+    mod = _import_router()
+    alerts = mod["build_ops_alerts"](
+        bot_state="running", n_pairs=0,
+        eval_summary={"n_evaluations": 0},
+        health={"ok": True}, recent_trades=0, journal_ok=True,
+        observed_span_hours=4.0,
+    )
+    assert not any("EVAL_RATE_LOW" in a for a in alerts)
+
+
+def test_eval_rate_low_silent_at_default_zero_span():
+    """When observed_span_hours not provided (legacy callers), no fire."""
+    mod = _import_router()
+    alerts = mod["build_ops_alerts"](
+        bot_state="running", n_pairs=17,
+        eval_summary={"n_evaluations": 0},
+        health={"ok": True}, recent_trades=0, journal_ok=True,
+    )
+    assert not any("EVAL_RATE_LOW" in a for a in alerts)
+
+
+def test_eval_rate_low_message_quotes_ratio():
+    mod = _import_router()
+    alerts = mod["build_ops_alerts"](
+        bot_state="running", n_pairs=10,
+        eval_summary={"n_evaluations": 20},   # vs expected 1*10*4=40 → 50% boundary
+        health={"ok": True}, recent_trades=0, journal_ok=True,
+        observed_span_hours=1.0,
+    )
+    # Exactly 50% → does NOT fire (strict <0.5)
+    assert not any("EVAL_RATE_LOW" in a for a in alerts)
+
+
+def test_eval_rate_low_with_custom_expected_rate():
+    """5m timeframe → 12 evals/h/pair baseline. Override should respect it."""
+    mod = _import_router()
+    alerts = mod["build_ops_alerts"](
+        bot_state="running", n_pairs=10,
+        eval_summary={"n_evaluations": 200},
+        health={"ok": True}, recent_trades=0, journal_ok=True,
+        observed_span_hours=4.0,
+        expected_evals_per_hour_per_pair=12.0,   # 5m timeframe
+    )
+    # Expected = 4 × 10 × 12 = 480; actual 200 = 41% → fires
+    assert any("EVAL_RATE_LOW" in a for a in alerts)
+
+
+# =================================================================== #
 # /operations — R68 (endpoint integration)
 # =================================================================== #
 def test_operations_handles_freqtrade_unreachable(monkeypatch, tmp_path):
