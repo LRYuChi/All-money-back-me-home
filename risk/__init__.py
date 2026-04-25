@@ -32,12 +32,20 @@ from risk.guards import (
 )
 from risk.builtin_guards import (
     ConsecutiveLossDaysGuard,
+    CorrelationCapGuard,
     DailyLossCircuitBreakerGuard,
     GlobalExposureGuard,
     LatencyBudgetGuard,
     MinSizeGuard,
     PerMarketExposureGuard,
     PerStrategyExposureGuard,
+)
+from risk.correlation_matrix import (
+    CorrelationMatrix,
+    InMemoryCorrelationMatrix,
+    NoOpCorrelationMatrix,
+    YamlCorrelationMatrix,
+    build_correlation_matrix,
 )
 from risk.pnl_aggregator import (
     InMemoryPnLAggregator,
@@ -81,12 +89,19 @@ __all__ = [
     "GuardResult",
     # built-in guards
     "ConsecutiveLossDaysGuard",
+    "CorrelationCapGuard",
     "DailyLossCircuitBreakerGuard",
     "GlobalExposureGuard",
     "LatencyBudgetGuard",
     "MinSizeGuard",
     "PerMarketExposureGuard",
     "PerStrategyExposureGuard",
+    # correlation matrix (G7 input)
+    "CorrelationMatrix",
+    "NoOpCorrelationMatrix",
+    "InMemoryCorrelationMatrix",
+    "YamlCorrelationMatrix",
+    "build_correlation_matrix",
     # pnl aggregator
     "PnLAggregator",
     "NoOpPnLAggregator",

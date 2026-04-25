@@ -30,6 +30,7 @@ logger = logging.getLogger(__name__)
 class ExposureProvider(Protocol):
     def open_by_strategy(self) -> dict[str, float]: ...
     def open_by_market(self) -> dict[str, float]: ...
+    def open_by_symbol(self) -> dict[str, float]: ...
     def global_open(self) -> float: ...
 
 
@@ -65,13 +66,16 @@ def _row_notional(row: dict[str, Any]) -> float | None:
 # ================================================================== #
 class NoOpExposureProvider:
     """Always reports zero exposure. Used when no DB is configured —
-    G4/G5/G6 will pass everything through unchanged. NOT for production
+    G4/G5/G6/G7 will pass everything through unchanged. NOT for production
     risk-on deployments."""
 
     def open_by_strategy(self) -> dict[str, float]:
         return {}
 
     def open_by_market(self) -> dict[str, float]:
+        return {}
+
+    def open_by_symbol(self) -> dict[str, float]:
         return {}
 
     def global_open(self) -> float:
@@ -113,6 +117,12 @@ class InMemoryExposureProvider:
             out[mkt] = out.get(mkt, 0.0) + p.notional_usd
         return out
 
+    def open_by_symbol(self) -> dict[str, float]:
+        out: dict[str, float] = {}
+        for p in self._positions:
+            out[p.symbol] = out.get(p.symbol, 0.0) + p.notional_usd
+        return out
+
     def global_open(self) -> float:
         return sum(p.notional_usd for p in self._positions)
 
@@ -140,7 +150,7 @@ class SupabaseExposureProvider:
         self._client = client
         self._include_live = include_live
         # Cache one snapshot per call series; caller can reset.
-        self._cache: tuple[dict, dict, float] | None = None
+        self._cache: tuple[dict, dict, dict, float] | None = None
 
     def refresh(self) -> None:
         """Force re-fetch on next access."""
@@ -152,15 +162,19 @@ class SupabaseExposureProvider:
     def open_by_market(self) -> dict[str, float]:
         return self._snapshot()[1]
 
-    def global_open(self) -> float:
+    def open_by_symbol(self) -> dict[str, float]:
         return self._snapshot()[2]
 
-    def _snapshot(self) -> tuple[dict[str, float], dict[str, float], float]:
+    def global_open(self) -> float:
+        return self._snapshot()[3]
+
+    def _snapshot(self) -> tuple[dict[str, float], dict[str, float], dict[str, float], float]:
         if self._cache is not None:
             return self._cache
 
         by_strategy: dict[str, float] = {}
         by_market: dict[str, float] = {}
+        by_symbol: dict[str, float] = {}
         total = 0.0
 
         for tbl in self._tables():
@@ -180,11 +194,13 @@ class SupabaseExposureProvider:
                     by_strategy[sid] = by_strategy.get(sid, 0.0) + notional
                     mkt = _market_from_symbol(sym)
                     by_market[mkt] = by_market.get(mkt, 0.0) + notional
+                    if sym:
+                        by_symbol[sym] = by_symbol.get(sym, 0.0) + notional
                     total += notional
             except Exception as e:
                 logger.warning("exposure: %s query failed (%s) — partial data", tbl, e)
 
-        self._cache = (by_strategy, by_market, total)
+        self._cache = (by_strategy, by_market, by_symbol, total)
         return self._cache
 
     def _tables(self) -> list[str]:
@@ -198,7 +214,7 @@ class PostgresExposureProvider:
     def __init__(self, dsn: str, *, include_live: bool = True):
         self._dsn = dsn
         self._include_live = include_live
-        self._cache: tuple[dict, dict, float] | None = None
+        self._cache: tuple[dict, dict, dict, float] | None = None
 
     def refresh(self) -> None:
         self._cache = None
@@ -213,10 +229,13 @@ class PostgresExposureProvider:
     def open_by_market(self) -> dict[str, float]:
         return self._snapshot()[1]
 
-    def global_open(self) -> float:
+    def open_by_symbol(self) -> dict[str, float]:
         return self._snapshot()[2]
 
-    def _snapshot(self) -> tuple[dict[str, float], dict[str, float], float]:
+    def global_open(self) -> float:
+        return self._snapshot()[3]
+
+    def _snapshot(self) -> tuple[dict[str, float], dict[str, float], dict[str, float], float]:
         if self._cache is not None:
             return self._cache
 
@@ -233,6 +252,7 @@ class PostgresExposureProvider:
 
         by_strategy: dict[str, float] = {}
         by_market: dict[str, float] = {}
+        by_symbol: dict[str, float] = {}
         total = 0.0
 
         with self._conn() as conn, conn.cursor() as cur:
@@ -255,11 +275,13 @@ class PostgresExposureProvider:
                         by_strategy[sid] = by_strategy.get(sid, 0.0) + notional
                         mkt = _market_from_symbol(sym or "")
                         by_market[mkt] = by_market.get(mkt, 0.0) + notional
+                        if sym:
+                            by_symbol[sym] = by_symbol.get(sym, 0.0) + notional
                         total += notional
                 except Exception as e:
                     logger.warning("exposure: %s query failed (%s)", label, e)
 
-        self._cache = (by_strategy, by_market, total)
+        self._cache = (by_strategy, by_market, by_symbol, total)
         return self._cache
 
 
@@ -332,11 +354,24 @@ def make_context_provider(
             capital_usd=capital_usd,
             open_notional_by_strategy=exposure.open_by_strategy(),
             open_notional_by_market=exposure.open_by_market(),
+            open_notional_by_symbol=_safe_open_by_symbol(exposure),
             global_open_notional=exposure.global_open(),
             signal_age_seconds=age,
         )
 
     return _provide
+
+
+def _safe_open_by_symbol(exposure: ExposureProvider) -> dict[str, float]:
+    """Backward-compat shim: third-party ExposureProvider impls written
+    before round 29 may not define open_by_symbol; treat as empty dict."""
+    fn = getattr(exposure, "open_by_symbol", None)
+    if fn is None:
+        return {}
+    try:
+        return fn()
+    except Exception:
+        return {}
 
 
 __all__ = [

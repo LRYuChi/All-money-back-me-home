@@ -32,13 +32,16 @@ from execution.pending_orders import (
 )
 from risk import (
     ConsecutiveLossDaysGuard,
+    CorrelationCapGuard,
     DailyLossCircuitBreakerGuard,
     GlobalExposureGuard,
     GuardPipeline,
     LatencyBudgetGuard,
     MinSizeGuard,
+    NoOpCorrelationMatrix,
     PerMarketExposureGuard,
     PerStrategyExposureGuard,
+    build_correlation_matrix,
     build_exposure_provider,
     build_pnl_aggregator,
     build_signal_age_provider,
@@ -78,8 +81,8 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument(
         "--with-guards", action="store_true",
         help="Enable risk guard pipeline (G1 latency / G3 min_size / G4-G6 "
-             "exposure caps / G8 daily loss CB / G9 consecutive losses) "
-             "before dispatch.",
+             "exposure caps / G7 correlation cap (opt-in) / G8 daily loss CB / "
+             "G9 consecutive losses) before dispatch.",
     )
     p.add_argument(
         "--capital-usd", type=float, default=10_000.0,
@@ -114,6 +117,17 @@ def build_parser() -> argparse.ArgumentParser:
         help="G9 consecutive losing days threshold (default 3 — matches D7).",
     )
     p.add_argument(
+        "--correlation-cap-pct", type=float, default=0.0,
+        help="G7 correlation cluster cap as fraction of capital (0 = disabled, "
+             "default 0; example: 0.40 = 40%% of capital across symbols whose "
+             "|ρ| ≥ correlation-threshold).",
+    )
+    p.add_argument(
+        "--correlation-threshold", type=float, default=0.70,
+        help="G7 |ρ| threshold counting two symbols as part of the same "
+             "cluster (default 0.70).",
+    )
+    p.add_argument(
         "--auto-disable-on-g9", action="store_true",
         help="When G9 trips, disable the order's strategy in the registry "
              "(audit row written via set_enabled). Manual unlock required.",
@@ -140,7 +154,7 @@ def _build_guard_pipeline(args: argparse.Namespace):
     exposure = build_exposure_provider(settings)
     age_provider = build_signal_age_provider(settings)
 
-    pipeline = GuardPipeline([
+    guards: list = [
         LatencyBudgetGuard(budget_seconds=args.latency_budget_sec),
         MinSizeGuard(default_min_usd=args.min_notional_usd),
         DailyLossCircuitBreakerGuard(
@@ -153,8 +167,25 @@ def _build_guard_pipeline(args: argparse.Namespace):
         ),
         PerStrategyExposureGuard(cap_pct_of_capital=args.max_strategy_pct),
         PerMarketExposureGuard(default_cap_pct=args.max_market_pct),
-        GlobalExposureGuard(capital_multiplier=args.max_leverage),
-    ])
+    ]
+    # G7 placement: between per-market and global. Reasoning — per-market
+    # caps a whole asset class; G7 catches "too many strongly-correlated
+    # symbols within that class"; G6 then enforces total leverage.
+    if args.correlation_cap_pct > 0:
+        matrix = build_correlation_matrix(settings)
+        if isinstance(matrix, NoOpCorrelationMatrix):
+            logger.warning(
+                "G7 correlation cap requested but matrix is NoOp "
+                "(SM_CORRELATION_MATRIX_PATH unset / file missing) — "
+                "guard will fail-open until a real matrix is configured",
+            )
+        guards.append(CorrelationCapGuard(
+            matrix=matrix,
+            correlation_threshold=args.correlation_threshold,
+            cluster_cap_pct=args.correlation_cap_pct,
+        ))
+    guards.append(GlobalExposureGuard(capital_multiplier=args.max_leverage))
+    pipeline = GuardPipeline(guards)
 
     # Round 23: G1 now real — signal_age looked up from fused_signals.ts
     # via order.fused_signal_id. Falls back to None (fail-open) when the

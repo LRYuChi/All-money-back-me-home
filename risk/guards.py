@@ -58,6 +58,7 @@ class GuardContext:
     capital_usd: float
     open_notional_by_strategy: dict[str, float] = field(default_factory=dict)
     open_notional_by_market: dict[str, float] = field(default_factory=dict)
+    open_notional_by_symbol: dict[str, float] = field(default_factory=dict)
     global_open_notional: float = 0.0
     signal_age_seconds: float | None = None     # for LatencyBudgetGuard
 

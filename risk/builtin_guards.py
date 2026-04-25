@@ -1,4 +1,5 @@
-"""Built-in guards (G1, G3, G4, G5, G6 — round 18; G8 — round 20; G9 — round 22)."""
+"""Built-in guards (G1, G3, G4, G5, G6 — round 18; G8 — round 20;
+G9 — round 22; G7 — round 29)."""
 from __future__ import annotations
 
 from dataclasses import dataclass, field
@@ -259,6 +260,141 @@ class DailyLossCircuitBreakerGuard:
 
 
 # ================================================================== #
+# G7 CorrelationCap (round 29)
+# ================================================================== #
+@dataclass(slots=True, frozen=True)
+class CorrelationCapGuard:
+    """G7: cap aggregate notional within a "correlated cluster".
+
+    For a new order on symbol X:
+      1. Find every currently-open symbol Y with |ρ(X,Y)| ≥ correlation_threshold
+      2. Sum their open notionals = cluster_open
+      3. Projected = cluster_open + new_order.target_notional_usd
+      4. cap = capital_usd × cluster_cap_pct
+      5. If projected > cap: scale down to fit (or DENY if room is below
+         deny_floor_pct of the original request)
+
+    `matrix` (CorrelationMatrix) supplies pairwise ρ. NoOp matrix → every
+    pair returns 0 → G7 never trips (fail-open by default — matrix is
+    opt-in via `--correlation-cap` / matrix-path config).
+
+    Self-correlation note: the new symbol vs itself is always counted —
+    if you already have BTC at $4k and request more BTC, that's the same
+    cluster. Matrix's default_self handles this (1.0).
+
+    Idempotent vs G4/G5: G7 catches a different failure mode (you might
+    have BTC under per-strategy cap and crypto under per-market cap, but
+    BTC + ETH + SOL together under correlation cluster cap is a separate
+    constraint).
+    """
+
+    name: str = "correlation_cap"
+    matrix: Any = None                     # CorrelationMatrix (Protocol)
+    correlation_threshold: float = 0.70    # |ρ| ≥ this counts as "correlated"
+    cluster_cap_pct: float = 0.40          # cluster ≤ 40% of capital
+    deny_floor_pct: float = 0.10           # if scaled < 10% of request → DENY
+
+    def __post_init__(self):
+        if self.matrix is None:
+            raise ValueError(
+                "CorrelationCapGuard requires a `matrix` (CorrelationMatrix)"
+            )
+        if not (0.0 <= self.correlation_threshold <= 1.0):
+            raise ValueError(
+                f"correlation_threshold must be in [0,1]; got "
+                f"{self.correlation_threshold}"
+            )
+
+    def check(self, order: PendingOrder, ctx: GuardContext) -> GuardDecision:
+        # Find all currently-open symbols that correlate strongly with the
+        # new order's symbol. Self always counts (existing position in
+        # the same symbol is part of the same cluster).
+        try:
+            cluster_symbols: list[tuple[str, float, float]] = []  # (sym, notional, rho)
+            cluster_open = 0.0
+            for sym, open_usd in ctx.open_notional_by_symbol.items():
+                if open_usd <= 0:
+                    continue
+                rho = float(self.matrix.get(order.symbol, sym))
+                if abs(rho) >= self.correlation_threshold:
+                    cluster_symbols.append((sym, open_usd, rho))
+                    cluster_open += open_usd
+        except Exception as e:
+            return GuardDecision(
+                self.name, GuardResult.ALLOW,
+                reason=f"matrix lookup failed: {type(e).__name__}: {e} — fail-open",
+            )
+
+        cap_usd = ctx.capital_usd * self.cluster_cap_pct
+        room = cap_usd - cluster_open
+
+        if room <= 0:
+            return GuardDecision(
+                self.name, GuardResult.DENY,
+                reason=(
+                    f"correlation cluster around {order.symbol} at cap "
+                    f"(open ${cluster_open:.2f} ≥ cap ${cap_usd:.2f}, "
+                    f"threshold |ρ|≥{self.correlation_threshold:.2f}, "
+                    f"{len(cluster_symbols)} correlated symbols)"
+                ),
+                detail={
+                    "cluster_symbols": [s for s, _, _ in cluster_symbols],
+                    "cluster_open": cluster_open,
+                    "cap": cap_usd,
+                    "request": order.target_notional_usd,
+                    "threshold": self.correlation_threshold,
+                },
+            )
+
+        if order.target_notional_usd <= room:
+            return GuardDecision(
+                self.name, GuardResult.ALLOW,
+                detail={
+                    "cluster_symbols": [s for s, _, _ in cluster_symbols],
+                    "cluster_open": cluster_open,
+                    "cap": cap_usd,
+                    "request": order.target_notional_usd,
+                },
+            )
+
+        # Need to scale
+        scaled = room
+        floor = order.target_notional_usd * self.deny_floor_pct
+        if scaled < floor:
+            return GuardDecision(
+                self.name, GuardResult.DENY,
+                reason=(
+                    f"correlation cluster room ${room:.2f} below "
+                    f"{self.deny_floor_pct:.0%} of request "
+                    f"${order.target_notional_usd:.2f}"
+                ),
+                detail={
+                    "cluster_symbols": [s for s, _, _ in cluster_symbols],
+                    "cluster_open": cluster_open,
+                    "cap": cap_usd,
+                    "scaled": scaled,
+                    "floor": floor,
+                },
+            )
+        return GuardDecision(
+            self.name, GuardResult.SCALE,
+            reason=(
+                f"scaled ${order.target_notional_usd:.2f} → ${scaled:.2f} "
+                f"(correlation cluster around {order.symbol}, "
+                f"{len(cluster_symbols)} symbols)"
+            ),
+            scaled_size_usd=scaled,
+            detail={
+                "cluster_symbols": [s for s, _, _ in cluster_symbols],
+                "cluster_open": cluster_open,
+                "cap": cap_usd,
+                "original": order.target_notional_usd,
+                "scaled": scaled,
+            },
+        )
+
+
+# ================================================================== #
 # G9 ConsecutiveLossDays
 # ================================================================== #
 @dataclass(slots=True, frozen=True)
@@ -359,6 +495,7 @@ def _market_from_symbol(symbol: str) -> str:
 
 __all__ = [
     "ConsecutiveLossDaysGuard",
+    "CorrelationCapGuard",
     "DailyLossCircuitBreakerGuard",
     "GlobalExposureGuard",
     "LatencyBudgetGuard",
