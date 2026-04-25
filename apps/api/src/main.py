@@ -8,6 +8,7 @@ from src.routers.strategy import router as strategy_router
 from src.routers.dashboard import router as dashboard_router
 from src.routers.polymarket import router as polymarket_router
 from src.routers.smart_money import router as smart_money_router
+from src.routers.supertrend import router as supertrend_router
 from src.routers.system import router as system_router
 
 app = FastAPI(
@@ -32,6 +33,7 @@ app.include_router(strategy_router)
 app.include_router(dashboard_router)
 app.include_router(polymarket_router)
 app.include_router(smart_money_router)
+app.include_router(supertrend_router)
 app.include_router(system_router)
 
 
