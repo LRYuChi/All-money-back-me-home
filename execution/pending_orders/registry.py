@@ -199,18 +199,30 @@ def build_default_registry(settings=None) -> DispatcherRegistry:  # noqa: ANN001
     the notifier for `notify` mode. If None, NotifyOnly uses NoOpNotifier
     (logs only).
 
-    `live` is intentionally NOT registered — until Phase F.1 lands the
-    OKX/IBKR/TW dispatchers, requesting `--mode live` should fail loudly
-    rather than silently fall through to LogOnly (which would write
-    FILLED rows for trades that never happened).
+    Round 41: `live` and `paper` now wire OKXLiveDispatcher when OKX
+    credentials are available. `paper` enables ccxt sandbox/demo mode
+    (writes orders to OKX demo trading); `live` hits real money. If
+    credentials are absent, `live` stays unregistered (--mode live will
+    exit 1 instead of running unauthenticated) and `paper` falls back to
+    LogOnlyDispatcher (safe local simulation).
     """
     reg = DispatcherRegistry()
 
-    # shadow + paper are local-only (no exchange) — both use LogOnly until
-    # Phase F.1.5 introduces a paper trader that writes paper_trades rows
-    # with simulated fills.
+    # shadow is always local-only — never touches an exchange
     reg.register("shadow", lambda mode: LogOnlyDispatcher(mode))
-    reg.register("paper", lambda mode: LogOnlyDispatcher(mode))
+
+    # paper: try OKX demo first, fall back to LogOnly if no creds
+    paper_dispatcher = _try_build_okx(settings, mode="paper")
+    if paper_dispatcher is not None:
+        reg.register("paper", lambda mode: paper_dispatcher)
+    else:
+        reg.register("paper", lambda mode: LogOnlyDispatcher(mode))
+
+    # live: OKX real money. Only registered when creds present so that
+    # --mode live without credentials exits 1 (vs silently logging FILLED).
+    live_dispatcher = _try_build_okx(settings, mode="live")
+    if live_dispatcher is not None:
+        reg.register("live", lambda mode: live_dispatcher)
 
     # notify uses the shared notifier. Build once, share across worker calls.
     notifier = _build_notifier_for_notify(settings)
@@ -220,6 +232,23 @@ def build_default_registry(settings=None) -> DispatcherRegistry:  # noqa: ANN001
     )
 
     return reg
+
+
+def _try_build_okx(settings, *, mode):  # noqa: ANN001
+    """Return an OKX dispatcher when credentials are wired, None otherwise.
+    Late-imports build_okx_dispatcher so the registry has no hard ccxt
+    dependency — environments without ccxt still get shadow + notify."""
+    if settings is None:
+        return None
+    try:
+        from execution.exchanges.okx import build_okx_dispatcher
+        return build_okx_dispatcher(settings, mode=mode)
+    except Exception as e:
+        logger.warning(
+            "registry: build_okx_dispatcher(mode=%s) failed (%s) — "
+            "skipping OKX registration", mode, e,
+        )
+        return None
 
 
 def _build_notifier_for_notify(settings):  # noqa: ANN001

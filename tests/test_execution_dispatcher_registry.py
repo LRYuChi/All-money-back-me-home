@@ -273,6 +273,135 @@ def test_worker_runs_with_registry_built_shadow_dispatcher():
     assert q.get(o.id).status == PendingOrderStatus.FILLED
 
 
+# ================================================================== #
+# Round 41: build_default_registry wires OKX live/paper when creds set
+# ================================================================== #
+def test_default_registry_wires_okx_paper_when_credentials_present(monkeypatch):
+    """With credentials available, paper mode resolves to OKXLiveDispatcher
+    in demo mode (not LogOnly)."""
+    from execution.exchanges.okx import FakeOKXClient, OKXLiveDispatcher
+    from execution.pending_orders import registry as reg_mod
+
+    # Stub build_okx_dispatcher so we don't need real ccxt + creds
+    def fake_build(settings, *, mode):
+        return OKXLiveDispatcher(FakeOKXClient(), mode=mode)
+    monkeypatch.setattr(
+        "execution.exchanges.okx.build_okx_dispatcher", fake_build,
+    )
+
+    class S:
+        okx_api_key = "k"
+        okx_api_secret = "s"
+        okx_api_passphrase = "p"
+        database_url = ""
+        supabase_url = ""
+        supabase_service_key = ""
+
+    reg = build_default_registry(S())
+    assert reg.has("paper")
+    paper = reg.build("paper")
+    assert isinstance(paper, OKXLiveDispatcher)
+    assert paper.mode == "paper"
+
+
+def test_default_registry_wires_okx_live_when_credentials_present(monkeypatch):
+    from execution.exchanges.okx import FakeOKXClient, OKXLiveDispatcher
+
+    def fake_build(settings, *, mode):
+        return OKXLiveDispatcher(FakeOKXClient(), mode=mode)
+    monkeypatch.setattr(
+        "execution.exchanges.okx.build_okx_dispatcher", fake_build,
+    )
+
+    class S:
+        okx_api_key = "k"
+        okx_api_secret = "s"
+        okx_api_passphrase = "p"
+        database_url = ""
+        supabase_url = ""
+        supabase_service_key = ""
+
+    reg = build_default_registry(S())
+    assert reg.has("live")
+    live = reg.build("live")
+    assert isinstance(live, OKXLiveDispatcher)
+    assert live.mode == "live"
+
+
+def test_default_registry_paper_falls_back_to_log_only_without_creds(monkeypatch):
+    """Even with settings present but no usable creds, paper falls back
+    to LogOnly so dev can still test locally."""
+    monkeypatch.setattr(
+        "execution.exchanges.okx.build_okx_dispatcher",
+        lambda settings, *, mode: None,
+    )
+
+    class S:
+        okx_api_key = ""
+        okx_api_secret = ""
+        okx_api_passphrase = ""
+        database_url = ""
+        supabase_url = ""
+        supabase_service_key = ""
+
+    reg = build_default_registry(S())
+    paper = reg.build("paper")
+    assert isinstance(paper, LogOnlyDispatcher)
+
+
+def test_default_registry_live_unregistered_without_creds(monkeypatch):
+    """Live mode must NOT silently fall back to LogOnly — would write
+    FILLED rows for trades that never happened. Stays unregistered."""
+    monkeypatch.setattr(
+        "execution.exchanges.okx.build_okx_dispatcher",
+        lambda settings, *, mode: None,
+    )
+
+    class S:
+        okx_api_key = ""
+        okx_api_secret = ""
+        okx_api_passphrase = ""
+        database_url = ""
+        supabase_url = ""
+        supabase_service_key = ""
+
+    reg = build_default_registry(S())
+    assert not reg.has("live")
+    with pytest.raises(UnsupportedModeError):
+        reg.build("live")
+
+
+def test_default_registry_swallows_okx_factory_exceptions(monkeypatch, caplog):
+    """If build_okx_dispatcher raises (e.g. credential store down), the
+    registry still builds — shadow + notify keep working."""
+    import logging
+
+    def boom(settings, *, mode):
+        raise RuntimeError("ccxt explosion")
+    monkeypatch.setattr(
+        "execution.exchanges.okx.build_okx_dispatcher", boom,
+    )
+
+    class S:
+        okx_api_key = "k"
+        okx_api_secret = "s"
+        okx_api_passphrase = "p"
+        database_url = ""
+        supabase_url = ""
+        supabase_service_key = ""
+
+    with caplog.at_level(logging.WARNING):
+        reg = build_default_registry(S())
+    # shadow + notify still work
+    assert reg.has("shadow")
+    assert reg.has("notify")
+    # paper falls back to LogOnly (factory raised → None)
+    assert isinstance(reg.build("paper"), LogOnlyDispatcher)
+    # live stays unregistered
+    assert not reg.has("live")
+    assert any("build_okx_dispatcher" in m for m in caplog.messages)
+
+
 def test_worker_runs_with_registry_built_notify_dispatcher():
     notifier = _CapturingNotifier()
     reg = DispatcherRegistry()

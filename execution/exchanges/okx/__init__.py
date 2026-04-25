@@ -14,6 +14,11 @@ scaffolding only — real credentials + ccxt wiring come in F.1.x once
 sandbox testing is signed off.
 """
 
+from execution.exchanges.okx.ccxt_client import (
+    CcxtOKXClient,
+    canonical_to_ccxt,
+    ccxt_to_canonical,
+)
 from execution.exchanges.okx.client import (
     FakeOKXClient,
     OKXClient,
@@ -25,9 +30,12 @@ from execution.exchanges.okx.dispatcher import (
 from execution.exchanges.okx.symbol_catalog import OKXSymbolCatalog
 
 __all__ = [
+    "CcxtOKXClient",
     "FakeOKXClient",
     "OKXClient",
     "OKXLiveDispatcher",
     "OKXSymbolCatalog",
     "build_okx_dispatcher",
+    "canonical_to_ccxt",
+    "ccxt_to_canonical",
 ]

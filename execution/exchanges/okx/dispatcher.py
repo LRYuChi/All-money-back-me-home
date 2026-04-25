@@ -176,22 +176,25 @@ def build_okx_dispatcher(
     settings,                          # noqa: ANN001
     *,
     mode: ExecutionMode = "live",
+    demo: bool | None = None,
+    client: OKXClient | None = None,
 ):
     """Build an OKXLiveDispatcher if credentials are configured.
 
-    Returns None when okx_api_key/secret/passphrase are missing — caller
-    (DispatcherRegistry.build_default_registry) skips registration so
-    `--mode live` exits 1 instead of attempting unauthenticated requests.
+    Round 41: actually wires CcxtOKXClient when credentials present.
+    Returns None when credentials are missing.
 
-    Round 32 doesn't import a real ccxt client — it raises NotImplementedError
-    when called for `live`. Tests + a future F.1.x round inject a concrete
-    client. The factory still returns a working dispatcher when the caller
-    passes `client=` directly (used by build_default_registry below once
-    the real ccxt wiring lands).
+    Credential sources (priority):
+      1. settings.okx_api_key/secret/passphrase (from env or .env)
+      2. credential store (round 7+34) — if env values are blank
+
+    Demo trading default: True for `mode=paper`, False for `mode=live`.
+    Override via `demo=` kwarg. Demo flag toggles ccxt's sandbox endpoint
+    + adds `x-simulated-trading: 1` header.
+
+    `client=` injectable for tests so they don't hit the network.
     """
-    api_key = (getattr(settings, "okx_api_key", "") or "").strip()
-    secret = (getattr(settings, "okx_api_secret", "") or "").strip()
-    passphrase = (getattr(settings, "okx_api_passphrase", "") or "").strip()
+    api_key, secret, passphrase = _resolve_credentials(settings)
     if not (api_key and secret and passphrase):
         logger.info(
             "okx_dispatcher: credentials missing (api_key/secret/passphrase) "
@@ -199,12 +202,54 @@ def build_okx_dispatcher(
         )
         return None
 
-    # Round 32 placeholder — real ccxt-okx wiring lands in F.1.x.
-    raise NotImplementedError(
-        "OKX live dispatcher requires F.1.x ccxt wiring; round 32 ships only "
-        "the scaffolding (Protocol + Fake). Construct OKXLiveDispatcher "
-        "directly with a concrete OKXClient when ready."
+    if demo is None:
+        # `paper` = simulated by definition; `live` = real money
+        demo = (mode == "paper")
+
+    if client is None:
+        try:
+            from execution.exchanges.okx.ccxt_client import CcxtOKXClient
+            client = CcxtOKXClient(
+                api_key=api_key, secret=secret, passphrase=passphrase,
+                demo=demo,
+            )
+        except ImportError as e:
+            logger.error(
+                "okx_dispatcher: ccxt not importable (%s) — cannot wire live", e,
+            )
+            return None
+
+    logger.info(
+        "okx_dispatcher: wired (mode=%s, demo=%s, client=%s)",
+        mode, demo, type(client).__name__,
     )
+    return OKXLiveDispatcher(client, mode=mode)
+
+
+def _resolve_credentials(settings) -> tuple[str, str, str]:  # noqa: ANN001
+    """Try env first; fall back to encrypted credential store."""
+    api_key = (getattr(settings, "okx_api_key", "") or "").strip()
+    secret = (getattr(settings, "okx_api_secret", "") or "").strip()
+    passphrase = (getattr(settings, "okx_api_passphrase", "") or "").strip()
+
+    if api_key and secret and passphrase:
+        return api_key, secret, passphrase
+
+    # Fall through: ask credential store. Wrap in try so an absent /
+    # misconfigured store doesn't crash the factory.
+    try:
+        from shared.credentials import build_store, with_actor
+        store = build_store(settings)
+        with with_actor("factory:okx_dispatcher"):
+            api_key = api_key or store.read("OKX_API_KEY").plaintext
+            secret = secret or store.read("OKX_API_SECRET").plaintext
+            passphrase = passphrase or store.read("OKX_API_PASSPHRASE").plaintext
+        return api_key, secret, passphrase
+    except Exception as e:
+        logger.debug(
+            "okx_dispatcher: credential store fallback failed (%s)", e,
+        )
+        return api_key, secret, passphrase
 
 
 __all__ = [

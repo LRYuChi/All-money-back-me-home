@@ -390,11 +390,21 @@ def test_factory_returns_none_when_no_credentials():
     assert build_okx_dispatcher(S()) is None
 
 
-def test_factory_raises_not_implemented_until_ccxt_wired():
-    """Round 32 stub — full ccxt wiring lands in F.1.x."""
+def test_factory_returns_dispatcher_when_creds_present_with_injected_client():
+    """Round 41: factory now wires CcxtOKXClient when creds present.
+    Pass a stub client to avoid hitting the network during tests."""
     class S:
         okx_api_key = "x"
         okx_api_secret = "y"
         okx_api_passphrase = "z"
-    with pytest.raises(NotImplementedError, match="ccxt"):
-        build_okx_dispatcher(S())
+        # Skip credential-store fallback path
+        database_url = ""
+        supabase_url = ""
+        supabase_service_key = ""
+    fake = FakeOKXClient()
+    d = build_okx_dispatcher(S(), client=fake)
+    assert d is not None
+    assert isinstance(d, OKXLiveDispatcher)
+    # Default mode = live + demo=False; pass mode='paper' for sandbox
+    d_paper = build_okx_dispatcher(S(), mode="paper", client=fake)
+    assert d_paper.mode == "paper"
