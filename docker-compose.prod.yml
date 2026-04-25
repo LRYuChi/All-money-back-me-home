@@ -73,8 +73,29 @@ services:
   freqtrade:
     image: freqtradeorg/freqtrade:stable
     entrypoint: ["/bin/sh", "-c"]
+    # P1-6 (round 47): SUPERTREND_LIVE env toggle.
+    #   SUPERTREND_LIVE=1 → live trading (real money on OKX)
+    #   SUPERTREND_LIVE=0 (or unset) → dry_run (paper trading, $1000 sim)
+    # Translated to Freqtrade's FREQTRADE__DRY_RUN env var. The bash
+    # conditional below handles the "1" → "false" / "0" → "true" mapping.
+    # Banner echoed to stdout so `docker logs` shows the mode at startup.
     command:
-      - "pip install --no-cache-dir smartmoneyconcepts --no-deps -q 2>/dev/null; pip install --no-cache-dir yfinance fredapi -q 2>/dev/null; freqtrade trade --strategy SupertrendStrategy -c /freqtrade/config/config_dry.json -c /freqtrade/config/config_secrets.json -c /freqtrade/config/config_telegram.json --strategy-path /freqtrade/user_data/strategies"
+      - >-
+        if [ "$$SUPERTREND_LIVE" = "1" ]; then
+          export FREQTRADE__DRY_RUN=false;
+          echo '⚠️  SUPERTREND_LIVE=1 → LIVE TRADING (real money)';
+        else
+          export FREQTRADE__DRY_RUN=true;
+          echo '✅ dry_run mode (paper trading $$1000 sim)';
+        fi;
+        pip install --no-cache-dir smartmoneyconcepts --no-deps -q 2>/dev/null;
+        pip install --no-cache-dir yfinance fredapi -q 2>/dev/null;
+        freqtrade trade
+        --strategy SupertrendStrategy
+        -c /freqtrade/config/config_dry.json
+        -c /freqtrade/config/config_secrets.json
+        -c /freqtrade/config/config_telegram.json
+        --strategy-path /freqtrade/user_data/strategies
     volumes:
       - ./strategies:/freqtrade/user_data/strategies
       - ./indicators:/freqtrade/user_data/strategies/indicators
@@ -100,6 +121,9 @@ services:
       - FREQTRADE__TELEGRAM__ENABLED=true
       - FREQTRADE__TELEGRAM__TOKEN=${TELEGRAM_TOKEN}
       - FREQTRADE__TELEGRAM__CHAT_ID=${TELEGRAM_CHAT_ID}
+      # P1-6: live mode switch — set SUPERTREND_LIVE=1 in .env for real trading.
+      # Default unset = dry_run mode (paper trading).
+      - SUPERTREND_LIVE=${SUPERTREND_LIVE:-0}
       - SUPABASE_URL=${SUPABASE_URL}
       - SUPABASE_KEY=${SUPABASE_SERVICE_ROLE_KEY}
     ports:

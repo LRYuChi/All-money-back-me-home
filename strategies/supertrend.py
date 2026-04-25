@@ -54,6 +54,7 @@ try:
         ExitEvent,
         MultiTfState,
         PartialExitEvent,
+        SkippedEvent,
         TradeJournal,
         TrailingUpdateEvent,
         default_stoploss_plan,
@@ -188,9 +189,37 @@ class SupertrendStrategy(IStrategy):
     timeframe = "15m"
     startup_candle_count = 250
 
+    # ----------------------------------------------------------------- #
+    # Stoploss configuration (Round 47 fix)
+    # ----------------------------------------------------------------- #
+    # `stoploss = -0.05` is the INITIAL static SL (Phase 0). Always required
+    # by Freqtrade as a safety floor.
+    #
+    # `use_custom_stoploss = True` (was False — bug): enables the 4-phase
+    # trailing logic in `custom_stoploss()`. Without this, Freqtrade ignores
+    # the method entirely and the round 46 trailing event tracking + the
+    # whole "lock 50%/70% profit" design is dead code.
+    #
+    # `trailing_stop = False`: explicitly off so Freqtrade's built-in
+    # trailing doesn't double up with our custom logic. Our custom_stoploss
+    # IS the trailing.
+    #
+    # Interaction with config's `stoploss_on_exchange = true`:
+    #   - At entry: -5% SL is sent to OKX as a stop order on the book.
+    #   - On profit phase transitions: custom_stoploss returns a TIGHTER
+    #     SL pct. Freqtrade then cancels the OKX SL and submits a new one
+    #     at the new (closer-to-current-price) level.
+    #   - Freqtrade only updates if the new SL is closer to current price
+    #     than existing — so we never accidentally widen the SL (good).
+    #   - Cost: 1 cancel + 1 new SL order per phase transition (max 3
+    #     transitions per trade lifetime). Negligible API budget.
+    #
+    # Hardware safety: SL stays as a real order on OKX even if the
+    # Freqtrade container dies — the position has hard protection at all
+    # times.
     stoploss = -0.05
     trailing_stop = False
-    use_custom_stoploss = False
+    use_custom_stoploss = True
 
     can_short = True
     trading_mode = "futures"
@@ -374,9 +403,28 @@ class SupertrendStrategy(IStrategy):
             if st_against and hourly_against and bars > 8:
                 return "multi_tf_exit"
 
-        # Time decay: 200+ bars (~50h) with tiny profit
-        if bars > 200 and 0 < current_profit < 0.005:
-            return "time_decay"
+        # P2-9 (round 47): tightened time_decay tiers.
+        # Old: only fired at 200 bars (~50h) with 0<profit<0.5%.
+        #      Most "stuck" trades sit between -1% and +1% — old check
+        #      missed those because it required strictly positive profit.
+        # New: three tiers, progressively more aggressive.
+        #
+        # Tier A — quality lost early:
+        #   if bars > 50 (~12.5h) and trend_quality dropped below 0.30,
+        #   → exit. The setup that justified entry has decayed.
+        # Tier B — long sideways with no edge:
+        #   if bars > 100 (~25h) and |profit| < 1%,
+        #   → exit. Capital is locked up earning ~0.
+        # Tier C — terminal stuck (existing, broadened):
+        #   if bars > 200 (~50h) and -0.5% < profit < +0.5%,
+        #   → exit. Was profit > 0; now also catches small losers.
+        quality_now = float(last.get("trend_quality", 0.5))
+        if bars > 50 and quality_now < 0.30:
+            return "time_decay_quality_lost"
+        if bars > 100 and abs(current_profit) < 0.01:
+            return "time_decay_sideways"
+        if bars > 200 and -0.005 < current_profit < 0.005:
+            return "time_decay_terminal"
 
         return None
 
@@ -497,6 +545,32 @@ class SupertrendStrategy(IStrategy):
     _CB_LOSS_STREAK = 3
     _CB_COOLDOWN_HOURS = 12
 
+    # P1-4 (round 47): Direction concentration cap.
+    # max_open_trades=3 means we can hold up to 3 positions simultaneously.
+    # Without this guard, all 3 could be the same side (3 longs in a bull
+    # cluster), concentrating directional risk. Cap at 2 same-side trades
+    # so the third slot is reserved for the OPPOSITE direction (or stays
+    # empty if no opposite signal arrives).
+    #
+    # Example: max_open_trades=3, _MAX_SAME_SIDE=2
+    #   Open: BTC long, ETH long → can NOT open AVAX long
+    #   Open: BTC long, ETH long → CAN open AVAX short
+    _MAX_SAME_SIDE = 2
+
+    def _same_side_open_count(self, side: str) -> int:
+        """Count currently-open trades on the requested side."""
+        try:
+            wants_short = (side == "short")
+            return sum(
+                1 for t in Trade.get_trades_proxy(is_open=True)
+                if bool(t.is_short) == wants_short
+            )
+        except Exception:
+            return 0
+
+    def _direction_concentration_blocked(self, side: str) -> bool:
+        return self._same_side_open_count(side) >= self._MAX_SAME_SIDE
+
     def _circuit_breaker_active(self, current_time: datetime) -> bool:
         """Return True if last N closed trades were all losses within cooldown window.
 
@@ -533,8 +607,37 @@ class SupertrendStrategy(IStrategy):
         """Rolling Kelly × trend quality. Scout = 25%, Confirmed = 75%.
 
         P0-4: bail out early if account-level circuit breaker is tripped.
+        P1-4 (round 47): bail out if same-side concentration cap hit.
         Returning 0 causes Freqtrade to skip this entry attempt.
         """
+        # P1-4: direction concentration cap
+        if self._direction_concentration_blocked(side):
+            logger.warning(
+                "Direction concentration blocked — already %d open %s trades "
+                "(cap %d). Skipping new %s entry on %s.",
+                self._same_side_open_count(side), side,
+                self._MAX_SAME_SIDE, side, kwargs.get("pair", ""),
+            )
+            try:
+                pair = kwargs.get("pair", "")
+                _safe_journal_write(SkippedEvent(
+                    timestamp=now_iso(),
+                    pair=pair, side=side or "unknown",
+                    reason=f"direction_concentration: already {self._same_side_open_count(side)} open {side}, cap {self._MAX_SAME_SIDE}",
+                    state=MultiTfState(),
+                    note="P1-4 portfolio guard",
+                ))
+                _send_to_all_bots(
+                    f"⚠️ *方向集中度 cap*\n"
+                    f"已開 `{self._same_side_open_count(side)}` 個 `{side}` 倉 "
+                    f"(上限 `{self._MAX_SAME_SIDE}`)\n"
+                    f"跳過: `{pair}` ({side})\n"
+                    f"理由: 防止單向過度集中風險"
+                )
+            except Exception as e:
+                logger.warning("direction concentration journal/alert failed: %s", e)
+            return 0.0
+
         if self._circuit_breaker_active(current_time):
             logger.warning(
                 "Circuit breaker active — last %d closed trades all losses within %dh cooldown. "
@@ -603,6 +706,12 @@ class SupertrendStrategy(IStrategy):
         is_long = not trade.is_short
 
         # === Phase 1→2: Scout DCA when 15m confirms ===
+        # P2-8 (round 47): scale the addon by CURRENT trend_quality.
+        # Old behaviour: blind ×2.0 on every scout→confirm transition.
+        # Problem: if quality at confirmation has degraded (e.g. ADX
+        # collapsed), we'd still 3x the position into a deteriorating
+        # trend. New behaviour: addon multiplier slides 1.5×–2.5×
+        # based on quality (0.5 → 1.5×, 1.0 → 2.5×).
         if trade.enter_tag == "scout" and entries_done == 1:
             # 15m just flipped in our direction?
             is_15m_confirmed = (
@@ -610,8 +719,15 @@ class SupertrendStrategy(IStrategy):
                 or (not is_long and last.get("st_trend") == -1)
             )
             if is_15m_confirmed and current_profit > -0.02:
-                # Add 2x the original scout stake (25% → total 75%)
-                addon = trade.stake_amount * 2.0
+                quality_now = float(last.get("trend_quality", 0.5))
+                # Quality 0.5 → 1.5× (normal); 1.0 → 2.5× (high-conviction)
+                # Quality 0.0 → 1.5× (clamped: don't go below baseline)
+                addon_mult = 1.5 + max(0.0, quality_now - 0.5) * 2.0
+                addon = trade.stake_amount * addon_mult
+                logger.info(
+                    "scout DCA: quality=%.2f → addon=%.2fx stake=$%.2f",
+                    quality_now, addon_mult, addon,
+                )
                 return addon
 
         # === Partial exits for big winners ===
