@@ -276,6 +276,86 @@ def supertrend_skipped(
 
 
 # =================================================================== #
+# /evaluations — R66 — aggregated entry-tier failure reasons
+# =================================================================== #
+@router.get("/evaluations")
+def supertrend_evaluations(
+    days: int = Query(1, ge=1, le=30),
+    pair: str | None = Query(None, description="filter to single pair"),
+    tier: str = Query("all", pattern="^(all|confirmed|scout|pre_scout)$"),
+) -> dict[str, Any]:
+    """Aggregate R66 EvaluationEvent failure reasons.
+
+    Default 1-day window. Returns:
+      n_evaluations    — total evaluation events in window
+      n_pairs          — distinct pairs evaluated
+      tier_fired_count — {confirmed: N, scout: N, pre_scout: N} (positive scans)
+      failures_top     — {reason: count} for selected tier, sorted desc
+      pairs_evaluated  — list of pairs seen (top 30 by event count)
+      window_days      — echo
+
+    Best-effort: empty + error field on failure, never 500.
+    """
+    try:
+        from strategies.journal import TradeJournal
+    except ImportError as e:
+        return {"error": str(e), "n_evaluations": 0}
+
+    journal_dir = _resolve_journal_dir()
+    if not journal_dir.exists():
+        return {"n_evaluations": 0,
+                "error": f"journal missing: {journal_dir}"}
+
+    try:
+        journal = TradeJournal(journal_dir)
+        now = datetime.now(timezone.utc)
+        rows = journal.read_range(
+            from_date=now - timedelta(days=days), to_date=now,
+        )
+        evals = [r for r in rows if r.get("event_type") == "evaluation"]
+        if pair:
+            evals = [r for r in evals if r.get("pair") == pair]
+
+        tier_fired = {"confirmed": 0, "scout": 0, "pre_scout": 0}
+        failure_counter: dict[str, int] = {}
+        pair_counter: dict[str, int] = {}
+
+        tiers_to_count = (
+            ["confirmed", "scout", "pre_scout"] if tier == "all" else [tier]
+        )
+
+        for ev in evals:
+            for t in ("confirmed", "scout", "pre_scout"):
+                if ev.get(f"{t}_fired"):
+                    tier_fired[t] += 1
+            for t in tiers_to_count:
+                for f in (ev.get(f"{t}_failures") or []):
+                    failure_counter[f] = failure_counter.get(f, 0) + 1
+            p = ev.get("pair", "?")
+            pair_counter[p] = pair_counter.get(p, 0) + 1
+
+        failures_sorted = dict(
+            sorted(failure_counter.items(), key=lambda kv: kv[1], reverse=True)[:30]
+        )
+        pairs_top = dict(
+            sorted(pair_counter.items(), key=lambda kv: kv[1], reverse=True)[:30]
+        )
+        return {
+            "n_evaluations": len(evals),
+            "n_pairs": len(pair_counter),
+            "tier_fired_count": tier_fired,
+            "failures_top": failures_sorted,
+            "pairs_evaluated": pairs_top,
+            "tier_filter": tier,
+            "pair_filter": pair,
+            "window_days": days,
+        }
+    except Exception as e:
+        logger.exception("supertrend_evaluations failed")
+        return {"error": str(e), "n_evaluations": 0}
+
+
+# =================================================================== #
 # /scanner — R62 — per-pair signal proximity dashboard
 # =================================================================== #
 # Indicator columns we extract from each pair's last analyzed candle.

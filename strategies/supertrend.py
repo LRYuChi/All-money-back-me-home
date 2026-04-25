@@ -51,6 +51,7 @@ try:
     from strategies.journal import (
         CircuitBreakerEvent,
         EntryEvent,
+        EvaluationEvent,
         ExitEvent,
         MultiTfState,
         PartialExitEvent,
@@ -467,7 +468,161 @@ class SupertrendStrategy(IStrategy):
             dataframe.loc[mask_pre_scout_short, "enter_short"] = 1
             dataframe.loc[mask_pre_scout_short, "enter_tag"] = "pre_scout"
 
+        # R66: write per-pair evaluation telemetry (default ON, opt-out
+        # via SUPERTREND_EVAL_JOURNAL=0). Records WHICH precondition
+        # prevented each entry tier from firing on the latest candle.
+        # Lets ops aggregate "why no trades" by failure reason.
+        if os.environ.get("SUPERTREND_EVAL_JOURNAL", "1") == "1" \
+                and len(dataframe) > 0:
+            try:
+                self._write_evaluation_event(dataframe, metadata)
+            except Exception as e:
+                logger.debug("evaluation write failed for %s: %s",
+                             metadata.get("pair", "?"), e)
+
         return dataframe
+
+    def _write_evaluation_event(self, dataframe: DataFrame,
+                                metadata: dict) -> None:
+        """R66: snapshot the LAST candle's per-tier entry evaluation."""
+        last = dataframe.iloc[-1]
+        pair = metadata.get("pair", "?")
+
+        # Compute per-tier failure reasons by re-checking the same
+        # masks populate_entry_trend used. Keep reasons short + stable
+        # so dashboard can group_by reason.
+        adx = float(last.get("adx", 0) or 0)
+        vol = float(last.get("volume", 0) or 0)
+        vol_ma = float(last.get("volume_ma_20", 1) or 1)
+        atr_rising = bool(last.get("atr_rising", False))
+        quality_score = float(last.get("trend_quality", 0) or 0)
+        st_buy = bool(last.get("st_buy", False))
+        st_sell = bool(last.get("st_sell", False))
+        all_bull = bool(last.get("all_bullish", False))
+        all_bear = bool(last.get("all_bearish", False))
+        fr_long = bool(last.get("fr_ok_long", True))
+        fr_short = bool(last.get("fr_ok_short", True))
+        st_15m = int(last.get("st_trend", 0) or 0)
+        st_1h_val = int(last.get("st_1h", 0) or 0)
+        pair_bull_2tf = bool(last.get("pair_bullish_2tf", False))
+        pair_bear_2tf = bool(last.get("pair_bearish_2tf", False))
+
+        # Edge-trigger checks need previous candle
+        prev = dataframe.iloc[-2] if len(dataframe) >= 2 else None
+        prev_all_bull = bool(prev["all_bullish"]) if prev is not None else False
+        prev_all_bear = bool(prev["all_bearish"]) if prev is not None else False
+        prev_pair_bull_2tf = bool(prev["pair_bullish_2tf"]) if prev is not None else False
+        prev_pair_bear_2tf = bool(prev["pair_bearish_2tf"]) if prev is not None else False
+
+        bull_just_formed = all_bull and not prev_all_bull
+        bear_just_formed = all_bear and not prev_all_bear
+        two_tf_bull_just = pair_bull_2tf and not prev_pair_bull_2tf
+        two_tf_bear_just = pair_bear_2tf and not prev_pair_bear_2tf
+
+        # Common quality gate
+        quality_fails = []
+        if adx <= self.adx_threshold:
+            quality_fails.append(f"adx<={self.adx_threshold}")
+        if vol <= vol_ma * 1.2:
+            quality_fails.append("vol<=1.2*ma")
+        if not atr_rising:
+            quality_fails.append("atr_not_rising")
+        if quality_score <= 0.5:
+            quality_fails.append("quality<=0.5")
+
+        # Confirmed: st_buy & all_bullish & quality & fr_ok_long  (or short variant)
+        conf_long_fails = list(quality_fails)
+        if not st_buy:
+            conf_long_fails.append("st_buy=False")
+        if not all_bull:
+            conf_long_fails.append("all_bullish=False")
+        if not fr_long:
+            conf_long_fails.append("fr_blocks_long")
+
+        conf_short_fails = list(quality_fails)
+        if not st_sell:
+            conf_short_fails.append("st_sell=False")
+        if not all_bear:
+            conf_short_fails.append("all_bearish=False")
+        if not fr_short:
+            conf_short_fails.append("fr_blocks_short")
+
+        confirmed_fired = len(conf_long_fails) == 0 or len(conf_short_fails) == 0
+        confirmed_failures = (
+            conf_long_fails if len(conf_long_fails) <= len(conf_short_fails)
+            else conf_short_fails
+        )
+
+        # Scout: bull_just_formed & st_trend==-1 & quality & fr_ok_long
+        sc_long_fails = list(quality_fails)
+        if not bull_just_formed:
+            sc_long_fails.append("bull_just_formed=False")
+        if st_15m != -1:
+            sc_long_fails.append("st_trend!=-1")
+        if not fr_long:
+            sc_long_fails.append("fr_blocks_long")
+
+        sc_short_fails = list(quality_fails)
+        if not bear_just_formed:
+            sc_short_fails.append("bear_just_formed=False")
+        if st_15m != 1:
+            sc_short_fails.append("st_trend!=1")
+        if not fr_short:
+            sc_short_fails.append("fr_blocks_short")
+
+        scout_fired = len(sc_long_fails) == 0 or len(sc_short_fails) == 0
+        scout_failures = (
+            sc_long_fails if len(sc_long_fails) <= len(sc_short_fails)
+            else sc_short_fails
+        )
+
+        # Pre-scout: 2tf_just_formed & st_1h != aligned & quality & fr
+        ps_long_fails = list(quality_fails)
+        if not two_tf_bull_just:
+            ps_long_fails.append("pair_bullish_2tf_just_formed=False")
+        if st_1h_val == 1:
+            ps_long_fails.append("st_1h_already_aligned_long")
+        if not fr_long:
+            ps_long_fails.append("fr_blocks_long")
+
+        ps_short_fails = list(quality_fails)
+        if not two_tf_bear_just:
+            ps_short_fails.append("pair_bearish_2tf_just_formed=False")
+        if st_1h_val == -1:
+            ps_short_fails.append("st_1h_already_aligned_short")
+        if not fr_short:
+            ps_short_fails.append("fr_blocks_short")
+
+        pre_scout_fired = (
+            len(ps_long_fails) == 0 or len(ps_short_fails) == 0
+        )
+        pre_scout_failures = (
+            ps_long_fails if len(ps_long_fails) <= len(ps_short_fails)
+            else ps_short_fails
+        )
+
+        candle_ts = ""
+        try:
+            ts_val = last.get("date", "")
+            candle_ts = (
+                ts_val.isoformat() if hasattr(ts_val, "isoformat")
+                else str(ts_val)
+            )
+        except Exception:
+            pass
+
+        _safe_journal_write(EvaluationEvent(
+            timestamp=now_iso(),
+            pair=pair,
+            candle_ts=candle_ts,
+            confirmed_fired=confirmed_fired,
+            confirmed_failures=confirmed_failures,
+            scout_fired=scout_fired,
+            scout_failures=scout_failures,
+            pre_scout_fired=pre_scout_fired,
+            pre_scout_failures=pre_scout_failures,
+            state=_snapshot_state(last),
+        ))
 
     def populate_exit_trend(self, dataframe: DataFrame, metadata: dict) -> DataFrame:
         # Only exit via custom_exit + custom_stoploss

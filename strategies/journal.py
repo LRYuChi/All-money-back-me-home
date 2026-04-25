@@ -46,7 +46,7 @@ logger = logging.getLogger(__name__)
 
 EventType = Literal[
     "entry", "partial_exit", "trailing_update", "exit", "daily_summary",
-    "circuit_breaker", "skipped",
+    "circuit_breaker", "skipped", "evaluation",
 ]
 
 
@@ -200,6 +200,32 @@ class SkippedEvent:
     state: MultiTfState
     note: str = ""
     event_type: EventType = "skipped"
+
+
+@dataclass(slots=True)
+class EvaluationEvent:
+    """R66: per-pair, per-candle entry-evaluation snapshot.
+
+    Written once per populate_entry_trend call (i.e., per closed candle
+    × per pair when process_only_new_candles=True). Records WHICH
+    precondition prevented each entry tier from firing.
+
+    Lets ops answer 'why no trades?' without source-code spelunking:
+    aggregate by failure reason → see which threshold is currently
+    blocking signal capture in the live market regime.
+    """
+    timestamp: str             # iso when evaluation ran
+    pair: str
+    candle_ts: str             # iso of the last candle close evaluated
+    confirmed_fired: bool
+    confirmed_failures: list[str]
+    scout_fired: bool
+    scout_failures: list[str]
+    pre_scout_fired: bool
+    pre_scout_failures: list[str]
+    state: MultiTfState
+    note: str = ""
+    event_type: EventType = "evaluation"
 
 
 # =================================================================== #

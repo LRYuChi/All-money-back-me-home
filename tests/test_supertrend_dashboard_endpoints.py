@@ -17,8 +17,8 @@ if str(_API_SRC) not in sys.path:
 def _import_router():
     from src.routers.supertrend import (
         _alignment_count, _extract_last_row, _likely_side, _resolve_journal_dir,
-        router, supertrend_health, supertrend_scanner, supertrend_skipped,
-        supertrend_snapshot, supertrend_trades,
+        router, supertrend_evaluations, supertrend_health, supertrend_scanner,
+        supertrend_skipped, supertrend_snapshot, supertrend_trades,
     )
     return {
         "router": router,
@@ -27,6 +27,7 @@ def _import_router():
         "trades": supertrend_trades,
         "skipped": supertrend_skipped,
         "scanner": supertrend_scanner,
+        "evaluations": supertrend_evaluations,
         "health": supertrend_health,
         "alignment_count": _alignment_count,
         "likely_side": _likely_side,
@@ -37,7 +38,7 @@ def _import_router():
 # =================================================================== #
 # Router structure
 # =================================================================== #
-def test_router_has_6_endpoints():
+def test_router_has_7_endpoints():
     mod = _import_router()
     paths = {r.path for r in mod["router"].routes}
     assert paths == {
@@ -46,6 +47,7 @@ def test_router_has_6_endpoints():
         "/api/supertrend/trades",
         "/api/supertrend/skipped",
         "/api/supertrend/scanner",
+        "/api/supertrend/evaluations",
         "/api/supertrend/health",
     }
 
@@ -615,3 +617,140 @@ def test_scanner_handles_empty_whitelist(monkeypatch):
     assert out["pairs"] == []
     assert out["n_pairs"] == 0
     assert "error" not in out
+
+
+# =================================================================== #
+# /evaluations — R66
+# =================================================================== #
+def test_evaluations_handles_missing_journal(monkeypatch, tmp_path):
+    monkeypatch.setenv("SUPERTREND_JOURNAL_DIR", str(tmp_path / "missing"))
+    mod = _import_router()
+    out = mod["evaluations"](days=1, pair=None, tier="all")
+    assert out["n_evaluations"] == 0
+
+
+def test_evaluations_returns_empty_when_no_events(monkeypatch, tmp_path):
+    monkeypatch.setenv("SUPERTREND_JOURNAL_DIR", str(tmp_path))
+    from datetime import datetime, timezone
+    from strategies.journal import TradeJournal
+
+    j = TradeJournal(tmp_path)
+    # Only an entry — should NOT appear in /evaluations
+    j.write({
+        "event_type": "entry",
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+        "pair": "BTC/USDT:USDT", "side": "long",
+    })
+    mod = _import_router()
+    out = mod["evaluations"](days=1, pair=None, tier="all")
+    assert out["n_evaluations"] == 0
+    assert out["failures_top"] == {}
+
+
+def test_evaluations_aggregates_failure_reasons(monkeypatch, tmp_path):
+    monkeypatch.setenv("SUPERTREND_JOURNAL_DIR", str(tmp_path))
+    from datetime import datetime, timezone
+    from strategies.journal import TradeJournal
+
+    j = TradeJournal(tmp_path)
+    now = datetime.now(timezone.utc).isoformat()
+    base_event = {
+        "event_type": "evaluation",
+        "timestamp": now,
+        "candle_ts": now,
+        "state": {},
+        "confirmed_fired": False,
+        "scout_fired": False,
+        "pre_scout_fired": False,
+    }
+    # 3 evals: each has confirmed_failures=[st_buy=False, vol<=1.2*ma]
+    for pair in ["BTC/USDT:USDT", "ETH/USDT:USDT", "SOL/USDT:USDT"]:
+        j.write({
+            **base_event, "pair": pair,
+            "confirmed_failures": ["st_buy=False", "vol<=1.2*ma"],
+            "scout_failures": ["bull_just_formed=False"],
+            "pre_scout_failures": ["pair_bullish_2tf_just_formed=False"],
+        })
+    mod = _import_router()
+    out = mod["evaluations"](days=1, pair=None, tier="all")
+    assert out["n_evaluations"] == 3
+    assert out["n_pairs"] == 3
+    # Each failure reason aggregated across the 3 events
+    assert out["failures_top"]["st_buy=False"] == 3
+    assert out["failures_top"]["vol<=1.2*ma"] == 3
+    assert out["failures_top"]["bull_just_formed=False"] == 3
+    # Tier-fired counts are zero (none fired)
+    assert out["tier_fired_count"]["confirmed"] == 0
+
+
+def test_evaluations_filter_by_pair(monkeypatch, tmp_path):
+    monkeypatch.setenv("SUPERTREND_JOURNAL_DIR", str(tmp_path))
+    from datetime import datetime, timezone
+    from strategies.journal import TradeJournal
+
+    j = TradeJournal(tmp_path)
+    now = datetime.now(timezone.utc).isoformat()
+    for pair in ["BTC/USDT:USDT", "ETH/USDT:USDT", "BTC/USDT:USDT"]:
+        j.write({
+            "event_type": "evaluation",
+            "timestamp": now, "candle_ts": now, "state": {},
+            "pair": pair,
+            "confirmed_fired": False, "confirmed_failures": ["adx<=25"],
+            "scout_fired": False, "scout_failures": [],
+            "pre_scout_fired": False, "pre_scout_failures": [],
+        })
+    mod = _import_router()
+    # Filter to BTC only
+    out = mod["evaluations"](days=1, pair="BTC/USDT:USDT", tier="all")
+    assert out["n_evaluations"] == 2
+    assert out["failures_top"]["adx<=25"] == 2
+
+
+def test_evaluations_filter_by_tier(monkeypatch, tmp_path):
+    """tier=confirmed only counts confirmed_failures, not scout/pre_scout."""
+    monkeypatch.setenv("SUPERTREND_JOURNAL_DIR", str(tmp_path))
+    from datetime import datetime, timezone
+    from strategies.journal import TradeJournal
+
+    j = TradeJournal(tmp_path)
+    now = datetime.now(timezone.utc).isoformat()
+    j.write({
+        "event_type": "evaluation",
+        "timestamp": now, "candle_ts": now, "state": {},
+        "pair": "BTC/USDT:USDT",
+        "confirmed_fired": False,
+        "confirmed_failures": ["confirmed_only_reason"],
+        "scout_fired": False,
+        "scout_failures": ["scout_only_reason"],
+        "pre_scout_fired": False, "pre_scout_failures": [],
+    })
+    mod = _import_router()
+    out = mod["evaluations"](days=1, pair=None, tier="confirmed")
+    assert "confirmed_only_reason" in out["failures_top"]
+    assert "scout_only_reason" not in out["failures_top"]
+
+
+def test_evaluations_counts_fired_tiers(monkeypatch, tmp_path):
+    monkeypatch.setenv("SUPERTREND_JOURNAL_DIR", str(tmp_path))
+    from datetime import datetime, timezone
+    from strategies.journal import TradeJournal
+
+    j = TradeJournal(tmp_path)
+    now = datetime.now(timezone.utc).isoformat()
+    # 1 confirmed fired, 2 scout fired, 0 pre_scout
+    for fired_tier in ["confirmed", "scout", "scout"]:
+        j.write({
+            "event_type": "evaluation",
+            "timestamp": now, "candle_ts": now, "state": {},
+            "pair": "BTC/USDT:USDT",
+            "confirmed_fired": fired_tier == "confirmed",
+            "confirmed_failures": [],
+            "scout_fired": fired_tier == "scout",
+            "scout_failures": [],
+            "pre_scout_fired": False, "pre_scout_failures": [],
+        })
+    mod = _import_router()
+    out = mod["evaluations"](days=1, pair=None, tier="all")
+    assert out["tier_fired_count"]["confirmed"] == 1
+    assert out["tier_fired_count"]["scout"] == 2
+    assert out["tier_fired_count"]["pre_scout"] == 0

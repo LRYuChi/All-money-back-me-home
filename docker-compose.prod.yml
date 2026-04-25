@@ -162,6 +162,11 @@ services:
       #   1 = block when n_open≥2 + mean ρ≥0.85; apply BTC/alt rotation multiplier
       #   0 = no correlation gate, all stakes flat (existing behavior)
       - SUPERTREND_CORRELATION_FILTER=${SUPERTREND_CORRELATION_FILTER:-0}
+      # R66: per-pair entry-evaluation telemetry (default ON).
+      #   1 = write EvaluationEvent per pair per candle close, exposed via
+      #       /api/supertrend/evaluations for "why no trades?" debugging
+      #   0 = skip (saves ~1.6k journal writes/day with 17 pairs × 4 candles/h)
+      - SUPERTREND_EVAL_JOURNAL=${SUPERTREND_EVAL_JOURNAL:-1}
       # Journal location — kept on host volume so dashboard/cron sidecar can read it
       - SUPERTREND_JOURNAL_DIR=${SUPERTREND_JOURNAL_DIR:-/freqtrade/trading_log/journal}
       - SUPABASE_URL=${SUPABASE_URL}
