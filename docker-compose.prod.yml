@@ -132,6 +132,12 @@ services:
       - FREQTRADE__TELEGRAM__ENABLED=true
       - FREQTRADE__TELEGRAM__TOKEN=${TELEGRAM_TOKEN}
       - FREQTRADE__TELEGRAM__CHAT_ID=${TELEGRAM_CHAT_ID}
+      # R79: force_entry_enable freqtrade-side switch.
+      # MUST also have SUPERTREND_FORCE_ENTRY_ENABLED=1 on api side.
+      # Default false — only flip true for explicit smoke-test windows
+      # then revert. Combined with R70 dry_run-only enforcement, this
+      # makes accidental live-mode force-entries impossible.
+      - FREQTRADE__FORCE_ENTRY_ENABLE=${FREQTRADE_FORCE_ENTRY_ENABLE:-false}
       # ============================================================
       # SUPERTREND_* switchboard — all R47–R58 escape hatches.
       # Defaults are SAFE (= existing behavior). Operators flip these in .env
