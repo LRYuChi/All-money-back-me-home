@@ -83,6 +83,28 @@ try:
 except Exception:
     _REGIME_AVAILABLE = False
 
+# R57: pre-entry alpha filters (FR contra-signal + orderbook microstructure).
+# Both default OFF — set SUPERTREND_FR_ALPHA=1 / SUPERTREND_ORDERBOOK_CONFIRM=1
+# to enable. Modules are pure (no I/O at import) so this is cheap.
+try:
+    from strategies.funding_alpha import (
+        FR_EXTREME,
+        FR_MILD,
+        fr_signal_strength,
+    )
+    _FR_AVAILABLE = True
+except Exception:
+    _FR_AVAILABLE = False
+
+try:
+    from strategies.orderbook_signals import (
+        evaluate as _ob_evaluate,
+        should_confirm_entry as _ob_should_confirm,
+    )
+    _OB_AVAILABLE = True
+except Exception:
+    _OB_AVAILABLE = False
+
 logger = logging.getLogger(__name__)
 
 
@@ -771,6 +793,81 @@ class SupertrendStrategy(IStrategy):
             logger.warning("regime detect failed: %s", e)
             return None
 
+    # ----- R57: pre-entry alpha filters --------------------------- #
+    # Both default OFF. When enabled, run AFTER regime/concentration
+    # checks but BEFORE journal write — so a blocked entry never
+    # appears in the journal as if it executed.
+    #
+    # Threshold rationale:
+    #   FR strength is in [-1, 1] from tanh. We block on opposing
+    #   strength >= 0.5 (≈ |FR| 0.55*FR_EXTREME = ~0.055%/8h) which
+    #   corresponds to "extreme" zone — common enough to filter, rare
+    #   enough not to over-suppress.
+    _FR_BLOCK_STRENGTH = 0.5   # |strength| above this opposing the trade aborts
+
+    def _funding_filter_block(self, side: str,
+                              funding_rate: float) -> str | None:
+        """Returns reason string if FR opposes the intended side strongly
+        enough to abort, else None. Caller logs/blocks accordingly."""
+        if not _FR_AVAILABLE:
+            return None
+        if os.environ.get("SUPERTREND_FR_ALPHA", "0") != "1":
+            return None
+        try:
+            strength = fr_signal_strength(funding_rate)
+        except Exception:
+            return None
+        # strength > 0 favors LONG, < 0 favors SHORT
+        opposes_long = (side == "long" and strength < 0)
+        opposes_short = (side == "short" and strength > 0)
+        if (opposes_long or opposes_short) and \
+                abs(strength) >= self._FR_BLOCK_STRENGTH:
+            return (
+                f"FR contra-signal: fr={funding_rate:+.4%} "
+                f"strength={strength:+.2f} opposing {side}"
+            )
+        return None
+
+    def _orderbook_filter_block(self, pair: str,
+                                side: str) -> str | None:
+        """Returns reason string if order-book microstructure strongly
+        opposes the intended side, else None. Defensive: any I/O failure
+        returns None (no signal — proceed)."""
+        if not _OB_AVAILABLE:
+            return None
+        if os.environ.get("SUPERTREND_ORDERBOOK_CONFIRM", "0") != "1":
+            return None
+        try:
+            book = self.dp.orderbook(pair, maximum=10)
+        except Exception as e:
+            logger.debug("orderbook fetch failed for %s: %s", pair, e)
+            return None
+        try:
+            # No recent_trades fetch — pass empty list, signal degrades
+            # gracefully to imbalance-only (which is the higher-weighted
+            # component anyway).
+            sig = _ob_evaluate(book or {}, [])
+            proceed, reason = _ob_should_confirm(sig, side)
+            if not proceed:
+                return reason
+        except Exception as e:
+            logger.debug("orderbook evaluate failed for %s: %s", pair, e)
+        return None
+
+    def _pre_entry_filter_block(self, pair: str, side: str,
+                                state) -> str | None:
+        """Run all enabled pre-entry alpha filters. Returns the FIRST
+        blocking reason or None if all pass."""
+        # 1. Funding contra-signal (cheap — uses cached state)
+        reason = self._funding_filter_block(side, state.funding_rate)
+        if reason:
+            return reason
+        # 2. Orderbook microstructure (REST call — slowest, runs last)
+        reason = self._orderbook_filter_block(pair, side)
+        if reason:
+            return reason
+        return None
+
     # P1-4 (round 47): Direction concentration cap.
     # max_open_trades=3 means we can hold up to 3 positions simultaneously.
     # Without this guard, all 3 could be the same side (3 longs in a bull
@@ -1126,10 +1223,39 @@ class SupertrendStrategy(IStrategy):
                             rate: float, time_in_force: str, current_time: datetime,
                             entry_tag: str | None, side: str, **kwargs) -> bool:
         """Round 46: rich entry — Telegram + structured journal event with
-        full reasoning, planned SL/TP plan, and multi-TF state."""
+        full reasoning, planned SL/TP plan, and multi-TF state.
+
+        R57: pre-entry alpha filters (funding contra-signal + orderbook
+        microstructure) run BEFORE journal write. Both default OFF —
+        SUPERTREND_FR_ALPHA=1 / SUPERTREND_ORDERBOOK_CONFIRM=1 to enable.
+        Blocked entries get a SkippedEvent + Telegram and return False.
+        """
         dataframe, _ = self.dp.get_analyzed_dataframe(pair, self.timeframe)
         last_row = dataframe.iloc[-1] if len(dataframe) > 0 else None
         state = _snapshot_state(last_row)
+
+        # R57: pre-entry alpha filters (no-op when env vars unset)
+        block_reason = self._pre_entry_filter_block(pair, side, state)
+        if block_reason:
+            logger.info("entry blocked: %s %s — %s", pair, side, block_reason)
+            try:
+                _safe_journal_write(SkippedEvent(
+                    timestamp=now_iso(),
+                    pair=pair,
+                    side=side,
+                    reason=f"R57 pre-entry filter: {block_reason}",
+                    state=state,
+                ))
+            except Exception:
+                pass
+            try:
+                _send_to_all_bots(
+                    f"🚫 *進場攔截* `{pair}` {side.upper()}\n"
+                    f"原因: {block_reason}"
+                )
+            except Exception:
+                pass
+            return False
 
         leverage = float(kwargs.get("leverage") or 1.0)
         notional_usd = amount * rate
