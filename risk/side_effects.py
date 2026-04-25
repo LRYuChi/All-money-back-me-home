@@ -1,4 +1,4 @@
-"""Side-effect handlers for guard pipeline DENYs (round 26).
+"""Side-effect handlers for guard pipeline DENYs (rounds 26 + 27).
 
 PendingOrderWorker calls a `GuardSideEffectHandler(order, decisions)`
 after every DENY. This module ships built-in handlers for common patterns:
@@ -8,6 +8,11 @@ after every DENY. This module ships built-in handlers for common patterns:
     written via `set_enabled(actor='guard:consecutive_loss_cb', ...)`.
     Idempotent: re-trips of an already-disabled strategy are skipped
     (no duplicate audit row, no duplicate log line).
+
+  - `make_guard_notifier_handler(notifier, on_guard_names)` (round 27) —
+    push a CRITICAL alert via shared.notifier when one of the listed
+    guards DENIES. Tagged with the guard name so backends can route
+    (Telegram = always, Discord = WARN+, etc.).
 
   - `chain_handlers(*handlers)` — combine N handlers; each is called in
     order, and exceptions in one don't stop subsequent ones.
@@ -109,6 +114,84 @@ def make_g9_strategy_disabler(
     return _handler
 
 
+def make_guard_notifier_handler(
+    notifier: Any,
+    *,
+    on_guard_names: tuple[str, ...] = ("consecutive_loss_cb", "daily_loss_cb"),
+    title_prefix: str = "[guard]",
+    level: Any = None,
+) -> GuardSideEffectHandler:
+    """Return a handler that pushes a notifier alert when a listed guard DENYs.
+
+    Args:
+        notifier: any object with `send(Message) -> bool`. NoOpNotifier
+            is fine for dev — caller can pass `build_notifier(settings)`.
+        on_guard_names: which guard names trigger an alert. Defaults to
+            the two circuit breakers (G8 daily_loss_cb, G9 consecutive_loss_cb)
+            since those are the high-signal ones — alerting on every G3
+            min_size deny would page ops constantly.
+        title_prefix: leading text on the message title.
+        level: shared.notifier.Level. Default Level.CRITICAL on first call;
+            late import so we don't pull shared.notifier into module load.
+    """
+
+    def _handler(order: PendingOrder, decisions: list) -> None:
+        relevant = [
+            d for d in decisions
+            if getattr(d, "guard_name", None) in on_guard_names
+            and getattr(getattr(d, "result", None), "value", None) == "deny"
+        ]
+        if not relevant:
+            return
+
+        try:
+            from shared.notifier import Level, Message
+        except ImportError:
+            logger.warning("guard_notifier: shared.notifier not importable")
+            return
+
+        msg_level = level if level is not None else Level.CRITICAL
+        guard_names = ",".join(d.guard_name for d in relevant)
+        primary = relevant[0]   # most-recent guard that fired
+
+        msg = Message(
+            level=msg_level,
+            title=(
+                f"{title_prefix} {guard_names} DENY → "
+                f"strategy={order.strategy_id}"
+            ),
+            body=(
+                f"order id={order.id} symbol={order.symbol} "
+                f"side={order.side} notional=${order.target_notional_usd:.2f}\n"
+                f"reason: {primary.reason}"
+            ),
+            tags=("guard-trip", *(d.guard_name for d in relevant)),
+            data={
+                "order_id": order.id,
+                "strategy_id": order.strategy_id,
+                "symbol": order.symbol,
+                "side": order.side,
+                "notional_usd": order.target_notional_usd,
+                "guards_tripped": [d.guard_name for d in relevant],
+                "primary_reason": primary.reason,
+            },
+        )
+
+        try:
+            ok = notifier.send(msg)
+            if not ok:
+                logger.warning(
+                    "guard_notifier: notifier returned False for guard=%s "
+                    "strategy=%s",
+                    guard_names, order.strategy_id,
+                )
+        except Exception as e:
+            logger.exception("guard_notifier: notifier raised: %s", e)
+
+    _handler.__name__ = "guard_notifier_handler"
+    return _handler
+
+
 def _find_deny(decisions: list, guard_name: str):
     """Return the first DENY decision for `guard_name`, or None."""
     for d in decisions:
@@ -123,4 +206,5 @@ __all__ = [
     "GuardSideEffectHandler",
     "chain_handlers",
     "make_g9_strategy_disabler",
+    "make_guard_notifier_handler",
 ]

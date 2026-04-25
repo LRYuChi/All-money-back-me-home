@@ -69,6 +69,7 @@ from risk.side_effects import (
     GuardSideEffectHandler,
     chain_handlers,
     make_g9_strategy_disabler,
+    make_guard_notifier_handler,
 )
 
 __all__ = [
@@ -113,4 +114,5 @@ __all__ = [
     "GuardSideEffectHandler",
     "chain_handlers",
     "make_g9_strategy_disabler",
+    "make_guard_notifier_handler",
 ]

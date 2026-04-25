@@ -42,8 +42,10 @@ from risk import (
     build_exposure_provider,
     build_pnl_aggregator,
     build_signal_age_provider,
+    chain_handlers,
     make_context_provider,
     make_g9_strategy_disabler,
+    make_guard_notifier_handler,
 )
 from smart_money.config import settings
 from strategy_engine.registry import build_registry
@@ -116,6 +118,12 @@ def build_parser() -> argparse.ArgumentParser:
         help="When G9 trips, disable the order's strategy in the registry "
              "(audit row written via set_enabled). Manual unlock required.",
     )
+    p.add_argument(
+        "--alert-on-cb", action="store_true",
+        help="Push a CRITICAL alert via shared.notifier on G8/G9 trip "
+             "(implied by --auto-disable-on-g9; pass alone to alert without "
+             "auto-disabling).",
+    )
     p.add_argument("--log-level", default="INFO",
                    choices=["DEBUG", "INFO", "WARNING", "ERROR"])
     return p
@@ -169,6 +177,46 @@ def _build_guard_pipeline(args: argparse.Namespace):
     return pipeline, context_provider
 
 
+def _build_side_effects(args: argparse.Namespace):
+    """Compose side-effect handlers based on CLI flags. Returns a single
+    callable (or None) suitable for PendingOrderWorker.
+
+    --auto-disable-on-g9 implies --alert-on-cb (you'd want to know when
+    auto-disable fires). Pass --alert-on-cb alone to alert without
+    flipping the registry — useful in dry-run modes.
+    """
+    handlers: list = []
+
+    if args.auto_disable_on_g9:
+        registry = build_registry(settings)
+        handlers.append(make_g9_strategy_disabler(registry))
+        logger.info(
+            "G9 auto-disable enabled — strategies will be set_enabled=False "
+            "in registry on consecutive_loss_cb DENY",
+        )
+
+    if args.alert_on_cb or args.auto_disable_on_g9:
+        try:
+            from shared.notifier import build_notifier
+            notifier = build_notifier(settings)
+            handlers.append(make_guard_notifier_handler(notifier))
+            logger.info(
+                "guard notifier alerts enabled for G8/G9 trips "
+                "(notifier=%s)", type(notifier).__name__,
+            )
+        except Exception as e:
+            logger.warning(
+                "could not build notifier for --alert-on-cb (%s) — "
+                "continuing without alerts", e,
+            )
+
+    if not handlers:
+        return None
+    if len(handlers) == 1:
+        return handlers[0]
+    return chain_handlers(*handlers)
+
+
 async def run_worker(args: argparse.Namespace) -> int:
     queue = build_queue(settings)
     if isinstance(queue, NoOpPendingOrderQueue):
@@ -196,13 +244,7 @@ async def run_worker(args: argparse.Namespace) -> int:
     side_effect_handler = None
     if args.with_guards:
         pipeline, context_provider = _build_guard_pipeline(args)
-        if args.auto_disable_on_g9:
-            registry = build_registry(settings)
-            side_effect_handler = make_g9_strategy_disabler(registry)
-            logger.info(
-                "G9 auto-disable enabled — strategies will be set_enabled=False "
-                "in registry on consecutive_loss_cb DENY",
-            )
+        side_effect_handler = _build_side_effects(args)
 
     worker = PendingOrderWorker(
         queue, dispatcher,

@@ -12,6 +12,7 @@ from execution.pending_orders import (
 )
 from risk import (
     ConsecutiveLossDaysGuard,
+    DailyLossCircuitBreakerGuard,
     GuardContext,
     GuardDecision,
     GuardPipeline,
@@ -21,6 +22,7 @@ from risk import (
     MinSizeGuard,
     chain_handlers,
     make_g9_strategy_disabler,
+    make_guard_notifier_handler,
 )
 from strategy_engine import InMemoryStrategyRegistry
 
@@ -325,6 +327,139 @@ def test_e2e_g9_trip_auto_disables_strategy():
     assert "consecutive losing days" in history[0].reason
 
 
+# ================================================================== #
+# make_guard_notifier_handler — round 27
+# ================================================================== #
+class _CapturingNotifier:
+    def __init__(self, *, ok=True, raise_on_send=None):
+        self.ok = ok
+        self.raise_on_send = raise_on_send
+        self.messages: list = []
+
+    def send(self, message):
+        self.messages.append(message)
+        if self.raise_on_send:
+            raise self.raise_on_send
+        return self.ok
+
+
+def fake_g8_decisions():
+    return [
+        GuardDecision(
+            "daily_loss_cb", GuardResult.DENY,
+            reason="daily PnL $-600 ≤ threshold $-500 (5% of $10000)",
+        ),
+    ]
+
+
+def fake_g3_decisions():
+    return [GuardDecision("min_size", GuardResult.DENY, reason="too small")]
+
+
+def test_notifier_handler_pushes_on_g9_trip():
+    notifier = _CapturingNotifier()
+    h = make_guard_notifier_handler(notifier)
+    h(make_order(strategy="s_btc"), fake_g9_decisions())
+    assert len(notifier.messages) == 1
+    msg = notifier.messages[0]
+    assert "consecutive_loss_cb" in msg.title
+    assert "s_btc" in msg.title
+    assert "consecutive losing days" in msg.body
+
+
+def test_notifier_handler_pushes_on_g8_trip():
+    notifier = _CapturingNotifier()
+    h = make_guard_notifier_handler(notifier)
+    h(make_order(strategy="s_btc"), fake_g8_decisions())
+    assert len(notifier.messages) == 1
+    assert "daily_loss_cb" in notifier.messages[0].title
+
+
+def test_notifier_handler_skips_unlisted_guards():
+    """G3 min_size is not in default on_guard_names → no alert."""
+    notifier = _CapturingNotifier()
+    h = make_guard_notifier_handler(notifier)
+    h(make_order(strategy="s_btc"), fake_g3_decisions())
+    assert notifier.messages == []
+
+
+def test_notifier_handler_respects_custom_guard_list():
+    notifier = _CapturingNotifier()
+    h = make_guard_notifier_handler(
+        notifier, on_guard_names=("min_size",),
+    )
+    h(make_order(strategy="s_btc"), fake_g3_decisions())
+    assert len(notifier.messages) == 1
+    assert "min_size" in notifier.messages[0].title
+
+
+def test_notifier_handler_skips_when_decision_is_allow():
+    notifier = _CapturingNotifier()
+    h = make_guard_notifier_handler(notifier)
+    decisions = [GuardDecision("consecutive_loss_cb", GuardResult.ALLOW)]
+    h(make_order(), decisions)
+    assert notifier.messages == []
+
+
+def test_notifier_handler_uses_critical_level_by_default():
+    from shared.notifier import Level
+    notifier = _CapturingNotifier()
+    h = make_guard_notifier_handler(notifier)
+    h(make_order(), fake_g9_decisions())
+    assert notifier.messages[0].level == Level.CRITICAL
+
+
+def test_notifier_handler_respects_custom_level():
+    from shared.notifier import Level
+    notifier = _CapturingNotifier()
+    h = make_guard_notifier_handler(notifier, level=Level.WARN)
+    h(make_order(), fake_g9_decisions())
+    assert notifier.messages[0].level == Level.WARN
+
+
+def test_notifier_handler_includes_structured_data():
+    notifier = _CapturingNotifier()
+    h = make_guard_notifier_handler(notifier)
+    h(make_order(strategy="s_btc", notional=750.0), fake_g9_decisions())
+    msg = notifier.messages[0]
+    assert msg.data["strategy_id"] == "s_btc"
+    assert msg.data["notional_usd"] == 750.0
+    assert msg.data["guards_tripped"] == ["consecutive_loss_cb"]
+    assert "guard-trip" in msg.tags
+    assert "consecutive_loss_cb" in msg.tags
+
+
+def test_notifier_handler_swallows_notifier_exception():
+    notifier = _CapturingNotifier(raise_on_send=ConnectionError("network"))
+    h = make_guard_notifier_handler(notifier)
+    h(make_order(), fake_g9_decisions())   # must not raise
+
+
+def test_notifier_handler_logs_when_send_returns_false(caplog):
+    import logging
+    notifier = _CapturingNotifier(ok=False)
+    h = make_guard_notifier_handler(notifier)
+    with caplog.at_level(logging.WARNING):
+        h(make_order(), fake_g9_decisions())
+    assert any("notifier returned False" in m for m in caplog.messages)
+
+
+def test_chain_disabler_plus_notifier_runs_both():
+    """Realistic config: G9 trips → strategy disabled AND alert sent."""
+    reg = seed_registry("s_btc")
+    notifier = _CapturingNotifier()
+    chain = chain_handlers(
+        make_g9_strategy_disabler(reg),
+        make_guard_notifier_handler(notifier),
+    )
+    chain(make_order(strategy="s_btc"), fake_g9_decisions())
+    assert reg.get("s_btc").parsed.enabled is False
+    assert len(notifier.messages) == 1
+
+
+# ================================================================== #
+# Pre-existing E2E continues (round 26)
+# ================================================================== #
 def test_e2e_subsequent_g9_trip_does_not_duplicate_audit():
     """Second order from the same strategy also trips G9 — but strategy
     is already disabled, so handler skips. Audit log stays at 1 row."""
