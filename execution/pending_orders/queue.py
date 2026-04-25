@@ -80,6 +80,12 @@ class PendingOrderQueue(Protocol):
         limit: int = 100,
         status: PendingOrderStatus | None = None,
     ) -> list[PendingOrder]: ...
+    def sweep_expired(
+        self,
+        *,
+        pending_max_age_sec: float = 0,
+        dispatching_max_age_sec: float = 0,
+    ) -> int: ...
 
 
 # ================================================================== #
@@ -108,6 +114,9 @@ class NoOpPendingOrderQueue:
 
     def list_recent(self, *, limit=100, status=None) -> list[PendingOrder]:
         return []
+
+    def sweep_expired(self, *, pending_max_age_sec=0, dispatching_max_age_sec=0):
+        return 0
 
 
 # ================================================================== #
@@ -210,6 +219,64 @@ class InMemoryPendingOrderQueue:
             if status is not None:
                 rows = [r for r in rows if r.status == status]
             return rows[:limit]
+
+    def sweep_expired(
+        self,
+        *,
+        pending_max_age_sec: float = 0,
+        dispatching_max_age_sec: float = 0,
+    ) -> int:
+        """Move stuck PENDING/DISPATCHING orders to EXPIRED. Returns count.
+
+        Either threshold being 0 (or negative) skips that bucket — caller
+        opts in to one direction or both. PENDING expiry catches strategies
+        that fire intents the worker mode never services; DISPATCHING expiry
+        catches workers that crashed mid-dispatch (the order was claimed
+        but never reached a terminal status).
+        """
+        now = datetime.now(timezone.utc)
+        targets: list[tuple[int, PendingOrderStatus, str, dict]] = []
+
+        with self._lock:
+            for order in self._orders.values():
+                if order.status == PendingOrderStatus.PENDING and pending_max_age_sec > 0:
+                    age = (now - order.created_at).total_seconds()
+                    if age >= pending_max_age_sec:
+                        targets.append((
+                            order.id,  # type: ignore[arg-type]
+                            PendingOrderStatus.PENDING,
+                            f"pending {age:.1f}s ≥ {pending_max_age_sec:.0f}s threshold",
+                            {"age_sec": age, "threshold_sec": pending_max_age_sec,
+                             "from_status": "pending"},
+                        ))
+                elif order.status == PendingOrderStatus.DISPATCHING and dispatching_max_age_sec > 0:
+                    base_ts = order.dispatched_at or order.updated_at
+                    age = (now - base_ts).total_seconds()
+                    if age >= dispatching_max_age_sec:
+                        targets.append((
+                            order.id,  # type: ignore[arg-type]
+                            PendingOrderStatus.DISPATCHING,
+                            f"dispatching {age:.1f}s ≥ {dispatching_max_age_sec:.0f}s threshold "
+                            f"(worker likely crashed)",
+                            {"age_sec": age, "threshold_sec": dispatching_max_age_sec,
+                             "from_status": "dispatching"},
+                        ))
+
+        # Mutate outside the lock — update_status handles its own locking
+        # and emits the audit event. Failures per-row don't abort the batch.
+        n = 0
+        for order_id, _from, reason, _detail in targets:
+            try:
+                self.update_status(
+                    order_id, PendingOrderStatus.EXPIRED, last_error=reason,
+                )
+                n += 1
+            except Exception as e:
+                logger.warning(
+                    "sweep_expired: update_status(%s, EXPIRED) failed (%s)",
+                    order_id, e,
+                )
+        return n
 
 
 # ================================================================== #
@@ -328,6 +395,59 @@ class SupabasePendingOrderQueue:
             q = q.eq("status", status.value)
         res = q.execute()
         return [_row_to_order(r) for r in (res.data or [])]
+
+    def sweep_expired(
+        self,
+        *,
+        pending_max_age_sec: float = 0,
+        dispatching_max_age_sec: float = 0,
+    ) -> int:
+        from datetime import timedelta as _td
+        now = datetime.now(timezone.utc)
+        n = 0
+
+        if pending_max_age_sec > 0:
+            cutoff = (now - _td(seconds=pending_max_age_sec)).isoformat()
+            try:
+                res = (
+                    self._client.table(self.TABLE).select("id,created_at")
+                    .eq("status", "pending").lt("created_at", cutoff)
+                    .execute()
+                )
+                for row in (res.data or []):
+                    age = pending_max_age_sec   # caller can grep DB for exact ts
+                    self._expire(int(row["id"]),
+                                 f"pending ≥ {pending_max_age_sec:.0f}s threshold")
+                    n += 1
+            except Exception as e:
+                logger.warning("sweep_expired (pending) supabase failed: %s", e)
+
+        if dispatching_max_age_sec > 0:
+            cutoff = (now - _td(seconds=dispatching_max_age_sec)).isoformat()
+            try:
+                res = (
+                    self._client.table(self.TABLE).select("id,dispatched_at,updated_at")
+                    .eq("status", "dispatching").lt("dispatched_at", cutoff)
+                    .execute()
+                )
+                for row in (res.data or []):
+                    self._expire(
+                        int(row["id"]),
+                        f"dispatching ≥ {dispatching_max_age_sec:.0f}s threshold "
+                        f"(worker likely crashed)",
+                    )
+                    n += 1
+            except Exception as e:
+                logger.warning("sweep_expired (dispatching) supabase failed: %s", e)
+        return n
+
+    def _expire(self, order_id: int, reason: str) -> None:
+        try:
+            self.update_status(
+                order_id, PendingOrderStatus.EXPIRED, last_error=reason,
+            )
+        except Exception as e:
+            logger.warning("sweep_expired _expire(%s) failed (%s)", order_id, e)
 
 
 # ================================================================== #
@@ -495,6 +615,66 @@ class PostgresPendingOrderQueue:
             cur.execute(sql, params)
             rows = cur.fetchall()
         return [_pg_row_to_order(r) for r in rows]
+
+    def sweep_expired(
+        self,
+        *,
+        pending_max_age_sec: float = 0,
+        dispatching_max_age_sec: float = 0,
+    ) -> int:
+        """Single-row UPDATE per expiring order so each transition gets its
+        own audit event with its own timestamp + reason. Bulk UPDATE would
+        be faster but lose the per-row reason that downstream debugging
+        relies on."""
+        n = 0
+        candidates: list[tuple[int, str]] = []
+
+        with self._conn() as conn, conn.cursor() as cur:
+            if pending_max_age_sec > 0:
+                cur.execute(
+                    "select id, "
+                    "  extract(epoch from (now() - created_at)) as age_sec "
+                    "from pending_orders "
+                    "where status = 'pending' "
+                    "  and created_at < now() - interval '%s seconds'",
+                    (int(pending_max_age_sec),),
+                )
+                for oid, age in cur.fetchall():
+                    candidates.append((
+                        int(oid),
+                        f"pending {float(age):.1f}s ≥ {pending_max_age_sec:.0f}s threshold",
+                    ))
+
+            if dispatching_max_age_sec > 0:
+                cur.execute(
+                    "select id, "
+                    "  extract(epoch from (now() - coalesce(dispatched_at, updated_at))) "
+                    "    as age_sec "
+                    "from pending_orders "
+                    "where status = 'dispatching' "
+                    "  and coalesce(dispatched_at, updated_at) < "
+                    "      now() - interval '%s seconds'",
+                    (int(dispatching_max_age_sec),),
+                )
+                for oid, age in cur.fetchall():
+                    candidates.append((
+                        int(oid),
+                        f"dispatching {float(age):.1f}s ≥ {dispatching_max_age_sec:.0f}s "
+                        f"threshold (worker likely crashed)",
+                    ))
+
+        for order_id, reason in candidates:
+            try:
+                self.update_status(
+                    order_id, PendingOrderStatus.EXPIRED, last_error=reason,
+                )
+                n += 1
+            except Exception as e:
+                logger.warning(
+                    "sweep_expired: update_status(%s, EXPIRED) failed (%s)",
+                    order_id, e,
+                )
+        return n
 
 
 # ================================================================== #
