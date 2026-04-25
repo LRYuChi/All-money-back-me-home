@@ -15,6 +15,21 @@
 #   * Exploratory: no baseline / regression comparison. R82 is for
 #     "should we deploy MR?" decision data.
 #
+# PREREQUISITE: OHLCV data must be downloaded for the backtest window.
+# Run before first use:
+#   freqtrade download-data \
+#     -c config/freqtrade/config_dry.json \
+#     --timeframes 15m 1h 4h 1d \
+#     --days 365 \
+#     -p BTC/USDT:USDT ETH/USDT:USDT  # or any subset
+#
+# OR (on VPS, freqtrade container has cached data):
+#   docker compose exec freqtrade freqtrade download-data \
+#     --timeframes 15m 1h 4h 1d --days 365
+#
+# Without prior download, backtest hangs at "Initializing leverage_tiers"
+# because it can't fetch on-the-fly without an authenticated API key.
+#
 # Usage:
 #   bash scripts/backtest_mr.sh                # default: 90d window
 #   bash scripts/backtest_mr.sh 180            # 180d
