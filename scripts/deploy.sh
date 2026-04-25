@@ -125,9 +125,16 @@ else
 fi
 
 # R60: ensure freqtrade bot is in "running" state, not just "container up".
-# Defense-in-depth: config_dry.json sets initial_state="running" but if the
-# operator ever manually stopped the bot via API/UI, that state survives
-# container recreation. Re-affirm at every deploy.
+#
+# CRITICAL: config_dry.json sets initial_state="running" but freqtrade's
+# runtime ignores it (verified 2026-04-25 on VPS — Configuration.from_files
+# loads the field, but Worker still boots into stopped). This curl /start
+# is the SOLE reliable mechanism for getting the bot scanning after a
+# container recreate. Without it, container Up + bot stopped = silent zero
+# trading, no signals fired, journal empty.
+#
+# Also handles: operator manually stopped the bot via UI/API; that state
+# survives container recreation, so we re-affirm at every deploy.
 echo "  Verifying freqtrade bot state..."
 sleep 2
 ft_state=$(curl -sf -u "${FT_USER}:${FT_PASS}" \
