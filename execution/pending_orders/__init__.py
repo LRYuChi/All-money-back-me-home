@@ -22,6 +22,10 @@ from execution.pending_orders.events import (
     SupabaseEventLogger,
     build_event_logger,
 )
+from execution.pending_orders.sweep_runner import (
+    SweepStats,
+    background_sweep_loop,
+)
 from execution.pending_orders.queue import (
     InMemoryPendingOrderQueue,
     NoOpPendingOrderQueue,
@@ -70,6 +74,9 @@ __all__ = [
     "PostgresEventLogger",
     "SupabaseEventLogger",
     "build_event_logger",
+    # background sweeper (round 38)
+    "SweepStats",
+    "background_sweep_loop",
     # dispatcher (intent → pending row)
     "intent_to_pending",
     "make_intent_callback",

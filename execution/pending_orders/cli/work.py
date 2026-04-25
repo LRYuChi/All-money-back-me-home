@@ -27,6 +27,7 @@ from execution.pending_orders import (
     NoOpPendingOrderQueue,
     PendingOrderWorker,
     UnsupportedModeError,
+    background_sweep_loop,
     build_default_registry,
     build_queue,
 )
@@ -161,6 +162,22 @@ def build_parser() -> argparse.ArgumentParser:
         help="Push a CRITICAL alert via shared.notifier on G8/G9 trip "
              "(implied by --auto-disable-on-g9; pass alone to alert without "
              "auto-disabling).",
+    )
+    p.add_argument(
+        "--sweep-interval-sec", type=float, default=0,
+        help="Run pending_orders sweeper as a background task every N "
+             "seconds (0 = disabled). Implies opt-in via --sweep-pending-max-age "
+             "and/or --sweep-dispatching-max-age.",
+    )
+    p.add_argument(
+        "--sweep-pending-max-age", type=float, default=0,
+        help="Background sweeper: PENDING older than N seconds → EXPIRED "
+             "(0 = bucket disabled).",
+    )
+    p.add_argument(
+        "--sweep-dispatching-max-age", type=float, default=0,
+        help="Background sweeper: DISPATCHING older than N seconds → "
+             "EXPIRED, worker likely crashed (0 = bucket disabled).",
     )
     p.add_argument("--log-level", default="INFO",
                    choices=["DEBUG", "INFO", "WARNING", "ERROR"])
@@ -369,7 +386,36 @@ async def run_worker(args: argparse.Namespace) -> int:
                     stop.set()
         asyncio.create_task(_stopper())
 
+    # Round 38: optional background sweeper sidecar
+    sweeper_task: asyncio.Task | None = None
+    if args.sweep_interval_sec > 0:
+        if args.sweep_pending_max_age <= 0 and args.sweep_dispatching_max_age <= 0:
+            logger.warning(
+                "--sweep-interval-sec set but both age thresholds are 0 — "
+                "sweeper will run but never expire anything. Pass at least "
+                "--sweep-pending-max-age or --sweep-dispatching-max-age.",
+            )
+        sweeper_task = asyncio.create_task(background_sweep_loop(
+            queue, stop,
+            interval_sec=args.sweep_interval_sec,
+            pending_max_age_sec=args.sweep_pending_max_age,
+            dispatching_max_age_sec=args.sweep_dispatching_max_age,
+        ))
+
     await worker.run_forever(stop)
+    if sweeper_task is not None:
+        # stop_event is set; sweeper exits between sweeps. Await its
+        # final stats so the log line matches reality.
+        try:
+            sweep_stats = await asyncio.wait_for(sweeper_task, timeout=5.0)
+            logger.info(
+                "sweeper final: iterations=%d total_expired=%d errors=%d",
+                sweep_stats.iterations, sweep_stats.total_expired,
+                sweep_stats.errors,
+            )
+        except asyncio.TimeoutError:
+            logger.warning("sweeper task did not exit within 5s; cancelling")
+            sweeper_task.cancel()
     logger.info("worker stopped: stats=%s", worker.stats())
     return 0
 
