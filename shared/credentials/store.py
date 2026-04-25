@@ -12,6 +12,11 @@ Each row stores:
 `get_credential(name)` is the convenience top-level function — it calls
 `build_store()` once per process (cached) and decrypts on demand.
 Callers don't need to know about the store.
+
+Round 34: every write/read/delete triggers `audit_hook.record(...)` so
+`secret_access_log` has a complete trail of who/what accessed which key
+when. Audit is fire-and-forget (NoOpAuditHook by default; build_store
+wires the matching DB backend).
 """
 from __future__ import annotations
 
@@ -21,6 +26,11 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Any, Protocol
 
+from shared.credentials.audit import (
+    AuditHook,
+    NoOpAuditHook,
+    build_audit_hook,
+)
 from shared.credentials.crypto import decrypt, encrypt
 
 logger = logging.getLogger(__name__)
@@ -93,37 +103,71 @@ class InMemoryCredentialStore:
 
     TABLE = "secrets"
 
-    def __init__(self, master_keys: list[str] | None = None):
+    def __init__(
+        self,
+        master_keys: list[str] | None = None,
+        *,
+        audit_hook: AuditHook | None = None,
+    ):
         # Allow tests to inject a key without monkeypatching env
         self._keys = master_keys or _master_keys_from_env()
         self._rows: dict[str, _StoredRow] = {}
+        self._audit = audit_hook or NoOpAuditHook()
 
-    def write(self, name: str, plaintext: str, *, description: str = "") -> None:
-        ct = encrypt(plaintext, self._keys)
-        existing = self._rows.get(name)
-        self._rows[name] = _StoredRow(
-            ciphertext=ct,
-            description=description or (existing.description if existing else ""),
-            rotated_at=datetime.now(timezone.utc) if existing else None,
-            created_at=existing.created_at if existing else datetime.now(timezone.utc),
-        )
+    def write(
+        self, name: str, plaintext: str, *,
+        description: str = "", actor: str | None = None,
+    ) -> None:
+        try:
+            ct = encrypt(plaintext, self._keys)
+            existing = self._rows.get(name)
+            self._rows[name] = _StoredRow(
+                ciphertext=ct,
+                description=description or (existing.description if existing else ""),
+                rotated_at=datetime.now(timezone.utc) if existing else None,
+                created_at=existing.created_at if existing else datetime.now(timezone.utc),
+            )
+        except Exception as e:
+            self._audit.record(name, "write", actor=actor, success=False,
+                               notes=f"{type(e).__name__}: {e}")
+            raise
+        op = "rotate" if existing else "write"
+        self._audit.record(name, op, actor=actor, success=True)
 
-    def read(self, name: str) -> CredentialRecord:
+    def read(
+        self, name: str, *, actor: str | None = None,
+    ) -> CredentialRecord:
         row = self._rows.get(name)
         if row is None:
+            self._audit.record(name, "read", actor=actor, success=False,
+                               notes="not found")
             raise CredentialNotFound(name)
-        plaintext = decrypt(row.ciphertext, self._keys)
+        try:
+            plaintext = decrypt(row.ciphertext, self._keys)
+        except Exception as e:
+            self._audit.record(name, "read", actor=actor, success=False,
+                               notes=f"decrypt error: {type(e).__name__}")
+            raise
+        self._audit.record(name, "read", actor=actor, success=True)
         return CredentialRecord(
             name=name, plaintext=plaintext,
             description=row.description,
             rotated_at=row.rotated_at, created_at=row.created_at,
         )
 
-    def delete(self, name: str) -> bool:
-        return self._rows.pop(name, None) is not None
+    def delete(self, name: str, *, actor: str | None = None) -> bool:
+        existed = self._rows.pop(name, None) is not None
+        self._audit.record(
+            name, "delete", actor=actor, success=existed,
+            notes=None if existed else "not found",
+        )
+        return existed
 
     def list_names(self) -> list[str]:
         return sorted(self._rows.keys())
+
+    def audit_history(self, name: str, *, limit: int = 50):
+        return self._audit.history(name, limit=limit)
 
 
 class SupabaseCredentialStore:
@@ -131,26 +175,68 @@ class SupabaseCredentialStore:
 
     TABLE = "secrets"
 
-    def __init__(self, client: Any, master_keys: list[str] | None = None):
+    def __init__(
+        self, client: Any, master_keys: list[str] | None = None,
+        *,
+        audit_hook: AuditHook | None = None,
+    ):
         self._client = client
         self._keys = master_keys or _master_keys_from_env()
+        self._audit = audit_hook or NoOpAuditHook()
 
-    def write(self, name: str, plaintext: str, *, description: str = "") -> None:
-        ct = encrypt(plaintext, self._keys)
-        # Upsert by name (PK)
-        self._client.table(self.TABLE).upsert({
-            "name": name,
-            "ciphertext": ct,
-            "description": description,
-            "rotated_at": datetime.now(timezone.utc).isoformat(),
-        }, on_conflict="name").execute()
+    def write(
+        self, name: str, plaintext: str, *,
+        description: str = "", actor: str | None = None,
+    ) -> None:
+        existed = self._exists(name)
+        try:
+            ct = encrypt(plaintext, self._keys)
+            self._client.table(self.TABLE).upsert({
+                "name": name,
+                "ciphertext": ct,
+                "description": description,
+                "rotated_at": datetime.now(timezone.utc).isoformat(),
+            }, on_conflict="name").execute()
+        except Exception as e:
+            self._audit.record(name, "write", actor=actor, success=False,
+                               notes=f"{type(e).__name__}: {e}")
+            raise
+        self._audit.record(
+            name, "rotate" if existed else "write",
+            actor=actor, success=True,
+        )
 
-    def read(self, name: str) -> CredentialRecord:
-        res = self._client.table(self.TABLE).select("*").eq("name", name).limit(1).execute()
+    def _exists(self, name: str) -> bool:
+        try:
+            res = (
+                self._client.table(self.TABLE).select("name")
+                .eq("name", name).limit(1).execute()
+            )
+            return bool(res.data)
+        except Exception:
+            return False
+
+    def read(
+        self, name: str, *, actor: str | None = None,
+    ) -> CredentialRecord:
+        try:
+            res = self._client.table(self.TABLE).select("*").eq("name", name).limit(1).execute()
+        except Exception as e:
+            self._audit.record(name, "read", actor=actor, success=False,
+                               notes=f"query error: {type(e).__name__}")
+            raise
         if not res.data:
+            self._audit.record(name, "read", actor=actor, success=False,
+                               notes="not found")
             raise CredentialNotFound(name)
         row = res.data[0]
-        plaintext = decrypt(row["ciphertext"], self._keys)
+        try:
+            plaintext = decrypt(row["ciphertext"], self._keys)
+        except Exception as e:
+            self._audit.record(name, "read", actor=actor, success=False,
+                               notes=f"decrypt error: {type(e).__name__}")
+            raise
+        self._audit.record(name, "read", actor=actor, success=True)
         return CredentialRecord(
             name=name,
             plaintext=plaintext,
@@ -159,70 +245,132 @@ class SupabaseCredentialStore:
             created_at=_parse_iso(row.get("created_at")),
         )
 
-    def delete(self, name: str) -> bool:
-        res = self._client.table(self.TABLE).delete().eq("name", name).execute()
-        return bool(res.data)
+    def delete(self, name: str, *, actor: str | None = None) -> bool:
+        try:
+            res = self._client.table(self.TABLE).delete().eq("name", name).execute()
+        except Exception as e:
+            self._audit.record(name, "delete", actor=actor, success=False,
+                               notes=f"{type(e).__name__}: {e}")
+            raise
+        ok = bool(res.data)
+        self._audit.record(
+            name, "delete", actor=actor, success=ok,
+            notes=None if ok else "not found",
+        )
+        return ok
 
     def list_names(self) -> list[str]:
         res = self._client.table(self.TABLE).select("name").order("name").execute()
         return [r["name"] for r in (res.data or [])]
 
+    def audit_history(self, name: str, *, limit: int = 50):
+        return self._audit.history(name, limit=limit)
+
 
 class PostgresCredentialStore:
     """Stores rows in `secrets` table via direct psycopg."""
 
-    def __init__(self, dsn: str, master_keys: list[str] | None = None):
+    def __init__(
+        self, dsn: str, master_keys: list[str] | None = None,
+        *,
+        audit_hook: AuditHook | None = None,
+    ):
         self._dsn = dsn
         self._keys = master_keys or _master_keys_from_env()
+        self._audit = audit_hook or NoOpAuditHook()
 
     def _conn(self):
         import psycopg
         return psycopg.connect(self._dsn)
 
-    def write(self, name: str, plaintext: str, *, description: str = "") -> None:
-        ct = encrypt(plaintext, self._keys)
-        sql = (
-            "insert into secrets (name, ciphertext, description, created_at, rotated_at) "
-            "values (%s, %s, %s, now(), now()) "
-            "on conflict (name) do update set "
-            "ciphertext = excluded.ciphertext, "
-            "description = coalesce(nullif(excluded.description, ''), secrets.description), "
-            "rotated_at = now()"
+    def write(
+        self, name: str, plaintext: str, *,
+        description: str = "", actor: str | None = None,
+    ) -> None:
+        try:
+            with self._conn() as conn, conn.cursor() as cur:
+                cur.execute(
+                    "select 1 from secrets where name = %s", (name,),
+                )
+                existed = cur.fetchone() is not None
+                ct = encrypt(plaintext, self._keys)
+                sql = (
+                    "insert into secrets (name, ciphertext, description, created_at, rotated_at) "
+                    "values (%s, %s, %s, now(), now()) "
+                    "on conflict (name) do update set "
+                    "ciphertext = excluded.ciphertext, "
+                    "description = coalesce(nullif(excluded.description, ''), secrets.description), "
+                    "rotated_at = now()"
+                )
+                cur.execute(sql, (name, ct, description))
+                conn.commit()
+        except Exception as e:
+            self._audit.record(name, "write", actor=actor, success=False,
+                               notes=f"{type(e).__name__}: {e}")
+            raise
+        self._audit.record(
+            name, "rotate" if existed else "write",
+            actor=actor, success=True,
         )
-        with self._conn() as conn, conn.cursor() as cur:
-            cur.execute(sql, (name, ct, description))
-            conn.commit()
 
-    def read(self, name: str) -> CredentialRecord:
-        with self._conn() as conn, conn.cursor() as cur:
-            cur.execute(
-                "select ciphertext, description, rotated_at, created_at "
-                "from secrets where name = %s",
-                (name,),
-            )
-            row = cur.fetchone()
+    def read(
+        self, name: str, *, actor: str | None = None,
+    ) -> CredentialRecord:
+        try:
+            with self._conn() as conn, conn.cursor() as cur:
+                cur.execute(
+                    "select ciphertext, description, rotated_at, created_at "
+                    "from secrets where name = %s",
+                    (name,),
+                )
+                row = cur.fetchone()
+        except Exception as e:
+            self._audit.record(name, "read", actor=actor, success=False,
+                               notes=f"query error: {type(e).__name__}")
+            raise
         if row is None:
+            self._audit.record(name, "read", actor=actor, success=False,
+                               notes="not found")
             raise CredentialNotFound(name)
         ct, description, rotated_at, created_at = row
-        plaintext = decrypt(ct, self._keys)
+        try:
+            plaintext = decrypt(ct, self._keys)
+        except Exception as e:
+            self._audit.record(name, "read", actor=actor, success=False,
+                               notes=f"decrypt error: {type(e).__name__}")
+            raise
+        self._audit.record(name, "read", actor=actor, success=True)
         return CredentialRecord(
             name=name, plaintext=plaintext,
             description=description or "",
             rotated_at=rotated_at, created_at=created_at,
         )
 
-    def delete(self, name: str) -> bool:
-        with self._conn() as conn, conn.cursor() as cur:
-            cur.execute("delete from secrets where name = %s", (name,))
-            n = cur.rowcount
-            conn.commit()
-        return n > 0
+    def delete(self, name: str, *, actor: str | None = None) -> bool:
+        try:
+            with self._conn() as conn, conn.cursor() as cur:
+                cur.execute("delete from secrets where name = %s", (name,))
+                n = cur.rowcount
+                conn.commit()
+        except Exception as e:
+            self._audit.record(name, "delete", actor=actor, success=False,
+                               notes=f"{type(e).__name__}: {e}")
+            raise
+        ok = n > 0
+        self._audit.record(
+            name, "delete", actor=actor, success=ok,
+            notes=None if ok else "not found",
+        )
+        return ok
 
     def list_names(self) -> list[str]:
         with self._conn() as conn, conn.cursor() as cur:
             cur.execute("select name from secrets order by name")
             rows = cur.fetchall()
         return [r[0] for r in rows]
+
+    def audit_history(self, name: str, *, limit: int = 50):
+        return self._audit.history(name, limit=limit)
 
 
 # ================================================================== #
@@ -237,13 +385,16 @@ def _parse_iso(s: str | None) -> datetime | None:
 def build_store(settings) -> CredentialStore:  # noqa: ANN001
     """Factory mirroring signals.history priority: Postgres > Supabase > InMemory.
 
-    InMemory is OK as a fallback for tests / dev; in prod we always have
-    one of the DB options.
+    Round 34: also wires the matching audit hook so every store call
+    appends a row to `secret_access_log`. Tests can construct stores
+    directly to opt out of audit (audit_hook=None → defaults to NoOp).
     """
+    audit = build_audit_hook(settings)
+
     dsn = (getattr(settings, "database_url", "") or "").strip()
     if dsn:
-        logger.info("credential store: PostgresCredentialStore")
-        return PostgresCredentialStore(dsn)
+        logger.info("credential store: PostgresCredentialStore (audit=PG)")
+        return PostgresCredentialStore(dsn, audit_hook=audit)
 
     sb_url = (getattr(settings, "supabase_url", "") or "").strip()
     sb_key = (getattr(settings, "supabase_service_key", "") or "").strip()
@@ -251,8 +402,8 @@ def build_store(settings) -> CredentialStore:  # noqa: ANN001
         try:
             from supabase import create_client
             client = create_client(sb_url, sb_key)
-            logger.info("credential store: SupabaseCredentialStore")
-            return SupabaseCredentialStore(client)
+            logger.info("credential store: SupabaseCredentialStore (audit=Supabase)")
+            return SupabaseCredentialStore(client, audit_hook=audit)
         except ImportError:
             logger.warning("credential store: supabase-py not installed; using InMemory")
 
@@ -260,7 +411,7 @@ def build_store(settings) -> CredentialStore:  # noqa: ANN001
         "credential store: no DB configured → InMemory (NOT for prod). "
         "Set DATABASE_URL or SUPABASE_URL+KEY.",
     )
-    return InMemoryCredentialStore()
+    return InMemoryCredentialStore(audit_hook=audit)
 
 
 _cached_store: CredentialStore | None = None
@@ -292,3 +443,8 @@ __all__ = [
     "build_store",
     "get_credential",
 ]
+
+
+# Re-export audit primitives so callers can `from shared.credentials.store
+# import with_actor` without a second import line.
+from shared.credentials.audit import with_actor  # noqa: E402,F401

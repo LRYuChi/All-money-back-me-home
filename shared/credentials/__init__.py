@@ -32,6 +32,18 @@ from shared.credentials.crypto import (
     InvalidMasterKey,
     DecryptionFailure,
 )
+from shared.credentials.audit import (
+    AuditEvent,
+    AuditHook,
+    AuditOp,
+    InMemoryAuditHook,
+    NoOpAuditHook,
+    PostgresAuditHook,
+    SupabaseAuditHook,
+    build_audit_hook,
+    resolve_actor,
+    with_actor,
+)
 from shared.credentials.store import (
     CredentialNotFound,
     CredentialRecord,
@@ -59,4 +71,15 @@ __all__ = [
     "PostgresCredentialStore",
     "build_store",
     "get_credential",
+    # audit (round 34)
+    "AuditEvent",
+    "AuditHook",
+    "AuditOp",
+    "NoOpAuditHook",
+    "InMemoryAuditHook",
+    "SupabaseAuditHook",
+    "PostgresAuditHook",
+    "build_audit_hook",
+    "resolve_actor",
+    "with_actor",
 ]

@@ -33,7 +33,7 @@
 | Phase | 狀態 | 當前 sub-task | 備註 |
 |---|---|---|---|
 | **A. SM P4/P5 收斂** | 🟡 | P4a-c ✅；**Notifier 抽象 ✅ (QD P0-3)**；P4 Gate 🔁 等 14d shadow；P5a-c ⬜ | migration 015 ⏸ 手動 |
-| **B. 基礎設施** | ✅ (基本完成) | UniversalSignal ✅；signal_history migration ✅；SM adapter ✅；dual-write ✅；persistence helper ✅；Notifier 抽象 ✅；Reflection validator core ✅；Supabase/PG IO + CLI ✅；Strategy Snapshot ✅；Credential 加密 ✅；Redis ⬜（暫緩，動 prod 部署） | 144 新 tests 全綠 |
+| **B. 基礎設施** | ✅ | UniversalSignal ✅；signal_history migration ✅；SM adapter ✅；dual-write ✅；persistence helper ✅；Notifier 抽象 ✅；Reflection validator core ✅；Supabase/PG IO + CLI ✅；Strategy Snapshot ✅；Credential 加密 ✅；**Credential audit hook (round 34，4 backends + with_actor() 三層 fallback + read/write/rotate/delete 全自動 audit + fire-and-forget 不阻塞操作)** ✅；Redis ⬜ | secret_access_log 有完整 trail；audit gap 不阻塞交易 |
 | **C. Kronos 整合** | 🟡 | **HL PriceFetcher ✅（reflection 真能用）**；Kronos predictor / signal converter / dashboard ⬜ | 需 R1 拍板才能進 Kronos 預測 |
 | **D. AI + 融合** | ✅ basic | Regime ✅；SignalFuser ✅；**MarketContext provider (HL daily 200d + MA200/slope/vol/DD + 可選 VIX + TTL cache) ✅**；AI LLM 整合 ⬜ | R2 (LLM 供應) 仍待拍板 |
 | **E. 策略 DSL** | ✅ | DSL + evaluator + registry ✅；首個 prod 策略 ✅；e2e 整合 ✅；StrategyRuntime + daemon wiring ✅；set_enabled audit (migration 021) + admin CLI ✅；TTL cache + defence-in-depth check ✅；**bulk loader CLI (validate/load + --dir/--file/--pattern + --dry-run + atomic batch on parse-fail + per-file error tolerance on upsert) ✅**；dashboard ⬜ | 多策略一鍵載入 + 安全 dry-run，daemon 透過 list_active 自然並行 |
@@ -86,7 +86,8 @@
 | (manual) | #31 | Cleanup — 刪除 archived smc_trend 引用的兩個 obsolete 測試檔；active suite 達 1246/1246 全綠 | ✅ 完成 |
 | (manual) | #32 | Phase F.1 第一步 + Phase G 收尾 — execution/exchanges/ scaffolding (ExchangeRequest/Response types + deterministic SHA-256 client_order_id + CachedSymbolCatalog with first-load fail-closed) + OKX 完整包 (OKXClient Protocol + FakeOKXClient + OKXLiveDispatcher 6-status mapping + idempotency 透過 coid 重送 + OKXSymbolCatalog) + G2 SymbolSupportedGuard (10/10 guards 完整) 34 tests，全 1280 tests 綠 | ✅ 完成 |
 | (manual) | #33 | Phase E 收尾 — strategy_engine/cli/loader.py (validate/load 子命令，--dir/--file 互斥，--pattern 自訂 glob，--dry-run，全批 atomic on parse-fail，個別 upsert error 不終止其他) + smoke 通過 config/strategies/ 16 tests，全 1296 tests 綠 | ✅ 完成 |
-| — | — | **下輪待辦**：Audit log hook (round 7 leftover) OR ccxt-okx 真實 wiring (需 OKX_API_KEY) OR Phase H live ramp 計畫 OR Phase E dashboard (需碰 apps/web) | ⬜ |
+| (manual) | #34 | Phase B 收尾 — credential audit hook (round 7 leftover): shared/credentials/audit.py 4 backends (NoOp/InMemory/Postgres/Supabase) + with_actor() ContextVar context manager + resolve_actor 三層 fallback (explicit→ctx→env→None) + 全 3 store backend (InMemory/Supabase/Postgres) hook 進 write/read/delete/rotate + fire-and-forget on audit failure (不阻塞 op) + audit_history(name) 25 tests，全 1321 tests 綠 | ✅ 完成 |
+| — | — | **下輪待辦**：ccxt-okx 真實 wiring (需 OKX_API_KEY) OR Phase H live ramp 計畫 OR Phase E dashboard (需碰 apps/web) OR Phase D LLM 整合 (等 R2 拍板) | ⬜ |
 
 ---
 
