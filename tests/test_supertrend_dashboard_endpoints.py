@@ -16,9 +16,9 @@ if str(_API_SRC) not in sys.path:
 
 def _import_router():
     from src.routers.supertrend import (
-        _resolve_journal_dir, router,
-        supertrend_health, supertrend_skipped, supertrend_snapshot,
-        supertrend_trades,
+        _alignment_count, _extract_last_row, _likely_side, _resolve_journal_dir,
+        router, supertrend_health, supertrend_scanner, supertrend_skipped,
+        supertrend_snapshot, supertrend_trades,
     )
     return {
         "router": router,
@@ -26,14 +26,18 @@ def _import_router():
         "snapshot": supertrend_snapshot,
         "trades": supertrend_trades,
         "skipped": supertrend_skipped,
+        "scanner": supertrend_scanner,
         "health": supertrend_health,
+        "alignment_count": _alignment_count,
+        "likely_side": _likely_side,
+        "extract_last_row": _extract_last_row,
     }
 
 
 # =================================================================== #
 # Router structure
 # =================================================================== #
-def test_router_has_5_endpoints():
+def test_router_has_6_endpoints():
     mod = _import_router()
     paths = {r.path for r in mod["router"].routes}
     assert paths == {
@@ -41,6 +45,7 @@ def test_router_has_5_endpoints():
         "/api/supertrend/regime",
         "/api/supertrend/trades",
         "/api/supertrend/skipped",
+        "/api/supertrend/scanner",
         "/api/supertrend/health",
     }
 
@@ -397,3 +402,216 @@ def test_skipped_groups_by_pair_top_10(monkeypatch, tmp_path):
     out = mod["skipped"](limit=50, days=7)
     assert len(out["by_pair"]) == 10
     assert out["n_total_in_window"] == 12
+
+
+# =================================================================== #
+# /scanner — R62 helpers
+# =================================================================== #
+def test_alignment_count_all_long():
+    mod = _import_router()
+    state = {
+        "st_1d": 1, "dir_4h_score": 0.8, "st_1h": 1, "st_trend": 1,
+    }
+    assert mod["alignment_count"](state) == 4
+
+
+def test_alignment_count_all_short():
+    mod = _import_router()
+    state = {
+        "st_1d": -1, "dir_4h_score": -0.8, "st_1h": -1, "st_trend": -1,
+    }
+    assert mod["alignment_count"](state) == 4
+
+
+def test_alignment_count_split():
+    """Mixed signals → max(longs, shorts) = highest single-side count."""
+    mod = _import_router()
+    state = {
+        "st_1d": 1, "dir_4h_score": 0.5, "st_1h": -1, "st_trend": 1,
+    }
+    # Longs: st_1d, dir_4h, st_15m = 3; shorts: st_1h = 1
+    assert mod["alignment_count"](state) == 3
+
+
+def test_alignment_count_4h_below_threshold_treated_neutral():
+    """4h score must clear ±0.25 to count as a directional vote."""
+    mod = _import_router()
+    state = {
+        "st_1d": 1, "dir_4h_score": 0.1,   # too small → neutral
+        "st_1h": 1, "st_trend": 1,
+    }
+    assert mod["alignment_count"](state) == 3
+
+
+def test_alignment_count_handles_missing_fields():
+    mod = _import_router()
+    assert mod["alignment_count"]({}) == 0
+
+
+def test_likely_side_long():
+    mod = _import_router()
+    assert mod["likely_side"]({"direction_score": 0.6}) == "long"
+
+
+def test_likely_side_short():
+    mod = _import_router()
+    assert mod["likely_side"]({"direction_score": -0.6}) == "short"
+
+
+def test_likely_side_neutral_below_threshold():
+    mod = _import_router()
+    assert mod["likely_side"]({"direction_score": 0.1}) is None
+
+
+def test_extract_last_row_pulls_supertrend_columns():
+    mod = _import_router()
+    candle_resp = {
+        "columns": ["date", "open", "close", "st_1d", "direction_score",
+                    "trend_quality", "adx", "funding_rate"],
+        "data": [
+            ["2026-04-25T00:00", 100, 101, 1, 0.5, 0.8, 32.5, 0.0001],
+            ["2026-04-25T00:15", 101, 102, 1, 0.7, 0.9, 35.0, 0.0002],
+        ],
+    }
+    out = mod["extract_last_row"](candle_resp)
+    assert out["st_1d"] == 1
+    assert out["direction_score"] == 0.7
+    assert out["adx"] == 35.0
+
+
+def test_extract_last_row_handles_empty():
+    mod = _import_router()
+    assert mod["extract_last_row"]({}) == {}
+    assert mod["extract_last_row"]({"data": [], "columns": []}) == {}
+
+
+# =================================================================== #
+# /scanner — endpoint behavior with mocked freqtrade
+# =================================================================== #
+def _mock_ft_get(whitelist_resp, candle_resps_by_pair, whitelist_error=None):
+    """Build a side_effect that proxies freqtrade GETs in tests.
+    `candle_resps_by_pair` is {pair: response_dict_or_exception}."""
+    def fake_get(path, **kwargs):
+        if path == "/api/v1/whitelist":
+            if whitelist_error:
+                raise whitelist_error
+            return whitelist_resp
+        if path.startswith("/api/v1/pair_candles"):
+            # Extract pair from query string
+            import urllib.parse
+            qs = urllib.parse.urlparse(path).query
+            params = dict(urllib.parse.parse_qsl(qs))
+            pair = params.get("pair", "")
+            resp = candle_resps_by_pair.get(pair)
+            if isinstance(resp, Exception):
+                raise resp
+            if resp is None:
+                raise RuntimeError(f"unexpected pair {pair}")
+            return resp
+        raise RuntimeError(f"unexpected path {path}")
+    return fake_get
+
+
+def test_scanner_returns_pairs_sorted_by_alignment(monkeypatch):
+    from unittest.mock import patch
+
+    wl = {"whitelist": ["AAA/USDT:USDT", "BBB/USDT:USDT"]}
+    candles = {
+        # AAA: 4/4 aligned long
+        "AAA/USDT:USDT": {
+            "columns": ["st_1d", "dir_4h_score", "st_1h", "st_trend",
+                        "direction_score", "trend_quality", "adx",
+                        "atr", "funding_rate"],
+            "data": [[1, 0.8, 1, 1, 0.9, 0.85, 38.0, 100.0, 0.0001]],
+        },
+        # BBB: 2/4 aligned
+        "BBB/USDT:USDT": {
+            "columns": ["st_1d", "dir_4h_score", "st_1h", "st_trend",
+                        "direction_score", "trend_quality", "adx",
+                        "atr", "funding_rate"],
+            "data": [[1, 0.1, 1, -1, 0.2, 0.4, 22.0, 50.0, 0.0]],
+        },
+    }
+    mod = _import_router()
+    with patch(
+        "src.routers.supertrend._ft_get",
+        side_effect=_mock_ft_get(wl, candles),
+    ):
+        out = mod["scanner"](timeframe="15m", limit=10)
+    assert out["n_pairs"] == 2
+    assert len(out["pairs"]) == 2
+    # AAA (alignment 4) ahead of BBB (alignment 2)
+    assert out["pairs"][0]["pair"] == "AAA/USDT:USDT"
+    assert out["pairs"][0]["alignment_count"] == 4
+    assert out["pairs"][0]["likely_side"] == "long"
+    assert out["pairs"][1]["pair"] == "BBB/USDT:USDT"
+    assert out["pairs"][1]["alignment_count"] == 2
+
+
+def test_scanner_handles_whitelist_failure(monkeypatch):
+    from unittest.mock import patch
+    mod = _import_router()
+    with patch(
+        "src.routers.supertrend._ft_get",
+        side_effect=_mock_ft_get(
+            None, {}, whitelist_error=RuntimeError("connection refused"),
+        ),
+    ):
+        out = mod["scanner"](timeframe="15m", limit=10)
+    assert out["pairs"] == []
+    assert "error" in out
+    assert "whitelist" in out["error"]
+
+
+def test_scanner_records_per_pair_errors(monkeypatch):
+    """One pair fails fetch → only that pair appears in errors; rest succeed."""
+    from unittest.mock import patch
+    wl = {"whitelist": ["GOOD/USDT:USDT", "BAD/USDT:USDT"]}
+    candles = {
+        "GOOD/USDT:USDT": {
+            "columns": ["st_1d", "direction_score"],
+            "data": [[1, 0.5]],
+        },
+        "BAD/USDT:USDT": RuntimeError("timeout"),
+    }
+    mod = _import_router()
+    with patch(
+        "src.routers.supertrend._ft_get",
+        side_effect=_mock_ft_get(wl, candles),
+    ):
+        out = mod["scanner"](timeframe="15m", limit=10)
+    assert len(out["pairs"]) == 1
+    assert out["pairs"][0]["pair"] == "GOOD/USDT:USDT"
+    assert "BAD/USDT:USDT" in out["errors"]
+
+
+def test_scanner_respects_limit(monkeypatch):
+    from unittest.mock import patch
+    wl = {"whitelist": [f"P{i}/USDT:USDT" for i in range(10)]}
+    candles = {
+        p: {"columns": ["st_1d"], "data": [[1]]}
+        for p in wl["whitelist"]
+    }
+    mod = _import_router()
+    with patch(
+        "src.routers.supertrend._ft_get",
+        side_effect=_mock_ft_get(wl, candles),
+    ):
+        out = mod["scanner"](timeframe="15m", limit=3)
+    # Only first 3 pairs queried + returned
+    assert len(out["pairs"]) == 3
+    assert out["n_pairs"] == 10   # full whitelist size still reported
+
+
+def test_scanner_handles_empty_whitelist(monkeypatch):
+    from unittest.mock import patch
+    wl = {"whitelist": []}
+    mod = _import_router()
+    with patch(
+        "src.routers.supertrend._ft_get",
+        side_effect=_mock_ft_get(wl, {}),
+    ):
+        out = mod["scanner"](timeframe="15m", limit=10)
+    assert out["pairs"] == []
+    assert out["n_pairs"] == 0
+    assert "error" not in out

@@ -276,6 +276,166 @@ def supertrend_skipped(
 
 
 # =================================================================== #
+# /scanner — R62 — per-pair signal proximity dashboard
+# =================================================================== #
+# Indicator columns we extract from each pair's last analyzed candle.
+# All populated by SupertrendStrategy.populate_indicators in production.
+_SCANNER_FIELDS = (
+    "st_1d", "st_1d_duration", "dir_4h_score",
+    "st_1h", "st_trend",
+    "direction_score", "trend_quality",
+    "adx", "atr", "funding_rate",
+    "pair_bullish_2tf", "pair_bearish_2tf",
+)
+
+
+def _ft_auth_headers() -> dict[str, str]:
+    """Build Basic-auth header for freqtrade REST."""
+    import base64
+    user = os.environ.get("FT_USER", "freqtrade")
+    pwd = os.environ.get("FT_PASS", "freqtrade")
+    token = base64.b64encode(f"{user}:{pwd}".encode()).decode()
+    return {"Authorization": f"Basic {token}"}
+
+
+def _ft_api_url() -> str:
+    return os.environ.get(
+        "FREQTRADE_API_URL", "http://freqtrade:8080",
+    ).rstrip("/")
+
+
+def _ft_get(path: str, *, timeout: float = 5.0) -> Any:
+    """GET freqtrade REST endpoint, raises on HTTP error. JSON-decoded."""
+    import json as _json
+    import urllib.request
+    req = urllib.request.Request(
+        f"{_ft_api_url()}{path}", headers=_ft_auth_headers(),
+    )
+    with urllib.request.urlopen(req, timeout=timeout) as resp:
+        return _json.loads(resp.read().decode())
+
+
+def _extract_last_row(candle_resp: dict) -> dict[str, Any]:
+    """freqtrade /pair_candles returns {"data": [[...], ...], "columns": [...]}.
+    Pull the last row, return a name→value dict for our SCANNER_FIELDS."""
+    cols = candle_resp.get("columns") or []
+    rows = candle_resp.get("data") or []
+    if not rows or not cols:
+        return {}
+    last = rows[-1]
+    out: dict[str, Any] = {}
+    for f in _SCANNER_FIELDS:
+        if f in cols:
+            try:
+                v = last[cols.index(f)]
+                # Coerce to JSON-friendly primitives
+                if isinstance(v, (int, float)) or v is None:
+                    out[f] = v
+                else:
+                    out[f] = float(v) if v != "" else None
+            except (ValueError, IndexError, TypeError):
+                out[f] = None
+    return out
+
+
+def _alignment_count(state: dict) -> int:
+    """Count how many of the 4 timeframes agree on direction.
+    Returns 0..4. Used to surface near-firing pairs at the top."""
+    st_1d = state.get("st_1d")
+    st_4h = state.get("dir_4h_score")
+    st_1h = state.get("st_1h")
+    st_15m = state.get("st_trend")
+    # 4h is a continuous score [-1, 1], discretize at ±0.25 (modest bias)
+    sig_4h = 1 if (st_4h is not None and st_4h > 0.25) else (
+        -1 if (st_4h is not None and st_4h < -0.25) else 0
+    )
+    longs = sum(1 for x in (st_1d, sig_4h, st_1h, st_15m) if x == 1)
+    shorts = sum(1 for x in (st_1d, sig_4h, st_1h, st_15m) if x == -1)
+    return max(longs, shorts)
+
+
+def _likely_side(state: dict) -> str | None:
+    """Direction the pair is leaning toward, or None if neutral."""
+    ds = state.get("direction_score")
+    if ds is None:
+        return None
+    if ds > 0.25:
+        return "long"
+    if ds < -0.25:
+        return "short"
+    return None
+
+
+@router.get("/scanner")
+def supertrend_scanner(
+    timeframe: str = Query("15m", pattern="^(1m|5m|15m|1h|4h|1d)$"),
+    limit: int = Query(30, ge=1, le=100),
+) -> dict[str, Any]:
+    """Per-pair signal proximity — multi-tf state of every whitelist pair.
+
+    Sorted by alignment_count desc, then |direction_score| desc, so the
+    pairs closest to firing land at the top.
+
+    Returns:
+      pairs        — list of {pair, alignment_count, likely_side, ...indicators}
+      n_pairs      — total whitelist size
+      timeframe    — echoed back
+      fetched_at   — ISO timestamp
+      errors       — per-pair fetch failures (empty when all succeed)
+
+    Best-effort: any failure returns empty list + error field, never 500.
+    """
+    out: dict[str, Any] = {
+        "pairs": [],
+        "timeframe": timeframe,
+        "fetched_at": datetime.now(timezone.utc).isoformat(),
+        "errors": {},
+    }
+
+    try:
+        wl = _ft_get("/api/v1/whitelist")
+    except Exception as e:
+        return {**out, "error": f"freqtrade /whitelist unreachable: {e}"}
+
+    pairs_raw = wl.get("whitelist") or []
+    out["n_pairs"] = len(pairs_raw)
+
+    # Fetch each pair's last candle. Sequential for simplicity — 30 pairs ×
+    # ~50ms = 1.5s, acceptable for an ops endpoint refreshed manually.
+    rows: list[dict[str, Any]] = []
+    for pair in pairs_raw[:limit]:
+        try:
+            cresp = _ft_get(
+                f"/api/v1/pair_candles?pair={pair}&timeframe={timeframe}&limit=1",
+                timeout=3.0,
+            )
+            indicators = _extract_last_row(cresp)
+        except Exception as e:
+            out["errors"][pair] = str(e)
+            continue
+        if not indicators:
+            out["errors"][pair] = "no candle data"
+            continue
+        rows.append({
+            "pair": pair,
+            "alignment_count": _alignment_count(indicators),
+            "likely_side": _likely_side(indicators),
+            **indicators,
+        })
+
+    # Surface near-firing pairs first
+    rows.sort(
+        key=lambda r: (
+            r["alignment_count"],
+            abs(r.get("direction_score") or 0.0),
+        ),
+        reverse=True,
+    )
+    out["pairs"] = rows
+    return out
+
+
+# =================================================================== #
 # /health
 # =================================================================== #
 @router.get("/health")
