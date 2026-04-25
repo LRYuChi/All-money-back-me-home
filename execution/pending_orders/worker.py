@@ -52,6 +52,12 @@ logger = logging.getLogger(__name__)
 # dependency on risk/ when guards aren't being used.
 ContextProvider = Callable[[PendingOrder], Any]
 
+# Caller's hook fired after a guard DENIES an order (round 26). Takes the
+# order + the full list of GuardDecision objects from the pipeline run.
+# Use this to disable strategies, fan out alerts, etc. Exceptions are
+# logged and swallowed — never let a buggy handler crash the worker.
+GuardSideEffectHandler = Callable[[PendingOrder, list], None]
+
 
 @dataclass(slots=True, frozen=True)
 class DispatchResult:
@@ -129,17 +135,25 @@ class PendingOrderWorker:
         idle_sleep_sec: float = 1.0,
         risk_pipeline: Any = None,                    # risk.guards.GuardPipeline | None
         context_provider: ContextProvider | None = None,
+        side_effect_handler: GuardSideEffectHandler | None = None,
     ) -> None:
         self._queue = queue
         self._dispatcher = dispatcher
         self._idle_sleep = idle_sleep_sec
         self._risk_pipeline = risk_pipeline
         self._context_provider = context_provider
+        self._side_effect_handler = side_effect_handler
         # Sanity: pipeline without context_provider can't run — fail loudly
         if risk_pipeline is not None and context_provider is None:
             raise ValueError(
                 "risk_pipeline requires context_provider — pipeline needs "
                 "a GuardContext per order to evaluate exposure / latency",
+            )
+        # side_effect_handler without a pipeline is useless — flag it
+        if side_effect_handler is not None and risk_pipeline is None:
+            raise ValueError(
+                "side_effect_handler requires risk_pipeline — handler is "
+                "only invoked on guard DENY, which can't happen without guards",
             )
         self._stats = {
             "claimed": 0,
@@ -150,6 +164,8 @@ class PendingOrderWorker:
             "dispatcher_errors": 0,
             "guard_denies": 0,
             "guard_scales": 0,
+            "side_effects_invoked": 0,
+            "side_effect_errors": 0,
         }
 
     @property
@@ -264,9 +280,26 @@ class PendingOrderWorker:
             self._stats["rejected"] += 1
             self._stats["guard_denies"] += 1
             logger.info("guard DENY id=%d → %s", order.id, reason)
+            self._invoke_side_effect(order, list(run.decisions))
             return True
 
         return False
+
+    def _invoke_side_effect(self, order: PendingOrder, decisions: list) -> None:
+        """Fire post-DENY hook (round 26). Exceptions are logged + swallowed
+        — handler bugs must not crash the worker. Pipeline-crash REJECTs
+        intentionally do NOT fire this (no real decision to react to)."""
+        if self._side_effect_handler is None:
+            return
+        try:
+            self._side_effect_handler(order, decisions)
+            self._stats["side_effects_invoked"] += 1
+        except Exception as e:
+            self._stats["side_effect_errors"] += 1
+            logger.exception(
+                "side_effect_handler raised on order id=%s: %s — ignoring",
+                order.id, e,
+            )
 
     def stats(self) -> dict[str, int]:
         return dict(self._stats)
@@ -312,8 +345,10 @@ class PendingOrderWorker:
 
 
 __all__ = [
+    "ContextProvider",
     "DispatchResult",
     "Dispatcher",
+    "GuardSideEffectHandler",
     "LogOnlyDispatcher",
     "PendingOrderWorker",
 ]

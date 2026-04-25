@@ -38,7 +38,7 @@
 | **D. AI + 融合** | ✅ basic | Regime ✅；SignalFuser ✅；**MarketContext provider (HL daily 200d + MA200/slope/vol/DD + 可選 VIX + TTL cache) ✅**；AI LLM 整合 ⬜ | R2 (LLM 供應) 仍待拍板 |
 | **E. 策略 DSL** | ✅ basic | DSL ✅；evaluator ✅；registry ✅；首個 prod 策略 ✅；e2e 整合 ✅；StrategyRuntime + daemon wiring ✅；daemon 接真實 regime ✅；**set_enabled + enable_history audit (migration 021) + admin CLI (list/enable/disable/history) ✅**；dashboard / 多策略 ⬜ | G9 trip 後可 actor="guard:..." 持久關閉 strategy；YAML re-upload 不會無聲解鎖 |
 | **F. 跨市場** | 🟡 | Pending Orders middleware ✅；Worker (LogOnly + CLI + async run_forever) ✅；**DispatcherRegistry (mode→factory + NotifyOnlyDispatcher + build_default_registry，shadow/paper/notify 已註冊，live 未註冊→exit 1) ✅**；OKX live adapter / IBKR / TW broker ⬜ | F.1 框架就緒；只剩各 exchange 具體 adapter |
-| **G. 風險統一** | ✅ basic | GuardPipeline + 7 guards ✅；Worker 接 pipeline ✅；PnL aggregator × 4 ✅；ExposureProvider × 4 + cli `--with-guards` ✅；daily_pnl_history + G9 ConsecutiveLossDays ✅；**SignalAgeProvider × 4 (lookups fused_signals.ts，per-id cache，fail-open) → G1 真實啟用 ✅**；G2/G7/G10 ⬜ | 7/10 guards 完整 + production wiring；G1 從 stub 升級為真實 latency check |
+| **G. 風險統一** | ✅ basic | GuardPipeline + 7 guards ✅；Worker 接 pipeline ✅；PnL aggregator × 4 ✅；ExposureProvider × 4 + cli `--with-guards` ✅；daily_pnl_history + G9 ConsecutiveLossDays ✅；SignalAgeProvider × 4 → G1 真實啟用 ✅；**GuardSideEffectHandler + make_g9_strategy_disabler + chain_handlers + cli `--auto-disable-on-g9` (G9 trip 自動 set_enabled，idempotent) ✅**；G2/G7/G10 ⬜ | 7/10 guards 完整 + side-effect 自動聯動 strategy registry |
 | **H. Live ramp** | ⬜ | — | — |
 
 ### ⏸ 待手動介入清單（loop 自動跳過）
@@ -78,7 +78,8 @@
 | (manual) | #24 | Phase F.1 框架 — DispatcherRegistry (mode→factory，replace 保護 + 不匹配 mode 警告) + NotifyOnlyDispatcher (shared.notifier 整合 + 失敗仍 FILLED + 結構化 data) + build_default_registry (shadow/paper→LogOnly，notify→NotifyOnly，live 不註冊強制 exit) + cli/work.py 走 registry 26 tests | ✅ 完成 |
 | (manual) | #25 | Phase E + G — set_enabled + enable_history (migration 021，actor/reason 必須記錄) + DB column 為 enabled source-of-truth (YAML re-upsert 不解鎖) + admin CLI (list/enable/disable/history) + 17 tests | ✅ 完成 |
 | ⏸ | — | **手動介入**：migration 021_strategy_enable_history.sql 需在 Supabase Dashboard SQL Editor 套用 | ⏸ |
-| — | — | **下輪待辦**：Audit log hook (round 7 leftover) OR G7 CorrelationCap 雛形 OR OKX adapter scaffolding (F.1 第一步) OR daemon 自動接 G9 trip → set_enabled (整合層) | ⬜ |
+| (manual) | #26 | Phase G 整合層 — GuardSideEffectHandler 抽象 (worker 構造參數，pipeline crash 不觸發) + make_g9_strategy_disabler (idempotent，audit row prefix=G9 trip:) + chain_handlers + cli `--auto-disable-on-g9` 19 tests，全 271 tests 綠 | ✅ 完成 |
+| — | — | **下輪待辦**：Audit log hook (round 7 leftover) OR G7 CorrelationCap 雛形 OR OKX adapter scaffolding (F.1 第一步) OR Notifier 在 G9 trip 時推播警報 (chain_handlers 第二個 handler 的範例) | ⬜ |
 
 ---
 

@@ -65,6 +65,11 @@ from risk.signal_age_provider import (
     SupabaseSignalAgeProvider,
     build_signal_age_provider,
 )
+from risk.side_effects import (
+    GuardSideEffectHandler,
+    chain_handlers,
+    make_g9_strategy_disabler,
+)
 
 __all__ = [
     # framework
@@ -104,4 +109,8 @@ __all__ = [
     "SupabaseSignalAgeProvider",
     "PostgresSignalAgeProvider",
     "build_signal_age_provider",
+    # side effects (G9 auto-disable etc.)
+    "GuardSideEffectHandler",
+    "chain_handlers",
+    "make_g9_strategy_disabler",
 ]

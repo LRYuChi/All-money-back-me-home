@@ -43,8 +43,10 @@ from risk import (
     build_pnl_aggregator,
     build_signal_age_provider,
     make_context_provider,
+    make_g9_strategy_disabler,
 )
 from smart_money.config import settings
+from strategy_engine.registry import build_registry
 
 logger = logging.getLogger(__name__)
 
@@ -108,6 +110,11 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument(
         "--consecutive-loss-days", type=int, default=3,
         help="G9 consecutive losing days threshold (default 3 — matches D7).",
+    )
+    p.add_argument(
+        "--auto-disable-on-g9", action="store_true",
+        help="When G9 trips, disable the order's strategy in the registry "
+             "(audit row written via set_enabled). Manual unlock required.",
     )
     p.add_argument("--log-level", default="INFO",
                    choices=["DEBUG", "INFO", "WARNING", "ERROR"])
@@ -186,14 +193,23 @@ async def run_worker(args: argparse.Namespace) -> int:
 
     pipeline = None
     context_provider = None
+    side_effect_handler = None
     if args.with_guards:
         pipeline, context_provider = _build_guard_pipeline(args)
+        if args.auto_disable_on_g9:
+            registry = build_registry(settings)
+            side_effect_handler = make_g9_strategy_disabler(registry)
+            logger.info(
+                "G9 auto-disable enabled — strategies will be set_enabled=False "
+                "in registry on consecutive_loss_cb DENY",
+            )
 
     worker = PendingOrderWorker(
         queue, dispatcher,
         idle_sleep_sec=args.idle_sleep,
         risk_pipeline=pipeline,
         context_provider=context_provider,
+        side_effect_handler=side_effect_handler,
     )
 
     if args.process_once:
