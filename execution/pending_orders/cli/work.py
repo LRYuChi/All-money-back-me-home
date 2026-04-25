@@ -4,13 +4,15 @@ Usage:
     python -m execution.pending_orders.cli.work --mode shadow
     python -m execution.pending_orders.cli.work --mode shadow --process-once
 
-For shadow / notify modes the LogOnlyDispatcher is used (no exchange
-contact). Phase F.1 adds OKX live dispatcher; this CLI will accept
---dispatcher live to switch.
+Dispatcher selection (round 24): the worker looks up the dispatcher for
+`--mode` via `build_default_registry(settings)`:
+    shadow / paper → LogOnlyDispatcher (no exchange contact)
+    notify         → NotifyOnlyDispatcher (push via shared.notifier)
+    live           → not registered yet → exits 1 (Phase F.1 adds it)
 
 Exit codes:
     0  — clean shutdown (SIGINT/SIGTERM or --process-once with 0 work)
-    1  — IO setup failure (queue not configured)
+    1  — IO setup failure (queue not configured) or unsupported mode
     2  — invalid args
 """
 from __future__ import annotations
@@ -22,9 +24,10 @@ import signal
 import sys
 
 from execution.pending_orders import (
-    LogOnlyDispatcher,
     NoOpPendingOrderQueue,
     PendingOrderWorker,
+    UnsupportedModeError,
+    build_default_registry,
     build_queue,
 )
 from risk import (
@@ -168,9 +171,18 @@ async def run_worker(args: argparse.Namespace) -> int:
         )
         return 1
 
-    # Phase F round 17 ships LogOnlyDispatcher only. Phase F.1 will add
-    # OKXLiveDispatcher and choose based on --mode.
-    dispatcher = LogOnlyDispatcher(mode=args.mode)
+    # Round 24: dispatchers are looked up via the registry. Default
+    # registry wires shadow/paper → LogOnly, notify → NotifyOnly, leaves
+    # `live` unregistered until Phase F.1 adds OKXLiveDispatcher.
+    registry = build_default_registry(settings)
+    try:
+        dispatcher = registry.build(args.mode)
+    except UnsupportedModeError as e:
+        logger.error(
+            "worker: %s — exiting. Phase F.1 will add the live dispatcher.",
+            e,
+        )
+        return 1
 
     pipeline = None
     context_provider = None

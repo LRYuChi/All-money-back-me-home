@@ -32,6 +32,13 @@ from execution.pending_orders.worker import (
     LogOnlyDispatcher,
     PendingOrderWorker,
 )
+from execution.pending_orders.registry import (
+    DispatcherFactory,
+    DispatcherRegistry,
+    NotifyOnlyDispatcher,
+    UnsupportedModeError,
+    build_default_registry,
+)
 
 __all__ = [
     # types
@@ -54,4 +61,10 @@ __all__ = [
     "Dispatcher",
     "LogOnlyDispatcher",
     "PendingOrderWorker",
+    # dispatcher registry (mode → factory)
+    "DispatcherFactory",
+    "DispatcherRegistry",
+    "NotifyOnlyDispatcher",
+    "UnsupportedModeError",
+    "build_default_registry",
 ]
