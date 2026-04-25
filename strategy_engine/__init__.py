@@ -51,6 +51,7 @@ from strategy_engine.evaluator import (
     should_exit,
 )
 from strategy_engine.registry import (
+    EnableEvent,
     InMemoryStrategyRegistry,
     PostgresStrategyRegistry,
     StrategyNotFound,
@@ -69,6 +70,7 @@ from strategy_engine.runtime import (
 __all__ = [
     "CapitalProvider",
     "DSLError",
+    "EnableEvent",
     "EntryRules",
     "EvaluationError",
     "ExitRules",
