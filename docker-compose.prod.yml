@@ -121,9 +121,41 @@ services:
       - FREQTRADE__TELEGRAM__ENABLED=true
       - FREQTRADE__TELEGRAM__TOKEN=${TELEGRAM_TOKEN}
       - FREQTRADE__TELEGRAM__CHAT_ID=${TELEGRAM_CHAT_ID}
-      # P1-6: live mode switch — set SUPERTREND_LIVE=1 in .env for real trading.
-      # Default unset = dry_run mode (paper trading).
+      # ============================================================
+      # SUPERTREND_* switchboard — all R47–R58 escape hatches.
+      # Defaults are SAFE (= existing behavior). Operators flip these in .env
+      # to opt into new alpha sources or change sizing modes. Each is
+      # independently togglable and reverts to the legacy path when unset.
+      # ============================================================
+      # P1-6 (R47): live mode switch — 1 = real money, 0 = dry_run paper trading
       - SUPERTREND_LIVE=${SUPERTREND_LIVE:-0}
+      # R48: market regime gate (BTC ATR/ADX/Hurst → TRENDING/CHOPPY/DEAD).
+      #   1 = active (default; sizes down in CHOPPY, blocks in DEAD)
+      #   0 = bypass entirely (legacy behavior, no regime context)
+      - SUPERTREND_REGIME_FILTER=${SUPERTREND_REGIME_FILTER:-1}
+      # R49: Kelly fraction mode for tag-conditioned sizing.
+      #   three_stage  = pre_scout/scout/confirmed → 0.25/0.50/0.85 (default, recommended)
+      #   continuous   = kelly × quality × |dir_score| × adx_norm (smoothest, most aggressive)
+      #   binary       = legacy 0.25/0.75 only (use to A/B revert)
+      - SUPERTREND_KELLY_MODE=${SUPERTREND_KELLY_MODE:-three_stage}
+      # R50: exit policy — weighted multi-signal score vs single-tf flip.
+      #   weighted = 1D/4H/15m/ADX scored, full-exit ≥ 0.75 / partial 0.50–0.75 (default)
+      #   legacy   = original single-tf flip (kept for emergency revert)
+      - SUPERTREND_EXIT_MODE=${SUPERTREND_EXIT_MODE:-weighted}
+      # R57: funding-rate contra-signal entry filter (NEW — default OFF).
+      #   1 = block entries when |FR strength| ≥ 0.5 opposing intended side
+      #   0 = ignore funding rate at entry time (existing behavior)
+      - SUPERTREND_FR_ALPHA=${SUPERTREND_FR_ALPHA:-0}
+      # R57: orderbook microstructure entry confirm (NEW — default OFF).
+      #   1 = fetch dp.orderbook(maximum=10), abort entry on strong contra-imbalance
+      #   0 = skip the REST call, no orderbook gate
+      - SUPERTREND_ORDERBOOK_CONFIRM=${SUPERTREND_ORDERBOOK_CONFIRM:-0}
+      # R58: correlation cluster + rotation sizing (NEW — default OFF).
+      #   1 = block when n_open≥2 + mean ρ≥0.85; apply BTC/alt rotation multiplier
+      #   0 = no correlation gate, all stakes flat (existing behavior)
+      - SUPERTREND_CORRELATION_FILTER=${SUPERTREND_CORRELATION_FILTER:-0}
+      # Journal location — kept on host volume so dashboard/cron sidecar can read it
+      - SUPERTREND_JOURNAL_DIR=${SUPERTREND_JOURNAL_DIR:-/freqtrade/trading_log/journal}
       - SUPABASE_URL=${SUPABASE_URL}
       - SUPABASE_KEY=${SUPABASE_SERVICE_ROLE_KEY}
     ports:
