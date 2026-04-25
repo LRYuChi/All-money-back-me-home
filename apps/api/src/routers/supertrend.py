@@ -33,7 +33,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
-from fastapi import APIRouter, Query
+from fastapi import APIRouter, Body, HTTPException, Query
 
 logger = logging.getLogger(__name__)
 
@@ -395,6 +395,22 @@ def _ft_get(path: str, *, timeout: float = 5.0) -> Any:
         return _json.loads(resp.read().decode())
 
 
+def _ft_post(path: str, body: dict, *, timeout: float = 10.0) -> Any:
+    """POST freqtrade REST endpoint with JSON body, raises on HTTP error."""
+    import json as _json
+    import urllib.request
+    headers = _ft_auth_headers()
+    headers["Content-Type"] = "application/json"
+    req = urllib.request.Request(
+        f"{_ft_api_url()}{path}",
+        data=_json.dumps(body).encode(),
+        headers=headers,
+        method="POST",
+    )
+    with urllib.request.urlopen(req, timeout=timeout) as resp:
+        return _json.loads(resp.read().decode())
+
+
 def _extract_last_row(candle_resp: dict) -> dict[str, Any]:
     """freqtrade /pair_candles returns {"data": [[...], ...], "columns": [...]}.
     Pull the last row, return a name→value dict for our SCANNER_FIELDS."""
@@ -732,6 +748,124 @@ def supertrend_operations(
     )
     out["alert_count"] = len(out["alerts"])
     out["status"] = "ok" if not out["alerts"] else "degraded"
+    return out
+
+
+# =================================================================== #
+# /force_entry — R70 — manual end-to-end smoke test
+# =================================================================== #
+def _verify_entry_in_journal(pair: str, timeout_sec: float = 10.0,
+                              poll_interval: float = 1.0) -> dict[str, Any] | None:
+    """Poll journal for an EntryEvent matching pair, written within
+    `timeout_sec` of now. Returns the row dict or None if not found in time."""
+    import time as _time
+
+    journal_dir = _resolve_journal_dir()
+    if not journal_dir.exists():
+        return None
+
+    try:
+        from strategies.journal import TradeJournal
+    except ImportError:
+        return None
+
+    journal = TradeJournal(journal_dir)
+    deadline = _time.monotonic() + timeout_sec
+    cutoff = datetime.now(timezone.utc) - timedelta(seconds=30)
+
+    while _time.monotonic() < deadline:
+        try:
+            rows = journal.read_range(from_date=cutoff)
+            for r in reversed(rows):   # newest first
+                if r.get("event_type") == "entry" and r.get("pair") == pair:
+                    return r
+        except Exception:
+            pass
+        _time.sleep(poll_interval)
+    return None
+
+
+@router.post("/force_entry")
+def supertrend_force_entry(
+    pair: str = Query(..., description="Pair to force-enter, e.g. BTC/USDT:USDT"),
+    side: str = Query("long", pattern="^(long|short)$"),
+    stake_amount: float | None = Query(
+        None, description="Override stake (USDT). Default: use strategy logic.",
+    ),
+    verify_journal: bool = Query(
+        True, description="Poll journal up to 10s for the EntryEvent",
+    ),
+) -> dict[str, Any]:
+    """R70 — Manually trigger an entry to smoke-test the full execution chain.
+
+    Wraps freqtrade's POST /api/v1/forceenter. Default DISABLED via
+    SUPERTREND_FORCE_ENTRY_ENABLED env (must be set to "1" to allow).
+    Even when enabled, only meaningful in dry-run mode — production
+    operators should NEVER set both LIVE=1 AND FORCE_ENTRY=1 simultaneously.
+
+    Returns:
+      forceenter_response  — raw freqtrade reply
+      journal_entry        — dict (if verify_journal=True and found)
+      verified             — bool whether journal write succeeded
+      duration_ms          — round-trip including journal verification
+    """
+    import time as _time
+
+    if os.environ.get("SUPERTREND_FORCE_ENTRY_ENABLED", "0") != "1":
+        raise HTTPException(
+            status_code=403,
+            detail=(
+                "force_entry disabled — set SUPERTREND_FORCE_ENTRY_ENABLED=1 "
+                "in .env and restart the api container to enable. "
+                "Use only in dry-run mode for end-to-end smoke testing."
+            ),
+        )
+
+    # SAFETY: refuse if bot is in live-trading mode
+    try:
+        cfg = _ft_get("/api/v1/show_config", timeout=3.0)
+        if cfg and cfg.get("dry_run") is False:
+            raise HTTPException(
+                status_code=403,
+                detail=(
+                    "REFUSED: bot is in LIVE mode (dry_run=False). "
+                    "force_entry is dry-run-only. Set SUPERTREND_LIVE=0 "
+                    "or do not invoke this endpoint in production."
+                ),
+            )
+    except HTTPException:
+        raise
+    except Exception as e:
+        # Continue if probe failed — bot likely OK, log decision
+        logger.warning("force_entry pre-flight show_config failed: %s", e)
+
+    started = _time.monotonic()
+    body: dict[str, Any] = {"pair": pair, "side": side}
+    if stake_amount is not None:
+        body["stakeamount"] = stake_amount
+
+    out: dict[str, Any] = {
+        "pair": pair, "side": side,
+        "stake_override": stake_amount,
+    }
+    try:
+        resp = _ft_post("/api/v1/forceenter", body, timeout=15.0)
+        out["forceenter_response"] = resp
+    except Exception as e:
+        out["error"] = f"freqtrade /forceenter failed: {e}"
+        out["verified"] = False
+        out["duration_ms"] = int((_time.monotonic() - started) * 1000)
+        return out
+
+    # Verify the entry chain wrote to journal (R46 EntryEvent)
+    if verify_journal:
+        ev = _verify_entry_in_journal(pair, timeout_sec=10.0)
+        out["journal_entry"] = ev
+        out["verified"] = ev is not None
+    else:
+        out["verified"] = None
+
+    out["duration_ms"] = int((_time.monotonic() - started) * 1000)
     return out
 
 

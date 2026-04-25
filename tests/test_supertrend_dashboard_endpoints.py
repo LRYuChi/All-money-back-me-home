@@ -17,7 +17,8 @@ if str(_API_SRC) not in sys.path:
 def _import_router():
     from src.routers.supertrend import (
         _alignment_count, _build_ops_alerts, _extract_last_row, _likely_side,
-        _resolve_journal_dir, router, supertrend_evaluations, supertrend_health,
+        _resolve_journal_dir, _verify_entry_in_journal, router,
+        supertrend_evaluations, supertrend_force_entry, supertrend_health,
         supertrend_operations, supertrend_scanner, supertrend_skipped,
         supertrend_snapshot, supertrend_trades,
     )
@@ -30,18 +31,20 @@ def _import_router():
         "scanner": supertrend_scanner,
         "evaluations": supertrend_evaluations,
         "operations": supertrend_operations,
+        "force_entry": supertrend_force_entry,
         "health": supertrend_health,
         "alignment_count": _alignment_count,
         "likely_side": _likely_side,
         "extract_last_row": _extract_last_row,
         "build_ops_alerts": _build_ops_alerts,
+        "verify_entry_in_journal": _verify_entry_in_journal,
     }
 
 
 # =================================================================== #
 # Router structure
 # =================================================================== #
-def test_router_has_8_endpoints():
+def test_router_has_9_endpoints():
     mod = _import_router()
     paths = {r.path for r in mod["router"].routes}
     assert paths == {
@@ -52,14 +55,30 @@ def test_router_has_8_endpoints():
         "/api/supertrend/scanner",
         "/api/supertrend/evaluations",
         "/api/supertrend/operations",
+        "/api/supertrend/force_entry",
         "/api/supertrend/health",
     }
 
 
-def test_router_endpoints_all_GET():
+def test_force_entry_route_is_post():
+    mod = _import_router()
+    fe_route = next(
+        r for r in mod["router"].routes
+        if r.path == "/api/supertrend/force_entry"
+    )
+    assert "POST" in fe_route.methods
+
+
+def test_router_endpoints_method_invariants():
+    """All read-only endpoints are GET; only force_entry (R70 — mutating
+    smoke test) is POST. Asserts both invariants explicitly so a future
+    accidental verb flip is caught."""
     mod = _import_router()
     for r in mod["router"].routes:
-        assert "GET" in r.methods
+        if r.path == "/api/supertrend/force_entry":
+            assert r.methods == {"POST"}
+        else:
+            assert "GET" in r.methods
 
 
 # =================================================================== #
@@ -934,3 +953,159 @@ def test_operations_includes_switchboard_view(monkeypatch, tmp_path):
     # Defaults preserved for unset
     assert sw["live_mode"] == "0"
     assert sw["regime_filter"] == "1"
+
+
+# =================================================================== #
+# /force_entry — R70
+# =================================================================== #
+def test_force_entry_disabled_by_default(monkeypatch):
+    """SUPERTREND_FORCE_ENTRY_ENABLED unset → 403."""
+    from fastapi import HTTPException
+    monkeypatch.delenv("SUPERTREND_FORCE_ENTRY_ENABLED", raising=False)
+    mod = _import_router()
+    with pytest.raises(HTTPException) as exc:
+        mod["force_entry"](
+            pair="BTC/USDT:USDT", side="long",
+            stake_amount=None, verify_journal=False,
+        )
+    assert exc.value.status_code == 403
+    assert "force_entry disabled" in str(exc.value.detail).lower()
+
+
+def test_force_entry_disabled_when_env_zero(monkeypatch):
+    from fastapi import HTTPException
+    monkeypatch.setenv("SUPERTREND_FORCE_ENTRY_ENABLED", "0")
+    mod = _import_router()
+    with pytest.raises(HTTPException) as exc:
+        mod["force_entry"](
+            pair="BTC/USDT:USDT", side="long",
+            stake_amount=None, verify_journal=False,
+        )
+    assert exc.value.status_code == 403
+
+
+def test_force_entry_refuses_in_live_mode(monkeypatch):
+    """If freqtrade reports dry_run=False, refuse."""
+    from fastapi import HTTPException
+    from unittest.mock import patch
+    monkeypatch.setenv("SUPERTREND_FORCE_ENTRY_ENABLED", "1")
+    mod = _import_router()
+    with patch(
+        "src.routers.supertrend._ft_get",
+        return_value={"dry_run": False, "state": "running"},
+    ):
+        with pytest.raises(HTTPException) as exc:
+            mod["force_entry"](
+                pair="BTC/USDT:USDT", side="long",
+                stake_amount=None, verify_journal=False,
+            )
+    assert exc.value.status_code == 403
+    assert "live mode" in str(exc.value.detail).lower()
+
+
+def test_force_entry_succeeds_in_dry_run(monkeypatch):
+    from unittest.mock import patch
+    monkeypatch.setenv("SUPERTREND_FORCE_ENTRY_ENABLED", "1")
+    mod = _import_router()
+    with patch(
+        "src.routers.supertrend._ft_get",
+        return_value={"dry_run": True, "state": "running"},
+    ), patch(
+        "src.routers.supertrend._ft_post",
+        return_value={"status": "Order forced"},
+    ):
+        out = mod["force_entry"](
+            pair="BTC/USDT:USDT", side="long",
+            stake_amount=None, verify_journal=False,
+        )
+    assert out["pair"] == "BTC/USDT:USDT"
+    assert out["side"] == "long"
+    assert out["forceenter_response"] == {"status": "Order forced"}
+    assert "duration_ms" in out
+
+
+def test_force_entry_passes_stake_override(monkeypatch):
+    from unittest.mock import patch
+    monkeypatch.setenv("SUPERTREND_FORCE_ENTRY_ENABLED", "1")
+    mod = _import_router()
+    captured_body = {}
+
+    def fake_post(path, body, **kw):
+        captured_body.update({"path": path, "body": body})
+        return {"status": "OK"}
+
+    with patch(
+        "src.routers.supertrend._ft_get",
+        return_value={"dry_run": True},
+    ), patch(
+        "src.routers.supertrend._ft_post",
+        side_effect=fake_post,
+    ):
+        mod["force_entry"](
+            pair="ETH/USDT:USDT", side="short",
+            stake_amount=250.0, verify_journal=False,
+        )
+    assert captured_body["path"] == "/api/v1/forceenter"
+    assert captured_body["body"]["stakeamount"] == 250.0
+    assert captured_body["body"]["side"] == "short"
+
+
+def test_force_entry_returns_error_on_freqtrade_failure(monkeypatch):
+    from unittest.mock import patch
+    monkeypatch.setenv("SUPERTREND_FORCE_ENTRY_ENABLED", "1")
+    mod = _import_router()
+    with patch(
+        "src.routers.supertrend._ft_get",
+        return_value={"dry_run": True},
+    ), patch(
+        "src.routers.supertrend._ft_post",
+        side_effect=RuntimeError("max_open_trades reached"),
+    ):
+        out = mod["force_entry"](
+            pair="BTC/USDT:USDT", side="long",
+            stake_amount=None, verify_journal=False,
+        )
+    assert "error" in out
+    assert "max_open_trades" in out["error"]
+    assert out["verified"] is False
+
+
+def test_verify_entry_in_journal_finds_match(monkeypatch, tmp_path):
+    from datetime import datetime, timezone
+    from strategies.journal import TradeJournal
+    monkeypatch.setenv("SUPERTREND_JOURNAL_DIR", str(tmp_path))
+    j = TradeJournal(tmp_path)
+    j.write({
+        "event_type": "entry",
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+        "pair": "BTC/USDT:USDT", "side": "long",
+    })
+    mod = _import_router()
+    res = mod["verify_entry_in_journal"]("BTC/USDT:USDT", timeout_sec=2.0,
+                                          poll_interval=0.1)
+    assert res is not None
+    assert res["pair"] == "BTC/USDT:USDT"
+
+
+def test_verify_entry_in_journal_returns_none_on_no_match(monkeypatch, tmp_path):
+    from datetime import datetime, timezone
+    from strategies.journal import TradeJournal
+    monkeypatch.setenv("SUPERTREND_JOURNAL_DIR", str(tmp_path))
+    j = TradeJournal(tmp_path)
+    j.write({
+        "event_type": "entry",
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+        "pair": "ETH/USDT:USDT", "side": "long",   # different pair
+    })
+    mod = _import_router()
+    res = mod["verify_entry_in_journal"]("BTC/USDT:USDT", timeout_sec=1.0,
+                                          poll_interval=0.1)
+    assert res is None
+
+
+def test_verify_entry_handles_missing_journal_dir(monkeypatch, tmp_path):
+    monkeypatch.setenv("SUPERTREND_JOURNAL_DIR", str(tmp_path / "nope"))
+    mod = _import_router()
+    res = mod["verify_entry_in_journal"]("BTC/USDT:USDT", timeout_sec=0.5,
+                                          poll_interval=0.1)
+    assert res is None

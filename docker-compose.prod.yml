@@ -65,6 +65,9 @@ services:
       - SUPERTREND_JOURNAL_DIR=/app/trading_log/journal
       # R62: scanner endpoint hits freqtrade REST via compose-internal DNS
       - FREQTRADE_API_URL=http://freqtrade:8080
+      # R70: manual end-to-end smoke-test endpoint. ONLY enable in
+      # dry-run mode; endpoint refuses if dry_run=False. Default OFF.
+      - SUPERTREND_FORCE_ENTRY_ENABLED=${SUPERTREND_FORCE_ENTRY_ENABLED:-0}
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health', timeout=3)"]
       interval: 30s
