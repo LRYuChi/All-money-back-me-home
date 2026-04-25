@@ -35,7 +35,12 @@ from fusion import (
     load_weights,
     yfinance_vix_provider,
 )
-from execution.pending_orders import build_queue, make_intent_callback
+from execution.pending_orders import (
+    NoOpIntentDeduper,
+    WindowedIntentDeduper,
+    build_queue,
+    make_intent_callback,
+)
 from fusion.regime import MarketContext
 from shared.signals.adapters import from_smart_money
 from shared.signals.history import SignalHistoryWriter, build_writer, record_safe
@@ -149,9 +154,34 @@ def build_parser() -> argparse.ArgumentParser:
         help="Execution mode tagged on every pending_order produced by "
              "the strategy runtime (default shadow).",
     )
+    parser.add_argument(
+        "--intent-dedup-window-sec",
+        type=float,
+        default=60.0,
+        help="Round 44 intent dedup: skip a (strategy, symbol, side) "
+             "intent if an identical one was enqueued within N seconds. "
+             "0 = disabled. Default 60s — covers double-fire from "
+             "WebSocket reconnects, signal aggregator double-counts, "
+             "and tight-cluster wallet events.",
+    )
     parser.add_argument("--log-level", default="INFO",
                         choices=["DEBUG", "INFO", "WARNING", "ERROR"])
     return parser
+
+
+def _build_deduper(window_sec: float):
+    """Round 45: pick the right IntentDeduper for the configured window.
+
+    window_sec ≤ 0 → NoOp (dedup disabled). Negative isn't a meaningful
+    "even more disabled"; we treat it identically to 0 to keep the CLI
+    forgiving.
+
+    Factored out for testability: lets the wiring test verify type
+    selection without spinning up the full runtime.
+    """
+    if window_sec > 0:
+        return WindowedIntentDeduper(window_sec=window_sec)
+    return NoOpIntentDeduper()
 
 
 def _maybe_build_strategy_runtime(args: argparse.Namespace) -> StrategyRuntime | None:
@@ -213,7 +243,14 @@ def _maybe_build_strategy_runtime(args: argparse.Namespace) -> StrategyRuntime |
     # CLI flag — `shadow` for first deployment, `paper`/`live` after Phase F
     # adapters land. NoOp queue (when DB not configured) just logs.
     queue = build_queue(settings)
-    on_intent = make_intent_callback(queue, mode=args.intent_mode)
+
+    # Round 45: wire intent dedup so a strategy double-firing within
+    # window_sec doesn't open two positions. window=0 disables.
+    deduper = _build_deduper(args.intent_dedup_window_sec)
+
+    on_intent = make_intent_callback(
+        queue, mode=args.intent_mode, deduper=deduper,
+    )
 
     runtime = StrategyRuntime(
         registry=registry,
@@ -224,9 +261,11 @@ def _maybe_build_strategy_runtime(args: argparse.Namespace) -> StrategyRuntime |
     )
     logger.info(
         "strategy runtime: enabled (%d active strategies, capital=$%.0f, "
-        "context_provider=%s, queue=%s, intent_mode=%s)",
+        "context_provider=%s, queue=%s, intent_mode=%s, "
+        "dedup=%s window=%.0fs)",
         len(active), capital, type(context_provider).__name__,
         type(queue).__name__, args.intent_mode,
+        type(deduper).__name__, args.intent_dedup_window_sec,
     )
     return runtime
 
