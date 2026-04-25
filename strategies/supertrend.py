@@ -68,6 +68,21 @@ try:
 except Exception as _e:   # pragma: no cover — defensive
     _journal = None
 
+# Round 48: market regime filter (system-wide context — gates entries
+# during prolonged chop / dead-vol periods). Escape hatch:
+# SUPERTREND_REGIME_FILTER=0 returns NoOp detector (always TRENDING).
+try:
+    from strategies.market_regime import (
+        MarketRegimeDetector,
+        NoOpRegimeDetector,
+        Regime,
+        RegimeSnapshot,
+        SizingAdjustment,
+    )
+    _REGIME_AVAILABLE = True
+except Exception:
+    _REGIME_AVAILABLE = False
+
 logger = logging.getLogger(__name__)
 
 
@@ -545,6 +560,47 @@ class SupertrendStrategy(IStrategy):
     _CB_LOSS_STREAK = 3
     _CB_COOLDOWN_HOURS = 12
 
+    # R48: Market regime detector (lazy-init on first use). Escape hatch:
+    # SUPERTREND_REGIME_FILTER=0 → uses NoOp (always TRENDING). Pulls
+    # BTC daily candles via dp.get_pair_dataframe so we don't need extra
+    # HTTP plumbing; cached internally for 5 min.
+    _regime_detector_cache: object | None = None
+
+    def _get_regime_detector(self):
+        """Lazy-construct + cache the regime detector. The factory pattern
+        lets us swap in NoOp via env var without restart."""
+        if self._regime_detector_cache is not None:
+            return self._regime_detector_cache
+        if not _REGIME_AVAILABLE:
+            return None
+        if os.environ.get("SUPERTREND_REGIME_FILTER", "1").strip() in ("0", "false", "False"):
+            self._regime_detector_cache = NoOpRegimeDetector()
+            logger.info(
+                "regime filter: DISABLED via SUPERTREND_REGIME_FILTER=0 — "
+                "NoOp detector returns TRENDING always",
+            )
+            return self._regime_detector_cache
+
+        def _fetch_btc_daily():
+            df = self.dp.get_pair_dataframe(pair="BTC/USDT:USDT", timeframe="1d")
+            return df if df is not None and len(df) > 0 else None
+
+        self._regime_detector_cache = MarketRegimeDetector(
+            _fetch_btc_daily, ttl_seconds=300.0,
+        )
+        return self._regime_detector_cache
+
+    def _current_regime_snapshot(self):
+        """Returns RegimeSnapshot or None if detector unavailable."""
+        det = self._get_regime_detector()
+        if det is None:
+            return None
+        try:
+            return det.detect()
+        except Exception as e:
+            logger.warning("regime detect failed: %s", e)
+            return None
+
     # P1-4 (round 47): Direction concentration cap.
     # max_open_trades=3 means we can hold up to 3 positions simultaneously.
     # Without this guard, all 3 could be the same side (3 longs in a bull
@@ -598,7 +654,21 @@ class SupertrendStrategy(IStrategy):
             from datetime import timezone as _tz
             last_close = last_close.replace(tzinfo=_tz.utc)
         elapsed = (current_time - last_close).total_seconds()
-        return elapsed < self._CB_COOLDOWN_HOURS * 3600
+
+        # R48: regime-aware cooldown.
+        # TRENDING:           6h  (recover fast — losses likely noise)
+        # VOLATILE_TRENDING: 12h  (default)
+        # CHOPPY:            48h  (don't restart into chop)
+        # DEAD:              72h  (no point — entries blocked anyway)
+        cooldown_hours = self._CB_COOLDOWN_HOURS
+        try:
+            regime_snap = self._current_regime_snapshot()
+            if regime_snap is not None and _REGIME_AVAILABLE:
+                adj = SizingAdjustment.for_regime(regime_snap.regime)
+                cooldown_hours = adj.cooldown_hours
+        except Exception:
+            pass
+        return elapsed < cooldown_hours * 3600
 
     def custom_stake_amount(self, current_time: datetime, current_rate: float,
                             proposed_stake: float, min_stake: float | None,
@@ -608,8 +678,43 @@ class SupertrendStrategy(IStrategy):
 
         P0-4: bail out early if account-level circuit breaker is tripped.
         P1-4 (round 47): bail out if same-side concentration cap hit.
+        R48: market regime check — DEAD blocks, CHOPPY shrinks heavily.
         Returning 0 causes Freqtrade to skip this entry attempt.
         """
+        # R48: market regime check (system-wide context)
+        regime_snap = self._current_regime_snapshot()
+        regime_adj = None
+        if regime_snap is not None and _REGIME_AVAILABLE:
+            regime_adj = SizingAdjustment.for_regime(regime_snap.regime)
+            if regime_adj.block_new_entries:
+                logger.warning(
+                    "Regime DEAD — blocking entry on %s. %s",
+                    kwargs.get("pair", ""), regime_snap.as_compact_str(),
+                )
+                try:
+                    pair = kwargs.get("pair", "")
+                    _safe_journal_write(SkippedEvent(
+                        timestamp=now_iso(),
+                        pair=pair, side=side or "unknown",
+                        reason=(
+                            f"regime: {regime_snap.regime.value} "
+                            f"(ATR={regime_snap.atr_price_ratio:.2%}, "
+                            f"ADX={regime_snap.adx_30d_median:.1f}, "
+                            f"H={regime_snap.hurst_exponent:.2f})"
+                        ),
+                        state=MultiTfState(),
+                        note="R48 regime gate — DEAD market",
+                    ))
+                    _send_to_all_bots(
+                        f"💀 *Regime: DEAD*\n"
+                        f"BTC {regime_snap.as_compact_str()}\n"
+                        f"已跳過: `{pair}` ({side or '?'})\n"
+                        f"市場無 edge，全停新進場"
+                    )
+                except Exception as e:
+                    logger.warning("regime journal/alert failed: %s", e)
+                return 0.0
+
         # P1-4: direction concentration cap
         if self._direction_concentration_blocked(side):
             logger.warning(
@@ -667,6 +772,16 @@ class SupertrendStrategy(IStrategy):
 
         target_pct = self._calc_rolling_kelly()
         target_pct = max(0.03, min(target_pct, 0.20))
+
+        # R48: regime-aware sizing multiplier
+        # TRENDING 1.0 / VOLATILE_TRENDING 0.7 / CHOPPY 0.3 / DEAD 0 (handled above)
+        if regime_adj is not None:
+            target_pct *= regime_adj.kelly_multiplier
+            logger.debug(
+                "regime sizing: regime=%s mult=%.2f → target_pct=%.4f",
+                regime_snap.regime.value if regime_snap else "?",
+                regime_adj.kelly_multiplier, target_pct,
+            )
 
         # Scout gets 25% of Kelly, confirmed gets 75%
         if entry_tag == "scout":
@@ -795,6 +910,13 @@ class SupertrendStrategy(IStrategy):
         kelly_scaled = kelly_full * (0.25 if entry_tag == "scout" else 0.75)
         quality_scale = 0.7 + state.trend_quality * 0.6
 
+        # R48: pull current regime for journal context
+        regime_snap = self._current_regime_snapshot()
+        regime_str = (
+            regime_snap.as_compact_str() if regime_snap is not None
+            else "unknown"
+        )
+
         # Persist the entry event (journal failures silently ignored)
         try:
             _safe_journal_write(EntryEvent(
@@ -814,7 +936,7 @@ class SupertrendStrategy(IStrategy):
                 kelly_window=self._KELLY_LOOKBACK,
                 quality_scale=quality_scale,
                 cb_active=False,   # if cb_active we wouldn't be here
-                note=f"Entry {entry_tag} {side} @ {rate:.4f}",
+                note=f"Entry {entry_tag} {side} @ {rate:.4f} | regime={regime_str}",
             ))
         except Exception as e:
             logger.warning("entry journal write failed: %s", e)
@@ -859,7 +981,9 @@ class SupertrendStrategy(IStrategy):
             f"| ADX: `{state.adx:.1f}`\n"
             f"   ATR: `{state.atr:.4f}` | FR: `{state.funding_rate:+.4%}`\n"
             f"\n"
-            f"策略: Supertrend 4L Scout (R46)"
+            f"🌐 *市場 Regime*: `{regime_str}`\n"
+            f"\n"
+            f"策略: Supertrend 4L Scout (R48)"
         )
         return True
 
