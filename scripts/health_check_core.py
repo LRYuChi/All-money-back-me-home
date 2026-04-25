@@ -69,6 +69,23 @@ _SHADOW_HARD_PROBLEM_ALERTS = (
     "ALL_SKIPPED_NO_PAPER",
 )
 
+# R77: skip reasons that are KNOWN cold-start artifacts. When these
+# dominate the skip distribution, ALL_SKIPPED_NO_PAPER is a symptom of
+# warmup gap, not a real pipeline bug — downgrade to known-degraded.
+#   cold_start_drift   (R72 forward-only — classifier prev state unknown)
+#   close_without_open (R76 — simulator paper book lacks the OPEN side)
+_KNOWN_COLD_START_REASONS = ("cold_start_drift", "close_without_open")
+_COLD_START_DOMINANCE_THRESHOLD = 0.5   # > 50% → downgrade
+
+
+def _all_skipped_explained_by_cold_start(skipped: dict) -> bool:
+    """R77: True when known cold-start reasons account for > threshold of skips."""
+    total = sum(skipped.values()) if skipped else 0
+    if total <= 0:
+        return False
+    cold = sum(skipped.get(r, 0) for r in _KNOWN_COLD_START_REASONS)
+    return (cold / total) > _COLD_START_DOMINANCE_THRESHOLD
+
 
 def evaluate_shadow(payload: dict[str, Any]) -> dict[str, Any]:
     """Compute hard-problem list + summary for SHADOW /signal-health."""
@@ -97,9 +114,16 @@ def evaluate_shadow(payload: dict[str, Any]) -> dict[str, Any]:
             f"shadow: health=red ({payload.get('health_reason') or 'unknown'})"
         )
     # Specific alerts from R73 that we treat as hard
+    cold_start_explains = _all_skipped_explained_by_cold_start(skipped)
     for alert in alerts:
         for tag in _SHADOW_HARD_PROBLEM_ALERTS:
             if tag in str(alert):
+                # R77 nuance: ALL_SKIPPED_NO_PAPER is hard ONLY when the
+                # underlying skip reasons are NOT explained by known
+                # cold-start patterns. Otherwise it's a symptom of warmup
+                # gap (R72 + R76 documented as forward-only behaviour).
+                if tag == "ALL_SKIPPED_NO_PAPER" and cold_start_explains:
+                    break   # downgrade — keep alert visible but not hard
                 problems.append(f"shadow: {tag}")
                 break   # one match per alert is enough
 

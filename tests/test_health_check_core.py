@@ -188,6 +188,97 @@ def test_shadow_close_without_open_is_known_degraded_not_hard():
 
 
 # =================================================================== #
+# R77: ALL_SKIPPED_NO_PAPER context-aware classification
+# =================================================================== #
+def test_all_skipped_no_paper_hard_when_unknown_reasons_dominate():
+    """No cold-start explanation → real pipeline bug → still hard."""
+    p = _healthy_shadow_payload()
+    p["alerts"] = ["ALL_SKIPPED_NO_PAPER — 25 skips / 0 paper in 1h"]
+    p["skipped_by_reason_24h"] = {
+        "unknown_symbol": 80,
+        "freshness_filter": 20,
+    }
+    res = hc.evaluate_shadow(p)
+    assert any("ALL_SKIPPED_NO_PAPER" in pr for pr in res["problems"])
+
+
+def test_all_skipped_no_paper_downgraded_when_cold_start_dominates():
+    """R77: cold_start_drift + close_without_open > 50% → not a real bug."""
+    p = _healthy_shadow_payload()
+    p["alerts"] = ["ALL_SKIPPED_NO_PAPER — 10 skips / 0 paper in 1h"]
+    p["skipped_by_reason_24h"] = {
+        "cold_start_drift": 66,
+        "close_without_open": 10,
+        "unknown_symbol": 5,
+    }
+    res = hc.evaluate_shadow(p)
+    # Alert still shown but NOT a hard problem
+    assert "ALL_SKIPPED_NO_PAPER" in res["alerts"][0]
+    assert not any("ALL_SKIPPED_NO_PAPER" in pr for pr in res["problems"])
+
+
+def test_all_skipped_no_paper_downgraded_when_close_without_open_dominates():
+    """Even just close_without_open alone (without cold_start_drift) downgrades."""
+    p = _healthy_shadow_payload()
+    p["alerts"] = ["ALL_SKIPPED_NO_PAPER — 12 skips / 0 paper in 1h"]
+    p["skipped_by_reason_24h"] = {
+        "close_without_open": 80,
+        "unknown_symbol": 20,
+    }
+    res = hc.evaluate_shadow(p)
+    assert not any("ALL_SKIPPED_NO_PAPER" in pr for pr in res["problems"])
+
+
+def test_all_skipped_no_paper_at_50pct_boundary_still_hard():
+    """Exactly 50% cold-start → strict > threshold means NOT downgraded."""
+    p = _healthy_shadow_payload()
+    p["alerts"] = ["ALL_SKIPPED_NO_PAPER — 10 skips"]
+    p["skipped_by_reason_24h"] = {
+        "cold_start_drift": 50,
+        "unknown_symbol": 50,
+    }
+    res = hc.evaluate_shadow(p)
+    # 50/100 = 0.5, NOT > 0.5 → still hard problem
+    assert any("ALL_SKIPPED_NO_PAPER" in pr for pr in res["problems"])
+
+
+def test_all_skipped_no_paper_with_no_skip_reasons_still_hard():
+    """Empty skipped_by_reason_24h → can't explain → assume real bug."""
+    p = _healthy_shadow_payload()
+    p["alerts"] = ["ALL_SKIPPED_NO_PAPER — 15 skips / 0 paper"]
+    p["skipped_by_reason_24h"] = {}
+    res = hc.evaluate_shadow(p)
+    assert any("ALL_SKIPPED_NO_PAPER" in pr for pr in res["problems"])
+
+
+def test_red_pipeline_still_hard_even_with_cold_start_explanation():
+    """R77 only relaxes ALL_SKIPPED_NO_PAPER — RED_PIPELINE always hard."""
+    p = _healthy_shadow_payload()
+    p["alerts"] = [
+        "RED_PIPELINE — WS dead",
+        "ALL_SKIPPED_NO_PAPER — 25 skips",
+    ]
+    p["skipped_by_reason_24h"] = {"cold_start_drift": 100}
+    res = hc.evaluate_shadow(p)
+    # RED_PIPELINE still hard, ALL_SKIPPED_NO_PAPER downgraded
+    assert any("RED_PIPELINE" in pr for pr in res["problems"])
+    assert not any("ALL_SKIPPED_NO_PAPER" in pr for pr in res["problems"])
+
+
+def test_zero_tradeable_wallets_still_hard_even_with_cold_start():
+    """Same — ZERO_TRADEABLE_WALLETS never downgraded."""
+    p = _healthy_shadow_payload()
+    p["alerts"] = [
+        "ZERO_TRADEABLE_WALLETS — empty",
+        "ALL_SKIPPED_NO_PAPER — 25 skips",
+    ]
+    p["skipped_by_reason_24h"] = {"cold_start_drift": 100}
+    res = hc.evaluate_shadow(p)
+    assert any("ZERO_TRADEABLE_WALLETS" in pr for pr in res["problems"])
+    assert not any("ALL_SKIPPED_NO_PAPER" in pr for pr in res["problems"])
+
+
+# =================================================================== #
 # has_hard_problems
 # =================================================================== #
 def test_has_hard_problems_false_when_both_clean():
