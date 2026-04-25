@@ -40,6 +40,7 @@ from risk.builtin_guards import (
     MinSizeGuard,
     PerMarketExposureGuard,
     PerStrategyExposureGuard,
+    SymbolSupportedGuard,
 )
 from risk.correlation_matrix import (
     CorrelationMatrix,
@@ -106,6 +107,7 @@ __all__ = [
     "MinSizeGuard",
     "PerMarketExposureGuard",
     "PerStrategyExposureGuard",
+    "SymbolSupportedGuard",
     # correlation matrix (G7 input)
     "CorrelationMatrix",
     "NoOpCorrelationMatrix",

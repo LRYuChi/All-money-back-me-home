@@ -1,5 +1,5 @@
 """Built-in guards (G1, G3, G4, G5, G6 — round 18; G8 — round 20;
-G9 — round 22; G7 — round 29)."""
+G9 — round 22; G7 — round 29; G10 — round 30; G2 — round 32)."""
 from __future__ import annotations
 
 from dataclasses import dataclass, field
@@ -37,6 +37,52 @@ class LatencyBudgetGuard:
             )
         return GuardDecision(self.name, GuardResult.ALLOW,
                              detail={"age_seconds": age})
+
+
+# ================================================================== #
+# G2 SymbolSupported (round 32)
+# ================================================================== #
+@dataclass(slots=True, frozen=True)
+class SymbolSupportedGuard:
+    """G2: deny orders for symbols the target exchange doesn't trade.
+
+    Catches: typos in YAML, delistings, wrong-exchange tags ("crypto:OKX:..."
+    routed to a non-OKX dispatcher), instruments not yet listed.
+
+    Catalog backend determines policy:
+      - NoOpSymbolCatalog → every symbol "supported" → G2 fail-opens
+      - InMemory / OKXSymbolCatalog → enforce real list
+
+    Catalog-lookup failures fail-OPEN (matches G1/G8/G9/G10 convention) —
+    a flaky catalog refresh shouldn't block all trading. The downside is
+    a typo gets through to the exchange, which will reject anyway with a
+    clearer error. Net: no extra risk.
+    """
+
+    name: str = "symbol_supported"
+    catalog: Any = None       # SymbolCatalog (Protocol)
+
+    def __post_init__(self):
+        if self.catalog is None:
+            raise ValueError("SymbolSupportedGuard requires a `catalog`")
+
+    def check(self, order: PendingOrder, ctx: GuardContext) -> GuardDecision:
+        try:
+            ok = bool(self.catalog.supports(order.symbol))
+        except Exception as e:
+            return GuardDecision(
+                self.name, GuardResult.ALLOW,
+                reason=f"catalog lookup failed: {type(e).__name__}: {e} — fail-open",
+            )
+
+        if ok:
+            return GuardDecision(self.name, GuardResult.ALLOW,
+                                 detail={"symbol": order.symbol})
+        return GuardDecision(
+            self.name, GuardResult.DENY,
+            reason=f"symbol {order.symbol!r} not in exchange catalog",
+            detail={"symbol": order.symbol},
+        )
 
 
 # ================================================================== #
@@ -647,4 +693,5 @@ __all__ = [
     "MinSizeGuard",
     "PerMarketExposureGuard",
     "PerStrategyExposureGuard",
+    "SymbolSupportedGuard",
 ]
