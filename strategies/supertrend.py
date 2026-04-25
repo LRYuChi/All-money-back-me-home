@@ -346,6 +346,16 @@ class SupertrendStrategy(IStrategy):
         dataframe["all_bullish"] = (dataframe["st_1d"] == 1) & (dir_4h > 0.2) & (dataframe["st_1h"] == 1)
         dataframe["all_bearish"] = (dataframe["st_1d"] == -1) & (dir_4h < -0.2) & (dataframe["st_1h"] == -1)
 
+        # R49: pre-scout helper (1D + 4H aligned but 1H still ambiguous).
+        # Catches the earliest possible directional bias before 1H confirms.
+        # `pair_bullish_2tf` = 1D + 4H bullish (don't require 1H)
+        dataframe["pair_bullish_2tf"] = (
+            (dataframe["st_1d"] == 1) & (dir_4h > 0.2)
+        )
+        dataframe["pair_bearish_2tf"] = (
+            (dataframe["st_1d"] == -1) & (dir_4h < -0.2)
+        )
+
         return dataframe
 
     def populate_entry_trend(self, dataframe: DataFrame, metadata: dict) -> DataFrame:
@@ -387,6 +397,40 @@ class SupertrendStrategy(IStrategy):
         dataframe.loc[mask_scout_short, "enter_short"] = 1
         dataframe.loc[mask_scout_short, "enter_tag"] = "scout"
 
+        # === Phase 0 (pre-scout, R49): 1D+4H aligned, 1H + 15m still pending
+        # Edge-trigger only — fires on the bar 2-TF alignment first forms.
+        # Smaller sizing (0.25 Kelly) to test the earliest directional thesis.
+        # Opt-in via SUPERTREND_KELLY_MODE != "binary".
+        if os.environ.get("SUPERTREND_KELLY_MODE", "three_stage") != "binary":
+            two_tf_bull_just_formed = (
+                dataframe["pair_bullish_2tf"]
+                & (~dataframe["pair_bullish_2tf"].shift(1).fillna(False))
+            )
+            two_tf_bear_just_formed = (
+                dataframe["pair_bearish_2tf"]
+                & (~dataframe["pair_bearish_2tf"].shift(1).fillna(False))
+            )
+            # Pre-scout requires 1H NOT yet aligned (otherwise it'd be scout)
+            mask_pre_scout_long = (
+                two_tf_bull_just_formed
+                & (dataframe["st_1h"] != 1)
+                & quality & dataframe["fr_ok_long"]
+                & ~mask_confirmed_long
+                & ~mask_scout_long
+            )
+            dataframe.loc[mask_pre_scout_long, "enter_long"] = 1
+            dataframe.loc[mask_pre_scout_long, "enter_tag"] = "pre_scout"
+
+            mask_pre_scout_short = (
+                two_tf_bear_just_formed
+                & (dataframe["st_1h"] != -1)
+                & quality & dataframe["fr_ok_short"]
+                & ~mask_confirmed_short
+                & ~mask_scout_short
+            )
+            dataframe.loc[mask_pre_scout_short, "enter_short"] = 1
+            dataframe.loc[mask_pre_scout_short, "enter_tag"] = "pre_scout"
+
         return dataframe
 
     def populate_exit_trend(self, dataframe: DataFrame, metadata: dict) -> DataFrame:
@@ -403,20 +447,45 @@ class SupertrendStrategy(IStrategy):
         bars = (current_time - trade.open_date_utc).total_seconds() / 900
         is_long = not trade.is_short
 
-        # 1D trend reversal → force exit (strongest signal)
+        # R50: weighted exit — replaces single-condition triggers when
+        # SUPERTREND_EXIT_MODE != "legacy". Score 0-1 based on 4 weighted
+        # factors. ≥ 0.75 = full close. 0.5-0.75 = handled by
+        # adjust_trade_position (50% reduction). < 0.5 = hold.
+        exit_mode = os.environ.get("SUPERTREND_EXIT_MODE", "weighted")
+
+        if exit_mode == "weighted":
+            score, breakdown = self._exit_signal_score(
+                trade, dataframe, current_time, current_profit,
+            )
+            # Persist score on trade for adjust_trade_position to read
+            try:
+                trade.set_custom_data("exit_signal_score", score)
+                trade.set_custom_data("exit_signal_breakdown", breakdown)
+            except Exception:
+                pass
+
+            if score >= 0.75 and bars > 8:
+                return f"weighted_exit_full[{score:.2f}]"
+
+            # Below 0.75 → fall through to legacy emergency triggers below
+
+        # === Legacy / emergency triggers ===
+        # 1D trend reversal → force exit (strongest signal). Always
+        # active as a safety net even in weighted mode (if a trade has
+        # been running > 24h and 1D reverses, just close it).
         daily_against = (is_long and last.get("st_1d") == -1) or (not is_long and last.get("st_1d") == 1)
         if daily_against and bars > 8:
             return "daily_reversal_exit"
 
-        # 1H + 15m both flipped against → exit
-        # But if we already took partial profits, let the tail ride until 1D reversal
-        if trade.nr_of_successful_exits > 0:
-            pass  # Only 1D reversal (above) can close remaining position
-        else:
-            st_against = (is_long and last["st_trend"] == -1) or (not is_long and last["st_trend"] == 1)
-            hourly_against = (is_long and last.get("st_1h") == -1) or (not is_long and last.get("st_1h") == 1)
-            if st_against and hourly_against and bars > 8:
-                return "multi_tf_exit"
+        # Legacy multi-tf exit (only when not in weighted mode)
+        if exit_mode == "legacy":
+            if trade.nr_of_successful_exits > 0:
+                pass  # tail rides till 1D reversal
+            else:
+                st_against = (is_long and last["st_trend"] == -1) or (not is_long and last["st_trend"] == 1)
+                hourly_against = (is_long and last.get("st_1h") == -1) or (not is_long and last.get("st_1h") == 1)
+                if st_against and hourly_against and bars > 8:
+                    return "multi_tf_exit"
 
         # P2-9 (round 47): tightened time_decay tiers.
         # Old: only fired at 200 bars (~50h) with 0<profit<0.5%.
@@ -442,6 +511,107 @@ class SupertrendStrategy(IStrategy):
             return "time_decay_terminal"
 
         return None
+
+    # R50: Weighted exit signal scoring.
+    # 4 factors, total weight = 1.0. Each factor returns 0..1 reflecting
+    # how strongly THIS factor argues for exit. Aggregate × weight.
+    #
+    # Factors (long position; short flips signs):
+    #   1. 1D reversal           weight 0.30  (strongest single signal)
+    #   2. 4H dir_score reversal weight 0.25
+    #   3. 15m N consecutive bars weight 0.25  (N=2 → 0.5; N=3+ → 1.0)
+    #   4. ADX trending down     weight 0.20
+    #
+    # Total ≥ 0.75 → full close
+    # 0.50-0.75 → reduce 50% (handled by adjust_trade_position)
+    # < 0.50 → hold
+
+    _EXIT_WEIGHT_1D = 0.30
+    _EXIT_WEIGHT_4H = 0.25
+    _EXIT_WEIGHT_15M = 0.25
+    _EXIT_WEIGHT_ADX = 0.20
+
+    def _exit_signal_score(self, trade: Trade, dataframe,
+                           current_time: datetime,
+                           current_profit: float) -> tuple[float, dict]:
+        """Compute 4-factor weighted exit score (0-1) + breakdown for journal.
+
+        Returns (total_score, {factor: score}). dataframe must be
+        analyzed with all multi-TF columns present.
+        """
+        if len(dataframe) < 6:
+            return 0.0, {"reason": "insufficient_data"}
+
+        last = dataframe.iloc[-1]
+        is_long = not trade.is_short
+        breakdown: dict[str, float] = {}
+
+        # Factor 1: 1D reversal
+        st_1d_val = last.get("st_1d", 0)
+        f1 = 1.0 if (
+            (is_long and st_1d_val == -1)
+            or (not is_long and st_1d_val == 1)
+        ) else 0.0
+        breakdown["1d_reversal"] = f1
+
+        # Factor 2: 4H dir_score crossed zero against position
+        dir_now = float(last.get("dir_4h_score", 0.0))
+        # Look 3 bars back (~45min) — has it flipped sign?
+        if len(dataframe) >= 4:
+            dir_past = float(dataframe.iloc[-4].get("dir_4h_score", 0.0))
+        else:
+            dir_past = dir_now
+        f2 = 0.0
+        if is_long:
+            if dir_past > 0 and dir_now < 0:
+                f2 = 1.0
+            elif dir_past > 0 and dir_now < 0.1:
+                f2 = 0.5     # partial reversal
+        else:
+            if dir_past < 0 and dir_now > 0:
+                f2 = 1.0
+            elif dir_past < 0 and dir_now > -0.1:
+                f2 = 0.5
+        breakdown["4h_dir_reversal"] = f2
+
+        # Factor 3: 15m consecutive bars against
+        recent_15m = dataframe.iloc[-3:]["st_trend"].values
+        target_against = -1 if is_long else 1
+        consec = sum(1 for v in recent_15m if v == target_against)
+        if consec == 0:
+            f3 = 0.0
+        elif consec == 1:
+            f3 = 0.25
+        elif consec == 2:
+            f3 = 0.5
+        else:
+            f3 = 1.0
+        breakdown["15m_consecutive_against"] = f3
+
+        # Factor 4: ADX trending down (regime weakening)
+        adx_now = float(last.get("adx", 25.0))
+        if len(dataframe) >= 7:
+            adx_past = float(dataframe.iloc[-7].get("adx", 25.0))
+        else:
+            adx_past = adx_now
+        # ADX dropping > 5 points in 6 bars (~1.5h) signals fading trend
+        adx_drop = adx_past - adx_now
+        f4 = 0.0
+        if adx_drop > 8:
+            f4 = 1.0
+        elif adx_drop > 5:
+            f4 = 0.7
+        elif adx_drop > 2:
+            f4 = 0.3
+        breakdown["adx_declining"] = f4
+
+        score = (
+            self._EXIT_WEIGHT_1D * f1
+            + self._EXIT_WEIGHT_4H * f2
+            + self._EXIT_WEIGHT_15M * f3
+            + self._EXIT_WEIGHT_ADX * f4
+        )
+        return score, breakdown
 
     def custom_stoploss(self, pair: str, trade: Trade, current_time: datetime,
                         current_rate: float, current_profit: float,
@@ -783,11 +953,42 @@ class SupertrendStrategy(IStrategy):
                 regime_adj.kelly_multiplier, target_pct,
             )
 
-        # Scout gets 25% of Kelly, confirmed gets 75%
-        if entry_tag == "scout":
-            target_pct *= 0.25
+        # R49: tag-conditioned Kelly fraction.
+        # Mode controlled by SUPERTREND_KELLY_MODE env:
+        #   binary       — legacy 0.25 / 0.75 (scout / confirmed only)
+        #   three_stage  — default: 0.25 / 0.50 / 0.85 (pre_scout / scout / confirmed)
+        #   continuous   — kelly × quality × |dir_score| × adx_norm (all tags equal)
+        kelly_mode = os.environ.get("SUPERTREND_KELLY_MODE", "three_stage")
+
+        if kelly_mode == "continuous":
+            # Continuous: each entry's size precisely reflects its signal strength
+            pair = kwargs.get("pair", "")
+            dataframe, _ = self.dp.get_analyzed_dataframe(pair, self.timeframe)
+            if len(dataframe) > 0:
+                row = dataframe.iloc[-1]
+                quality_now = float(row.get("trend_quality", 0.5))
+                dir_now = abs(float(row.get("direction_score", 0.0)))
+                adx_now = float(row.get("adx", 25.0))
+                adx_norm = min(adx_now / 50.0, 1.0)
+                strength = quality_now * dir_now * adx_norm
+                # Cap range: 0.10 (min meaningful) to 1.0 (perfect signal)
+                target_pct *= max(0.10, min(strength, 1.0))
+            else:
+                target_pct *= 0.30   # safe fallback
+        elif kelly_mode == "three_stage":
+            # New 3-tier scaling
+            stage_map = {
+                "pre_scout": 0.25,   # earliest signal, smallest test
+                "scout":     0.50,   # 1D+4H+1H aligned, mid-size
+                "confirmed": 0.85,   # 4-tf perfect alignment, near-max
+            }
+            target_pct *= stage_map.get(entry_tag or "", 0.50)
         else:
-            target_pct *= 0.75
+            # Binary legacy mode (backwards compat)
+            if entry_tag == "scout":
+                target_pct *= 0.25
+            else:
+                target_pct *= 0.75
 
         balance = self.wallets.get_total_stake_amount() if self.wallets else 1000
         base_stake = balance * target_pct
@@ -844,6 +1045,38 @@ class SupertrendStrategy(IStrategy):
                     quality_now, addon_mult, addon,
                 )
                 return addon
+
+        # R50: weighted-exit partial reduction hook (score 0.5-0.75 → -50%).
+        # Only fires when SUPERTREND_EXIT_MODE is "weighted" (default).
+        # Reads the score persisted by custom_exit on the trade.
+        exit_mode = os.environ.get("SUPERTREND_EXIT_MODE", "weighted")
+        if exit_mode == "weighted" and exits_done == 0:
+            try:
+                pending_score = float(
+                    trade.get_custom_data("exit_signal_score", 0.0) or 0.0,
+                )
+            except Exception:
+                pending_score = 0.0
+            if 0.50 <= pending_score < 0.75:
+                _safe_journal_write(PartialExitEvent(
+                    timestamp=now_iso(),
+                    pair=trade.pair,
+                    side="long" if is_long else "short",
+                    entry_price=float(trade.open_rate),
+                    exit_price=float(current_rate),
+                    portion_pct=50.0,
+                    profit_pct_at_partial=current_profit * 100,
+                    profit_usd_at_partial=trade.calc_profit(current_rate),
+                    trigger=f"R50 weighted exit score {pending_score:.2f}",
+                    state=_snapshot_state(last),
+                    note="weighted exit partial reduce",
+                ))
+                # Clear the score so it doesn't double-fire
+                try:
+                    trade.set_custom_data("exit_signal_score", 0.0)
+                except Exception:
+                    pass
+                return -(trade.stake_amount * 0.50)
 
         # === Partial exits for big winners ===
         is_1h_against = (
