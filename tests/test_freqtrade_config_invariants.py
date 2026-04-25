@@ -74,3 +74,30 @@ def test_stoploss_on_exchange_enabled(cfg):
     """Without stoploss_on_exchange, a network blip during entry → no
     server-side SL → unbounded downside."""
     assert cfg.get("order_types", {}).get("stoploss_on_exchange") is True
+
+
+# =================================================================== #
+# R63: VolumePairList must be OKX-compatible (candles mode)
+# =================================================================== #
+def test_volumepairlist_uses_candles_mode_for_okx(cfg):
+    """OKX does not support VolumePairList in default ticker mode.
+    Without lookback_days + lookback_timeframe set, freqtrade startup
+    errors out, pairlists attribute is never created, REST /whitelist
+    returns 500, and ZERO pairs get scanned. Regression source:
+    2026-04-25 VPS post-mortem — bot up 30+min, 0 trades, root cause
+    was a silent VolumePairList init failure."""
+    pairlists = cfg.get("pairlists", [])
+    vol = next(
+        (p for p in pairlists if p.get("method") == "VolumePairList"),
+        None,
+    )
+    if vol is None:
+        pytest.skip("VolumePairList not configured — switched to static")
+    assert vol.get("lookback_days") is not None, (
+        "VolumePairList on OKX MUST set lookback_days to enable "
+        "candles-based mode (R63 — see comment in this test)."
+    )
+    assert vol.get("lookback_timeframe") is not None, (
+        "VolumePairList on OKX MUST set lookback_timeframe alongside "
+        "lookback_days to enable candles-based mode."
+    )

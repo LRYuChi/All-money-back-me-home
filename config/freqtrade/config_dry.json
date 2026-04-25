@@ -59,7 +59,10 @@
             "number_assets": 30,
             "sort_key": "quoteVolume",
             "min_value": 0,
-            "refresh_period": 1800
+            "refresh_period": 1800,
+            "lookback_days": 7,
+            "lookback_timeframe": "1d",
+            "lookback_period": 0
         },
         {
             "method": "AgeFilter",
