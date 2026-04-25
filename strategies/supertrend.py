@@ -105,6 +105,20 @@ try:
 except Exception:
     _OB_AVAILABLE = False
 
+# R58: correlation/rotation sizing — applied in custom_stake_amount.
+# Default OFF (SUPERTREND_CORRELATION_FILTER=1 to enable). When on:
+#   * mean off-diagonal ρ ≥ 0.85 → return 0 (block — concentrated risk)
+#   * else multiply target stake by rotation_sizing_multiplier(phase, pair)
+try:
+    from strategies.correlation_state import (
+        DominancePhase,
+        build_snapshot as _corr_build_snapshot,
+        rotation_sizing_multiplier as _corr_rotation_mult,
+    )
+    _CORR_AVAILABLE = True
+except Exception:
+    _CORR_AVAILABLE = False
+
 logger = logging.getLogger(__name__)
 
 
@@ -868,6 +882,85 @@ class SupertrendStrategy(IStrategy):
             return reason
         return None
 
+    # ----- R58: correlation / rotation stake sizing --------------- #
+    # Applied INSIDE custom_stake_amount AFTER regime/concentration/CB
+    # checks. Default OFF (SUPERTREND_CORRELATION_FILTER=1 to enable).
+    # Returns (multiplier, block_reason_or_none):
+    #   * (0.0, "...") → callsite returns 0 stake + skipped event
+    #   * (mult, None) → callsite multiplies target_pct by mult
+    _CORR_LOOKBACK_DAYS = 30
+    _CORR_CONCENTRATION_THRESHOLD = 0.85
+
+    def _gather_closes_for_correlation(
+        self, intended_pair: str,
+    ) -> dict[str, list[float]]:
+        """Pull daily closes for currently-open pairs + intended pair.
+        Defensive: dp failures fall through with whatever was collected."""
+        closes: dict[str, list[float]] = {}
+        pairs_to_query: set[str] = {intended_pair}
+        try:
+            for t in Trade.get_trades_proxy(is_open=True):
+                if getattr(t, "pair", None):
+                    pairs_to_query.add(t.pair)
+        except Exception:
+            pass
+        # Always include BTC/USDT:USDT — needed for dominance phase classifier
+        pairs_to_query.add("BTC/USDT:USDT")
+        for p in pairs_to_query:
+            try:
+                df = self.dp.get_pair_dataframe(p, "1d")
+                if df is not None and len(df) >= self._CORR_LOOKBACK_DAYS + 1:
+                    closes[p] = df["close"].astype(float).tolist()
+            except Exception as e:
+                logger.debug("correlation: %s 1d fetch failed: %s", p, e)
+        return closes
+
+    def _correlation_stake_multiplier(
+        self, intended_pair: str,
+    ) -> tuple[float, str | None]:
+        """Compute the rotation/correlation sizing multiplier for a new
+        entry on `intended_pair`. Returns (mult, block_reason_or_None).
+
+        block_reason set → caller should size 0. None → caller multiplies.
+        """
+        if not _CORR_AVAILABLE:
+            return (1.0, None)
+        if os.environ.get("SUPERTREND_CORRELATION_FILTER", "0") != "1":
+            return (1.0, None)
+        try:
+            closes = self._gather_closes_for_correlation(intended_pair)
+            if len(closes) < 2:
+                # Need ≥2 valid pairs for a matrix → fall through unchanged
+                return (1.0, None)
+            snap = _corr_build_snapshot(
+                closes, lookback_days=self._CORR_LOOKBACK_DAYS,
+            )
+        except Exception as e:
+            logger.debug("correlation snapshot failed: %s", e)
+            return (1.0, None)
+
+        # Block on concentration ONLY when intended pair would join an
+        # already-correlated cluster (we have ≥2 open positions feeding the
+        # matrix). Otherwise mean ρ on a 2-element matrix is just BTC vs
+        # the intended pair — too noisy to act on.
+        try:
+            n_open = sum(
+                1 for t in Trade.get_trades_proxy(is_open=True)
+            )
+        except Exception:
+            n_open = 0
+        if n_open >= 2 and snap.mean_correlation >= self._CORR_CONCENTRATION_THRESHOLD:
+            return (0.0, (
+                f"correlation concentration: mean ρ={snap.mean_correlation:.2f} "
+                f"≥ {self._CORR_CONCENTRATION_THRESHOLD} (open={n_open})"
+            ))
+
+        try:
+            mult = _corr_rotation_mult(snap.dominance_phase, intended_pair)
+        except Exception:
+            mult = 1.0
+        return (mult, None)
+
     # P1-4 (round 47): Direction concentration cap.
     # max_open_trades=3 means we can hold up to 3 positions simultaneously.
     # Without this guard, all 3 could be the same side (3 longs in a bull
@@ -1048,6 +1141,39 @@ class SupertrendStrategy(IStrategy):
                 "regime sizing: regime=%s mult=%.2f → target_pct=%.4f",
                 regime_snap.regime.value if regime_snap else "?",
                 regime_adj.kelly_multiplier, target_pct,
+            )
+
+        # R58: correlation/rotation adjustment
+        # Block when portfolio is already concentrated; else apply
+        # rotation multiplier (BTC_STRONG → 0.7× alts; ALT_SEASON →
+        # 1.2× alts / 0.7× BTC&ETH; CONSOLIDATION/UNKNOWN → 1.0×).
+        intended_pair = kwargs.get("pair", "")
+        corr_mult, corr_block = self._correlation_stake_multiplier(intended_pair)
+        if corr_block:
+            logger.warning(
+                "correlation block on %s: %s", intended_pair, corr_block,
+            )
+            try:
+                _safe_journal_write(SkippedEvent(
+                    timestamp=now_iso(),
+                    pair=intended_pair, side=side or "unknown",
+                    reason=f"R58 {corr_block}",
+                    state=MultiTfState(),
+                    note="R58 correlation gate",
+                ))
+                _send_to_all_bots(
+                    f"🔗 *Correlation 集中度攔截*\n"
+                    f"`{intended_pair}` ({side or '?'})\n"
+                    f"{corr_block}"
+                )
+            except Exception as e:
+                logger.warning("correlation alert failed: %s", e)
+            return 0.0
+        if corr_mult != 1.0:
+            target_pct *= corr_mult
+            logger.debug(
+                "rotation sizing: pair=%s mult=%.2f → target_pct=%.4f",
+                intended_pair, corr_mult, target_pct,
             )
 
         # R49: tag-conditioned Kelly fraction.
