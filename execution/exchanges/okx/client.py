@@ -32,11 +32,14 @@ logger = logging.getLogger(__name__)
 
 
 class OKXClient(Protocol):
-    """All concrete OKX clients implement this 3-method interface."""
+    """All concrete OKX clients implement this 4-method interface."""
 
     def place_order(self, request: ExchangeRequest) -> ExchangeResponse: ...
     def cancel_order(self, client_order_id: str) -> bool: ...
     def fetch_instruments(self) -> set[str]: ...
+    def fetch_order(
+        self, client_order_id: str, symbol: str,
+    ) -> ExchangeResponse: ...
 
 
 # ================================================================== #
@@ -53,16 +56,22 @@ class FakeOKXClient:
         place_response: ExchangeResponse | None = None,
         place_responses: list[ExchangeResponse] | None = None,
         cancel_result: bool = True,
+        fetch_responses: dict[str, ExchangeResponse] | None = None,
     ):
         self._instruments = set(instruments or ())
         self._place_response = place_response
         self._place_responses = list(place_responses or [])
         self._cancel_result = cancel_result
+        # Map client_order_id → response to return from fetch_order
+        self._fetch_responses: dict[str, ExchangeResponse] = dict(
+            fetch_responses or {}
+        )
 
         # Recorded calls (tests assert against these)
         self.place_calls: list[ExchangeRequest] = []
         self.cancel_calls: list[str] = []
         self.fetch_calls: int = 0
+        self.fetch_order_calls: list[tuple[str, str]] = []
 
         # Idempotency map: client_order_id → first response we returned
         self._seen_coids: dict[str, ExchangeResponse] = {}
@@ -101,6 +110,23 @@ class FakeOKXClient:
     def fetch_instruments(self) -> set[str]:
         self.fetch_calls += 1
         return set(self._instruments)
+
+    def fetch_order(
+        self, client_order_id: str, symbol: str,
+    ) -> ExchangeResponse:
+        """Test stub: return programmed response for the coid, or fall
+        back to the last place_order response so happy-path tests work
+        without explicitly seeding fetch_responses."""
+        self.fetch_order_calls.append((client_order_id, symbol))
+        if client_order_id in self._fetch_responses:
+            return self._fetch_responses[client_order_id]
+        if client_order_id in self._seen_coids:
+            return self._seen_coids[client_order_id]
+        return ExchangeResponse(
+            status=ExchangeResponseStatus.REJECTED,
+            error_code="not_found",
+            error_message=f"no record of {client_order_id}",
+        )
 
 
 __all__ = ["OKXClient", "FakeOKXClient"]

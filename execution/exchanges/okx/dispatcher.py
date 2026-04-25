@@ -63,6 +63,46 @@ class OKXLiveDispatcher:
     def mode(self) -> ExecutionMode:
         return self._mode
 
+    def fetch_status(self, order: PendingOrder) -> DispatchResult | None:
+        """Round 42: poll an open order's current state.
+
+        Used by the SUBMITTED-state poller to advance ACCEPTED orders to
+        their terminal status. Returns:
+          - DispatchResult to APPLY to the order (worker calls update_status)
+          - None when the order can't be polled (no client_order_id stored)
+
+        Errors map the same way as dispatch():
+          - REJECTED → propagate (will mark order REJECTED)
+          - NETWORK_ERROR → REJECTED string with retryable hint (worker
+            will not auto-retry; next poll will pick up the live state)
+        """
+        if order.client_order_id is None:
+            logger.debug(
+                "okx fetch_status: order id=%s has no client_order_id; "
+                "cannot poll", order.id,
+            )
+            return None
+        try:
+            resp = self._client.fetch_order(
+                client_order_id=order.client_order_id,
+                symbol=order.symbol,
+            )
+        except Exception as e:
+            logger.exception(
+                "okx fetch_status: client.fetch_order raised on id=%s: %s",
+                order.id, e,
+            )
+            return None
+        return self._map_response(
+            ExchangeRequest(
+                client_order_id=order.client_order_id,
+                symbol=order.symbol,
+                side=order.side,
+                notional_usd=order.target_notional_usd,
+            ),
+            resp,
+        )
+
     def dispatch(self, order: PendingOrder) -> DispatchResult:
         try:
             req = self._build_request(order)

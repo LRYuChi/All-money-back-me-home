@@ -26,6 +26,10 @@ from execution.pending_orders.sweep_runner import (
     SweepStats,
     background_sweep_loop,
 )
+from execution.pending_orders.poll_runner import (
+    PollStats,
+    background_poll_submitted_loop,
+)
 from execution.pending_orders.healthz import serve_healthz
 from execution.pending_orders.queue import (
     InMemoryPendingOrderQueue,
@@ -78,6 +82,9 @@ __all__ = [
     # background sweeper (round 38)
     "SweepStats",
     "background_sweep_loop",
+    # SUBMITTED-state poller (round 42)
+    "PollStats",
+    "background_poll_submitted_loop",
     # healthz HTTP endpoint (round 39)
     "serve_healthz",
     # dispatcher (intent → pending row)

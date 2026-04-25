@@ -27,6 +27,7 @@ from execution.pending_orders import (
     NoOpPendingOrderQueue,
     PendingOrderWorker,
     UnsupportedModeError,
+    background_poll_submitted_loop,
     background_sweep_loop,
     build_default_registry,
     build_queue,
@@ -179,6 +180,16 @@ def build_parser() -> argparse.ArgumentParser:
         "--sweep-dispatching-max-age", type=float, default=0,
         help="Background sweeper: DISPATCHING older than N seconds → "
              "EXPIRED, worker likely crashed (0 = bucket disabled).",
+    )
+    p.add_argument(
+        "--poll-submitted-interval-sec", type=float, default=0,
+        help="Run SUBMITTED-state poller as a background task every N "
+             "seconds (0 = disabled). Live/paper modes need this to advance "
+             "ACCEPTED orders on the exchange book toward terminal status.",
+    )
+    p.add_argument(
+        "--poll-max-orders", type=int, default=100,
+        help="SUBMITTED poller: max orders polled per iteration (default 100).",
     )
     p.add_argument(
         "--healthz-port", type=int, default=0,
@@ -419,6 +430,28 @@ async def run_worker(args: argparse.Namespace) -> int:
             return stats
         sweeper_task = asyncio.create_task(_sweeper_with_stats())
 
+    # Round 42: optional SUBMITTED-state poller sidecar
+    poller_task: asyncio.Task | None = None
+    poller_stats_holder: dict = {"latest": None}
+    if args.poll_submitted_interval_sec > 0:
+        if not hasattr(dispatcher, "fetch_status"):
+            logger.warning(
+                "--poll-submitted-interval-sec set but dispatcher %s has "
+                "no fetch_status (likely shadow/notify mode); poller will "
+                "exit early without polling",
+                type(dispatcher).__name__,
+            )
+
+        async def _poller_with_stats():
+            stats = await background_poll_submitted_loop(
+                queue, dispatcher, stop,
+                interval_sec=args.poll_submitted_interval_sec,
+                max_orders_per_iteration=args.poll_max_orders,
+            )
+            poller_stats_holder["latest"] = stats
+            return stats
+        poller_task = asyncio.create_task(_poller_with_stats())
+
     # Round 39: optional /healthz HTTP server sidecar
     healthz_server = None
     if args.healthz_port > 0:
@@ -450,6 +483,18 @@ async def run_worker(args: argparse.Namespace) -> int:
         except asyncio.TimeoutError:
             logger.warning("sweeper task did not exit within 5s; cancelling")
             sweeper_task.cancel()
+    if poller_task is not None:
+        try:
+            poll_stats = await asyncio.wait_for(poller_task, timeout=5.0)
+            logger.info(
+                "SUBMITTED poller final: iterations=%d polled=%d "
+                "advanced=%d errors=%d",
+                poll_stats.iterations, poll_stats.orders_polled,
+                poll_stats.orders_advanced, poll_stats.errors,
+            )
+        except asyncio.TimeoutError:
+            logger.warning("poller task did not exit within 5s; cancelling")
+            poller_task.cancel()
     logger.info("worker stopped: stats=%s", worker.stats())
     return 0
 

@@ -146,6 +146,35 @@ class CcxtOKXClient:
                                client_order_id, e)
             return False
 
+    def fetch_order(
+        self, client_order_id: str, symbol: str,
+    ) -> ExchangeResponse:
+        """Round 42: poll an open order's current state by clOrdId.
+
+        OKX V5 lookup uses `clOrdId` in params (id arg unused for ccxt-okx).
+        The returned ccxt order dict goes through the same status mapping
+        as place_order — so callers get a uniform ExchangeResponse.
+        """
+        ccxt_symbol = canonical_to_ccxt(symbol)
+        try:
+            raw = self._exchange.fetch_order(
+                id="",     # ccxt requires positional but okx uses clOrdId
+                symbol=ccxt_symbol,
+                params={"clOrdId": client_order_id},
+            )
+        except Exception as e:
+            name = type(e).__name__
+            if name in ("OrderNotFound",):
+                # Order disappeared (cancelled out-of-band, history pruned)
+                # Treat as REJECTED so worker stops polling it.
+                return ExchangeResponse(
+                    status=ExchangeResponseStatus.REJECTED,
+                    error_code="OrderNotFound",
+                    error_message=str(e),
+                )
+            return self._map_exception(e)
+        return self._map_create_response(raw)
+
     def fetch_instruments(self) -> set[str]:
         """Returns the set of canonical symbols the exchange will accept.
         Filters to USDT-margined SWAP perpetuals (the universe we trade)."""
