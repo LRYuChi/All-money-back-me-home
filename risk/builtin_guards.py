@@ -1,7 +1,8 @@
-"""Built-in guards (G1, G3, G4, G5, G6 — round 18)."""
+"""Built-in guards (G1, G3, G4, G5, G6 — round 18; G8 — round 20)."""
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from typing import Any
 
 from execution.pending_orders.types import PendingOrder
 from risk.guards import GuardContext, GuardDecision, GuardResult
@@ -190,6 +191,74 @@ class GlobalExposureGuard:
 
 
 # ================================================================== #
+# G8 DailyLossCircuitBreaker
+# ================================================================== #
+@dataclass(slots=True, frozen=True)
+class DailyLossCircuitBreakerGuard:
+    """G8: deny all new orders when today's realised PnL is below
+    `-loss_threshold_pct × capital`.
+
+    Defaults to 5% (matches §15 D7 default). Use a `pnl_aggregator` to
+    look up today's realised loss; the aggregator (PnLAggregator) is
+    intentionally injected rather than baked in so tests can inject
+    deterministic values.
+
+    Note: only RESETS on UTC midnight (next day) because aggregator's
+    `realised_today_usd` boundary rolls. Phase G v2 may add per-market
+    timezone boundaries (e.g. NY 4pm close for US stocks).
+
+    DENY only — once tripped, no scaling makes sense (the cap is "stop
+    trading", not "trade smaller"). Daemon should also alert via Notifier
+    when this triggers (round 21+).
+    """
+
+    name: str = "daily_loss_cb"
+    loss_threshold_pct: float = 0.05         # 5% of capital
+    pnl_aggregator: Any = None               # PnLAggregator (Protocol)
+
+    def __post_init__(self):
+        if self.pnl_aggregator is None:
+            raise ValueError(
+                "DailyLossCircuitBreakerGuard requires a pnl_aggregator"
+            )
+
+    def check(self, order: PendingOrder, ctx: GuardContext) -> GuardDecision:
+        # Look up today's realised PnL (negative = loss). Failures from
+        # the aggregator → fail open (allow), don't block all trades on
+        # a flaky aggregator. Caller can wrap with strict aggregator if
+        # they want fail-closed.
+        try:
+            pnl = float(self.pnl_aggregator.realised_today_usd())
+        except Exception as e:
+            return GuardDecision(
+                self.name, GuardResult.ALLOW,
+                reason=f"pnl_aggregator failed: {type(e).__name__}: {e} — fail-open",
+            )
+
+        threshold_usd = -ctx.capital_usd * self.loss_threshold_pct
+        if pnl <= threshold_usd:
+            return GuardDecision(
+                self.name, GuardResult.DENY,
+                reason=(
+                    f"daily PnL ${pnl:.2f} ≤ threshold ${threshold_usd:.2f} "
+                    f"({self.loss_threshold_pct:.0%} of ${ctx.capital_usd:.0f}) — "
+                    f"circuit breaker open"
+                ),
+                detail={
+                    "realised_pnl_today": pnl,
+                    "threshold_usd": threshold_usd,
+                    "threshold_pct": self.loss_threshold_pct,
+                    "capital_usd": ctx.capital_usd,
+                },
+            )
+
+        return GuardDecision(
+            self.name, GuardResult.ALLOW,
+            detail={"realised_pnl_today": pnl, "threshold_usd": threshold_usd},
+        )
+
+
+# ================================================================== #
 # Helpers
 # ================================================================== #
 def _market_from_symbol(symbol: str) -> str:
@@ -202,6 +271,7 @@ def _market_from_symbol(symbol: str) -> str:
 
 
 __all__ = [
+    "DailyLossCircuitBreakerGuard",
     "GlobalExposureGuard",
     "LatencyBudgetGuard",
     "MinSizeGuard",
