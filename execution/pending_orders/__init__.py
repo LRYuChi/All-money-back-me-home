@@ -26,6 +26,12 @@ from execution.pending_orders.dispatcher import (
     intent_to_pending,
     make_intent_callback,
 )
+from execution.pending_orders.worker import (
+    DispatchResult,
+    Dispatcher,
+    LogOnlyDispatcher,
+    PendingOrderWorker,
+)
 
 __all__ = [
     # types
@@ -40,7 +46,12 @@ __all__ = [
     "PostgresPendingOrderQueue",
     "SupabasePendingOrderQueue",
     "build_queue",
-    # dispatcher
+    # dispatcher (intent → pending row)
     "intent_to_pending",
     "make_intent_callback",
+    # worker (queue → exchange)
+    "DispatchResult",
+    "Dispatcher",
+    "LogOnlyDispatcher",
+    "PendingOrderWorker",
 ]

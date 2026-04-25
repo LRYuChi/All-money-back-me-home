@@ -37,7 +37,7 @@
 | **C. Kronos 整合** | 🟡 | **HL PriceFetcher ✅（reflection 真能用）**；Kronos predictor / signal converter / dashboard ⬜ | 需 R1 拍板才能進 Kronos 預測 |
 | **D. AI + 融合** | ✅ basic | Regime ✅；SignalFuser ✅；**MarketContext provider (HL daily 200d + MA200/slope/vol/DD + 可選 VIX + TTL cache) ✅**；AI LLM 整合 ⬜ | R2 (LLM 供應) 仍待拍板 |
 | **E. 策略 DSL** | ✅ basic | DSL ✅；evaluator ✅；registry ✅；首個 prod 策略 ✅；e2e 整合 ✅；StrategyRuntime + daemon wiring ✅；**daemon 接真實 regime ✅**；dashboard / 多策略 ⬜ | rule-only 鏈路 daemon 內全程可跑 |
-| **F. 跨市場** | 🟡 | **Pending Orders middleware (queue × 4 + dispatcher + idempotency + state machine + migration 020) ✅**；OKX adapter / IBKR / TW broker ⬜ | QD P0-1 借鑒；StrategyRuntime 已接 |
+| **F. 跨市場** | 🟡 | Pending Orders middleware ✅；**Worker (claim → dispatch → mark + LogOnlyDispatcher + CLI + async run_forever) ✅**；OKX live adapter / IBKR / TW broker ⬜ | QD P0-1+pending_order_worker 借鑒；shadow/notify mode 全循環可跑 |
 | **G. 風險統一** | ⬜ | — | — |
 | **H. Live ramp** | ⬜ | — | — |
 
@@ -67,7 +67,8 @@
 | 2026-04-25 07:07 UTC | #14 | Daemon wiring — StrategyRuntime (thread-safe ingest + tick eval + stats) + shadow daemon hook (--strategies flag) + 16 tests | ✅ 完成 |
 | 2026-04-25 07:37 UTC | #15 | Phase D 收尾 — MarketContextProvider (Static + Cached + HLBTC + yfinance VIX) + shadow daemon `--real-market-context` + 18 tests | ✅ 完成 |
 | 2026-04-25 08:07 UTC | #16 | Phase F 起點 — Pending Orders queue × 4 + dispatcher + idempotency + state machine + migration 020 + StrategyRuntime 接 + 35 tests | ✅ 完成 |
-| — | — | **下輪待辦**：OKX live adapter (Phase F.1, 需 R6 拍板 hedge mode) OR Kronos (需 R1) OR audit log hook | ⬜ |
+| 2026-04-25 08:37 UTC | #17 | Phase F 續 — Pending Orders Worker (claim/dispatch/terminal + LogOnly dispatcher + async run_forever + CLI + 14 tests) | ✅ 完成 |
+| — | — | **下輪待辦**：OKX live adapter dispatcher (Phase F.1, 需 R6) OR Risk pre-check guards (Phase G start) OR Kronos (需 R1) | ⬜ |
 
 ---
 
