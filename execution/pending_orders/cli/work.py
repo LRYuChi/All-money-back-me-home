@@ -38,6 +38,7 @@ from risk import (
     PerStrategyExposureGuard,
     build_exposure_provider,
     build_pnl_aggregator,
+    build_signal_age_provider,
     make_context_provider,
 )
 from smart_money.config import settings
@@ -70,7 +71,8 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument(
         "--with-guards", action="store_true",
         help="Enable risk guard pipeline (G1 latency / G3 min_size / G4-G6 "
-             "exposure caps / G8 daily loss CB) before dispatch.",
+             "exposure caps / G8 daily loss CB / G9 consecutive losses) "
+             "before dispatch.",
     )
     p.add_argument(
         "--capital-usd", type=float, default=10_000.0,
@@ -110,7 +112,7 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def _build_guard_pipeline(args: argparse.Namespace):
-    """Construct the standard 6-guard pipeline + context_provider closure.
+    """Construct the standard 7-guard pipeline + context_provider closure.
 
     Order matters: G1 (latency, fastest reject), G3 (size, deterministic),
     G8 (CB — early since once tripped, nothing else matters), G4/G5/G6
@@ -118,6 +120,7 @@ def _build_guard_pipeline(args: argparse.Namespace):
     """
     pnl_agg = build_pnl_aggregator(settings)
     exposure = build_exposure_provider(settings)
+    age_provider = build_signal_age_provider(settings)
 
     pipeline = GuardPipeline([
         LatencyBudgetGuard(budget_seconds=args.latency_budget_sec),
@@ -135,13 +138,13 @@ def _build_guard_pipeline(args: argparse.Namespace):
         GlobalExposureGuard(capital_multiplier=args.max_leverage),
     ])
 
-    # Round 21: signal_age_provider not yet wired — depends on
-    # signal_history.id linkage on the order. G1 fails open until that
-    # lands; other 5 guards function independently.
+    # Round 23: G1 now real — signal_age looked up from fused_signals.ts
+    # via order.fused_signal_id. Falls back to None (fail-open) when the
+    # order has no fused_signal_id or the lookup fails.
     context_provider = make_context_provider(
         capital_usd=args.capital_usd,
         exposure=exposure,
-        signal_age_provider=None,
+        signal_age_provider=age_provider.age_seconds,
     )
 
     logger.info(

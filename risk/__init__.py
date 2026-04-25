@@ -7,18 +7,18 @@ Guards sit between the worker's `claim_next_pending` and the dispatcher's
 Pipeline order matters — short-circuits on first DENY. Scale guards
 mutate order in-place; subsequent guards see the reduced size.
 
-Rounds 18 + 20 ship 6 deterministic guards:
-  G1 LatencyBudget       — stale signal → deny
+Rounds 18 + 20 + 22 + 23 ship 7 deterministic guards:
+  G1 LatencyBudget       — stale signal → deny (now real via SignalAgeProvider)
   G3 MinSize             — dust order → deny
   G4 PerStrategyExposure — single-strategy notional cap → scale or deny
   G5 PerMarketExposure   — single-market cap → scale or deny
   G6 GlobalExposure      — total open notional cap (multiple of capital)
   G8 DailyLossCB         — today's realised loss > threshold → deny
+  G9 ConsecutiveLossCB   — N consecutive losing UTC days → deny
 
 Future rounds:
   G2 SymbolSupported     — needs F.1 exchange registry
   G7 CorrelationCap      — needs Phase G corr matrix worker
-  G9 ConsecutiveLossCB   — needs day-rollup table
   G10 KellyPositionSize  — re-uses strategy DSL Kelly path; integrated here
                            once reflection.history seeds win_rate stats
 """
@@ -57,6 +57,14 @@ from risk.exposure_provider import (
     build_exposure_provider,
     make_context_provider,
 )
+from risk.signal_age_provider import (
+    InMemorySignalAgeProvider,
+    NoOpSignalAgeProvider,
+    PostgresSignalAgeProvider,
+    SignalAgeProvider,
+    SupabaseSignalAgeProvider,
+    build_signal_age_provider,
+)
 
 __all__ = [
     # framework
@@ -89,4 +97,11 @@ __all__ = [
     "PostgresExposureProvider",
     "build_exposure_provider",
     "make_context_provider",
+    # signal age provider (G1)
+    "SignalAgeProvider",
+    "NoOpSignalAgeProvider",
+    "InMemorySignalAgeProvider",
+    "SupabaseSignalAgeProvider",
+    "PostgresSignalAgeProvider",
+    "build_signal_age_provider",
 ]

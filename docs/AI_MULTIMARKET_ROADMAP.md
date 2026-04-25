@@ -38,7 +38,7 @@
 | **D. AI + 融合** | ✅ basic | Regime ✅；SignalFuser ✅；**MarketContext provider (HL daily 200d + MA200/slope/vol/DD + 可選 VIX + TTL cache) ✅**；AI LLM 整合 ⬜ | R2 (LLM 供應) 仍待拍板 |
 | **E. 策略 DSL** | ✅ basic | DSL ✅；evaluator ✅；registry ✅；首個 prod 策略 ✅；e2e 整合 ✅；StrategyRuntime + daemon wiring ✅；**daemon 接真實 regime ✅**；dashboard / 多策略 ⬜ | rule-only 鏈路 daemon 內全程可跑 |
 | **F. 跨市場** | 🟡 | Pending Orders middleware ✅；**Worker (claim → dispatch → mark + LogOnlyDispatcher + CLI + async run_forever) ✅**；OKX live adapter / IBKR / TW broker ⬜ | QD P0-1+pending_order_worker 借鑒；shadow/notify mode 全循環可跑 |
-| **G. 風險統一** | ✅ basic | GuardPipeline + 7 guards ✅；Worker 接 pipeline ✅；PnL aggregator × 4 ✅；ExposureProvider × 4 + cli `--with-guards` ✅；**daily_pnl_history + G9 ConsecutiveLossDays (3-day default, fail-open, in pipeline) ✅**；G2/G7/G10 ⬜ | 7/10 guards 完整 + production wiring |
+| **G. 風險統一** | ✅ basic | GuardPipeline + 7 guards ✅；Worker 接 pipeline ✅；PnL aggregator × 4 ✅；ExposureProvider × 4 + cli `--with-guards` ✅；daily_pnl_history + G9 ConsecutiveLossDays ✅；**SignalAgeProvider × 4 (lookups fused_signals.ts，per-id cache，fail-open) → G1 真實啟用 ✅**；G2/G7/G10 ⬜ | 7/10 guards 完整 + production wiring；G1 從 stub 升級為真實 latency check |
 | **H. Live ramp** | ⬜ | — | — |
 
 ### ⏸ 待手動介入清單（loop 自動跳過）
@@ -73,7 +73,8 @@
 | (manual) | #20 | Phase G 續 — PnL aggregator × 4 + G8 DailyLossCircuitBreaker (UTC midnight boundary / fail-open on agg error / pipeline integration) + 16 tests | ✅ 完成 |
 | (manual) | #21 | Phase G 續 — ExposureProvider × 4 (sm_paper_trades + live_trades 開倉聚合 by strategy/market/global) + make_context_provider + cli/work.py `--with-guards` + 18 tests | ✅ 完成 |
 | (manual) | #22 | Phase G 續 — daily_pnl_history (per-day buckets across InMemory/Supabase/Postgres) + G9 ConsecutiveLossDaysGuard (3-day default, insufficient-history → ALLOW, fail-open, integrates after G8) + cli/work.py `--consecutive-loss-days` + 21 tests | ✅ 完成 |
-| — | — | **下輪待辦**：Audit log hook (round 7 leftover) OR signal_age provider (G1 真實啟用) OR multi-exchange dispatcher 註冊表 (F.1 框架) OR Kronos (R1) | ⬜ |
+| (manual) | #23 | Phase G 續 — SignalAgeProvider × 4 (fused_signals.ts 查表 + per-id cache + Z/+00:00 ISO parsing + fail-open) + cli/work.py 接 build_signal_age_provider → G1 LatencyBudgetGuard 真實啟用 + 30 tests | ✅ 完成 |
+| — | — | **下輪待辦**：Audit log hook (round 7 leftover) OR multi-exchange dispatcher 註冊表 (F.1 框架) OR G7 CorrelationCap 雛形 OR Kronos (R1) | ⬜ |
 
 ---
 
