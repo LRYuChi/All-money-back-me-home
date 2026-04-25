@@ -133,6 +133,19 @@ def build_parser() -> argparse.ArgumentParser:
         "--shadow-capital", type=float, default=10_000.0,
         help="Notional capital used for fixed_pct sizing (default 10000).",
     )
+    # R72: cold-start warmup
+    parser.add_argument(
+        "--skip-warmup", action="store_true",
+        help="Skip per-wallet clearinghouseState warmup at startup. "
+             "By default the daemon seeds prev_position from HL "
+             "current state for each whitelist wallet, eliminating "
+             "the cold_start_drift skip on first observed Close/Reverse. "
+             "Disable for fast dev startup.",
+    )
+    parser.add_argument(
+        "--warmup-timeout-sec", type=float, default=30.0,
+        help="Per-wallet timeout for clearinghouseState fetch (default 30s).",
+    )
     parser.add_argument(
         "--real-market-context", action="store_true",
         help="Use HLBTCContextProvider for live regime detection. Without "
@@ -446,6 +459,133 @@ async def _strategy_eval_loop(
             logger.warning("strategy_eval failed: %s", e)
 
 
+# =================================================================== #
+# R72: cold-start warmup — seed prev_position from HL current state
+# =================================================================== #
+def _parse_clearinghouse_positions(
+    state: dict,
+    wallet_id: UUID,
+    now,
+) -> list:
+    """Parse HL clearinghouseState response → list[WalletPosition].
+
+    HL response shape (relevant slice):
+      {
+        "assetPositions": [
+          {"type": "oneWay",
+           "position": {"coin": "BTC", "szi": "0.5", "entryPx": "50000.0", ...}},
+          ...
+        ],
+        ...
+      }
+
+    `szi` is signed: positive = long, negative = short, exact zero = flat
+    (which HL usually omits — we don't insert flat).
+    """
+    from datetime import datetime as _dt, timezone as _tz
+    from smart_money.store.schema import WalletPosition
+
+    if not isinstance(state, dict):
+        return []
+    asset_positions = state.get("assetPositions") or []
+    if not isinstance(asset_positions, list):
+        return []
+
+    ts = now if isinstance(now, _dt) else _dt.now(_tz.utc)
+    out = []
+    for ap in asset_positions:
+        if not isinstance(ap, dict):
+            continue
+        pos = ap.get("position")
+        if not isinstance(pos, dict):
+            continue
+        coin = pos.get("coin")
+        szi_raw = pos.get("szi")
+        entry_raw = pos.get("entryPx")
+        if not coin or szi_raw is None:
+            continue
+        try:
+            szi = float(szi_raw)
+        except (TypeError, ValueError):
+            continue
+        if abs(szi) < 1e-9:
+            continue   # flat — skip
+        side = "long" if szi > 0 else "short"
+        try:
+            entry_px = float(entry_raw) if entry_raw is not None else None
+        except (TypeError, ValueError):
+            entry_px = None
+        out.append(WalletPosition(
+            wallet_id=wallet_id,
+            symbol=str(coin),
+            side=side,
+            size=abs(szi),
+            avg_entry_px=entry_px,
+            last_updated_ts=ts,
+        ))
+    return out
+
+
+def _warmup_wallet_positions(
+    store, hl_client, whitelist, *,
+    timeout_sec: float = 30.0,
+) -> dict:
+    """For each whitelist wallet, fetch HL clearinghouseState and
+    upsert any open positions as prev_position seeds.
+
+    Returns a summary dict for logging:
+      {wallets_seeded: N, positions_seeded: N, fetch_errors: N,
+       per_wallet: [{address, n_positions, error}]}
+
+    Defensive: any wallet fetch failure logs + continues (other wallets
+    still get seeded). Daemon startup must not block on a single bad wallet.
+    """
+    from datetime import datetime as _dt, timezone as _tz
+
+    now = _dt.now(_tz.utc)
+    summary = {
+        "wallets_seeded": 0,
+        "positions_seeded": 0,
+        "fetch_errors": 0,
+        "per_wallet": [],
+    }
+
+    for entry in whitelist:
+        info = {"address": entry.address[:10] + "…", "n_positions": 0,
+                "error": None}
+        try:
+            state = hl_client.get_current_state(entry.address)
+        except Exception as e:
+            info["error"] = str(e)[:100]
+            summary["fetch_errors"] += 1
+            summary["per_wallet"].append(info)
+            logger.warning(
+                "warmup: wallet %s clearinghouse_state failed: %s",
+                entry.address[:10], e,
+            )
+            continue
+
+        positions = _parse_clearinghouse_positions(
+            state, entry.wallet_id, now,
+        )
+        for pos in positions:
+            try:
+                store.upsert_position(pos)
+            except Exception as e:
+                logger.warning(
+                    "warmup: upsert failed for %s/%s: %s",
+                    entry.address[:10], pos.symbol, e,
+                )
+                continue
+            info["n_positions"] += 1
+            summary["positions_seeded"] += 1
+        if info["n_positions"] > 0:
+            summary["wallets_seeded"] += 1
+        summary["per_wallet"].append(info)
+
+    return summary
+
+
 async def run_shadow_daemon(args: argparse.Namespace) -> int:
     """Main async entry. Returns exit code."""
     try:
@@ -521,6 +661,33 @@ async def run_shadow_daemon(args: argparse.Namespace) -> int:
     if listener._info is None:
         logger.error("WS listener failed to connect; aborting")
         return 2
+
+    # R72: cold-start warmup — seed prev_position from HL clearinghouseState
+    # for every whitelist wallet. Without this, every first-observed
+    # Close/Reverse fill is rejected as cold_start_drift (user-reported
+    # 2026-04-26: 24h showed 66/66 cold_start_drift skips).
+    if not getattr(args, "skip_warmup", False):
+        try:
+            from smart_money.scanner.hl_client import HLClient
+            hl_client = HLClient(listener._info)
+            warmup = _warmup_wallet_positions(
+                store, hl_client, whitelist,
+                timeout_sec=args.warmup_timeout_sec,
+            )
+            logger.info(
+                "R72 warmup: %d positions seeded across %d wallets "
+                "(errors: %d)",
+                warmup["positions_seeded"],
+                warmup["wallets_seeded"],
+                warmup["fetch_errors"],
+            )
+        except Exception as e:
+            logger.warning(
+                "R72 warmup failed (non-fatal — daemon continues with "
+                "cold-start state): %s", e,
+            )
+    else:
+        logger.info("R72 warmup skipped (--skip-warmup)")
 
     reconciler = FillsReconciler(
         addresses, listener._info, event_queue,
