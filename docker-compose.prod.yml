@@ -39,6 +39,18 @@ services:
 
   api:
     build: ./apps/api
+    volumes:
+      - trade-data:/app/data
+      - ./market_monitor:/app/market_monitor
+      - ./agent:/app/agent
+      - ./guards:/app/guards
+      - ./strategies:/app/strategies:ro
+      - ./config/freqtrade:/app/config
+      # polymarket status.json written by host wrapper — read-only mount
+      - ./data/reports:/app/polymarket_status:ro
+      # R55: dashboard endpoints (/api/supertrend/*) read the journal that
+      # freqtrade writes — must see the same volume the strategy writes to.
+      - ./trading_log:/app/trading_log:ro
     environment:
       - SUPABASE_URL=${SUPABASE_URL}
       - SUPABASE_KEY=${SUPABASE_SERVICE_ROLE_KEY}
@@ -49,14 +61,8 @@ services:
       - LOG_LEVEL=${LOG_LEVEL:-INFO}
       - FT_USER=${FT_USER:-freqtrade}
       - FT_PASS=${FT_PASS:-freqtrade}
-    volumes:
-      - trade-data:/app/data
-      - ./market_monitor:/app/market_monitor
-      - ./agent:/app/agent
-      - ./guards:/app/guards
-      - ./config/freqtrade:/app/config
-      # polymarket status.json written by host wrapper — read-only mount
-      - ./data/reports:/app/polymarket_status:ro
+      # R55: pin journal location for dashboard endpoints
+      - SUPERTREND_JOURNAL_DIR=/app/trading_log/journal
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health', timeout=3)"]
       interval: 30s
