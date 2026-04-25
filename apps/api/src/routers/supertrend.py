@@ -185,6 +185,97 @@ def supertrend_trades(
 
 
 # =================================================================== #
+# /skipped — R61 — entries that didn't execute (filter activity audit)
+# =================================================================== #
+# Tracked event_types in the "skipped" family:
+_SKIPPED_TYPES = ("skipped", "circuit_breaker")
+
+
+def _categorize_skip_reason(reason: str) -> str:
+    """Map a free-text reason into a small fixed bucket for grouping.
+    Matches the prefixes the strategy emits in R57/R58/R48/P1-4/CB code paths."""
+    r = (reason or "").lower()
+    if r.startswith("r57") or "fr contra-signal" in r or "orderbook" in r:
+        return "alpha_filter"
+    if r.startswith("r58") or "correlation" in r:
+        return "correlation"
+    if r.startswith("regime:") or "regime" in r:
+        return "regime"
+    if "direction_concentration" in r:
+        return "direction_concentration"
+    if "circuit" in r or "breaker" in r or "cb" in r.split():
+        return "circuit_breaker"
+    return "other"
+
+
+@router.get("/skipped")
+def supertrend_skipped(
+    limit: int = Query(50, ge=1, le=500),
+    days: int = Query(7, ge=1, le=90),
+) -> dict[str, Any]:
+    """Recent skipped/blocked entry attempts — operator visibility for
+    "bot running but no trades, why?".
+
+    Returns:
+      events            — newest-first list (capped to `limit`)
+      n_total_in_window — full count regardless of limit
+      by_category       — counts grouped by bucketed reason
+      by_pair           — counts grouped by pair (top 10)
+      window_days       — echoed back
+    """
+    try:
+        from strategies.journal import TradeJournal
+    except ImportError as e:
+        return {"error": str(e), "events": []}
+
+    journal_dir = _resolve_journal_dir()
+    if not journal_dir.exists():
+        return {"events": [], "error": f"journal missing: {journal_dir}"}
+
+    try:
+        journal = TradeJournal(journal_dir)
+        now = datetime.now(timezone.utc)
+        rows = journal.read_range(
+            from_date=now - timedelta(days=days),
+            to_date=now,
+        )
+        skipped = [
+            r for r in rows
+            if r.get("event_type") in _SKIPPED_TYPES
+        ]
+        skipped.sort(key=lambda r: r.get("timestamp", ""), reverse=True)
+
+        # Group by bucketed reason
+        by_cat: dict[str, int] = {}
+        by_pair: dict[str, int] = {}
+        for r in skipped:
+            # CB events have no `reason` field — categorize by event_type
+            if r.get("event_type") == "circuit_breaker":
+                cat = "circuit_breaker"
+            else:
+                cat = _categorize_skip_reason(r.get("reason", ""))
+            by_cat[cat] = by_cat.get(cat, 0) + 1
+            p = r.get("pair", "?")
+            by_pair[p] = by_pair.get(p, 0) + 1
+
+        # Top 10 pairs only — full list would be noisy
+        top_pairs = dict(
+            sorted(by_pair.items(), key=lambda kv: kv[1], reverse=True)[:10]
+        )
+
+        return {
+            "events": skipped[:limit],
+            "n_total_in_window": len(skipped),
+            "by_category": by_cat,
+            "by_pair": top_pairs,
+            "window_days": days,
+        }
+    except Exception as e:
+        logger.exception("supertrend_skipped failed")
+        return {"error": str(e), "events": []}
+
+
+# =================================================================== #
 # /health
 # =================================================================== #
 @router.get("/health")

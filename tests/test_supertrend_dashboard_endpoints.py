@@ -17,13 +17,15 @@ if str(_API_SRC) not in sys.path:
 def _import_router():
     from src.routers.supertrend import (
         _resolve_journal_dir, router,
-        supertrend_health, supertrend_snapshot, supertrend_trades,
+        supertrend_health, supertrend_skipped, supertrend_snapshot,
+        supertrend_trades,
     )
     return {
         "router": router,
         "_resolve_journal_dir": _resolve_journal_dir,
         "snapshot": supertrend_snapshot,
         "trades": supertrend_trades,
+        "skipped": supertrend_skipped,
         "health": supertrend_health,
     }
 
@@ -31,13 +33,14 @@ def _import_router():
 # =================================================================== #
 # Router structure
 # =================================================================== #
-def test_router_has_4_endpoints():
+def test_router_has_5_endpoints():
     mod = _import_router()
     paths = {r.path for r in mod["router"].routes}
     assert paths == {
         "/api/supertrend/snapshot",
         "/api/supertrend/regime",
         "/api/supertrend/trades",
+        "/api/supertrend/skipped",
         "/api/supertrend/health",
     }
 
@@ -257,3 +260,140 @@ def test_health_stale_when_event_older_than_24h(monkeypatch, tmp_path):
     out = mod["health"]()
     assert out["ok"] is False
     assert "24h" in out.get("reason", "")
+
+
+# =================================================================== #
+# /skipped — R61
+# =================================================================== #
+def test_skipped_handles_missing_journal(monkeypatch, tmp_path):
+    monkeypatch.setenv("SUPERTREND_JOURNAL_DIR", str(tmp_path / "missing"))
+    mod = _import_router()
+    out = mod["skipped"](limit=50, days=7)
+    assert out["events"] == []
+
+
+def test_skipped_returns_empty_when_no_skipped_events(monkeypatch, tmp_path):
+    monkeypatch.setenv("SUPERTREND_JOURNAL_DIR", str(tmp_path))
+    from datetime import datetime, timezone
+    from strategies.journal import TradeJournal
+
+    j = TradeJournal(tmp_path)
+    # Only an entry — should not appear in skipped
+    j.write({
+        "event_type": "entry",
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+        "pair": "BTC/USDT:USDT", "side": "long",
+    })
+
+    mod = _import_router()
+    out = mod["skipped"](limit=50, days=7)
+    assert out["events"] == []
+    assert out["n_total_in_window"] == 0
+    assert out["by_category"] == {}
+
+
+def test_skipped_groups_by_category(monkeypatch, tmp_path):
+    monkeypatch.setenv("SUPERTREND_JOURNAL_DIR", str(tmp_path))
+    from datetime import datetime, timezone
+    from strategies.journal import TradeJournal
+
+    j = TradeJournal(tmp_path)
+    now = datetime.now(timezone.utc).isoformat()
+
+    # Mix of skip reasons mirroring R47/R48/R57/R58 strategy outputs
+    skips = [
+        ("BTC/USDT:USDT", "R57 pre-entry filter: FR contra-signal: fr=+0.0010"),
+        ("ETH/USDT:USDT", "R57 pre-entry filter: orderbook strongly against long"),
+        ("AVAX/USDT:USDT", "R58 correlation concentration: mean ρ=0.92"),
+        ("SOL/USDT:USDT", "regime: choppy (ATR=1.2%, ADX=18.0, H=0.45)"),
+        ("LINK/USDT:USDT", "direction_concentration: already 2 open long, cap 2"),
+    ]
+    for pair, reason in skips:
+        j.write({
+            "event_type": "skipped",
+            "timestamp": now,
+            "pair": pair, "side": "long",
+            "reason": reason, "state": {},
+        })
+    # Plus a CB event
+    j.write({
+        "event_type": "circuit_breaker",
+        "timestamp": now,
+        "pair": "DOGE/USDT:USDT", "side": "short",
+        "streak_length": 3, "cooldown_remaining_hours": 12.0,
+    })
+
+    mod = _import_router()
+    out = mod["skipped"](limit=50, days=7)
+
+    assert out["n_total_in_window"] == 6
+    cats = out["by_category"]
+    assert cats.get("alpha_filter") == 2
+    assert cats.get("correlation") == 1
+    assert cats.get("regime") == 1
+    assert cats.get("direction_concentration") == 1
+    assert cats.get("circuit_breaker") == 1
+
+
+def test_skipped_respects_limit(monkeypatch, tmp_path):
+    monkeypatch.setenv("SUPERTREND_JOURNAL_DIR", str(tmp_path))
+    from datetime import datetime, timedelta, timezone
+    from strategies.journal import TradeJournal
+
+    j = TradeJournal(tmp_path)
+    now = datetime.now(timezone.utc)
+    for i in range(15):
+        j.write({
+            "event_type": "skipped",
+            "timestamp": (now - timedelta(minutes=i)).isoformat(),
+            "pair": f"P_{i}", "side": "long",
+            "reason": "regime: dead", "state": {},
+        })
+
+    mod = _import_router()
+    out = mod["skipped"](limit=5, days=7)
+    assert len(out["events"]) == 5
+    assert out["n_total_in_window"] == 15
+
+
+def test_skipped_newest_first(monkeypatch, tmp_path):
+    monkeypatch.setenv("SUPERTREND_JOURNAL_DIR", str(tmp_path))
+    from datetime import datetime, timedelta, timezone
+    from strategies.journal import TradeJournal
+
+    j = TradeJournal(tmp_path)
+    now = datetime.now(timezone.utc)
+    for i in range(3):
+        j.write({
+            "event_type": "skipped",
+            "timestamp": (now - timedelta(hours=i + 1)).isoformat(),
+            "pair": f"P_{i}", "side": "long",
+            "reason": "regime: dead", "state": {},
+        })
+
+    mod = _import_router()
+    out = mod["skipped"](limit=10, days=7)
+    assert out["events"][0]["pair"] == "P_0"
+    assert out["events"][-1]["pair"] == "P_2"
+
+
+def test_skipped_groups_by_pair_top_10(monkeypatch, tmp_path):
+    monkeypatch.setenv("SUPERTREND_JOURNAL_DIR", str(tmp_path))
+    from datetime import datetime, timezone
+    from strategies.journal import TradeJournal
+
+    j = TradeJournal(tmp_path)
+    now = datetime.now(timezone.utc).isoformat()
+    # 12 distinct pairs each blocked once → only top 10 in by_pair
+    for i in range(12):
+        j.write({
+            "event_type": "skipped",
+            "timestamp": now,
+            "pair": f"P{i:02d}", "side": "long",
+            "reason": "regime: choppy", "state": {},
+        })
+
+    mod = _import_router()
+    out = mod["skipped"](limit=50, days=7)
+    assert len(out["by_pair"]) == 10
+    assert out["n_total_in_window"] == 12
