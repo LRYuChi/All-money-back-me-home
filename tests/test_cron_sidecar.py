@@ -502,3 +502,132 @@ def test_state_save_load_roundtrip_preserves_alert_state(tmp_path):
     loaded = CronState.load(f)
     assert loaded.last_alerts_seen == ["alert-A", "alert-B"]
     assert loaded.last_alerts_check_iso == "2026-04-25T12:00:00Z"
+
+
+# =================================================================== #
+# R73: SHADOW alert dispatch
+# =================================================================== #
+from strategies.cli.cron_sidecar import (
+    check_shadow_alerts,
+    _fetch_shadow_alerts,
+)
+
+
+def _stub_shadow_alerts(alerts):
+    return patch(
+        "strategies.cli.cron_sidecar._fetch_shadow_alerts",
+        return_value=alerts,
+    )
+
+
+def test_shadow_alert_no_change_no_broadcast():
+    state = CronState(last_shadow_alerts_seen=["A"])
+    now = datetime(2026, 4, 26, 12, 0, tzinfo=timezone.utc)
+    with _stub_shadow_alerts(["A"]):
+        with patch("strategies.cli.cron_sidecar._send_telegram") as send:
+            check_shadow_alerts(state, dry_run=False, now_utc=now)
+    assert send.call_count == 0
+
+
+def test_shadow_alert_new_broadcasts_with_shadow_label():
+    state = CronState(last_shadow_alerts_seen=[])
+    now = datetime(2026, 4, 26, 12, 0, tzinfo=timezone.utc)
+    with _stub_shadow_alerts(["COLD_START_DRIFT_DOMINANT — 60/100 skips"]):
+        with patch("strategies.cli.cron_sidecar._send_telegram") as send:
+            check_shadow_alerts(state, dry_run=False, now_utc=now)
+    assert send.call_count == 1
+    msg = send.call_args.args[0]
+    assert "Shadow" in msg   # Distinct label vs Supertrend alerts
+    assert "NEW" in msg
+    assert "COLD_START_DRIFT" in msg
+
+
+def test_shadow_alert_resolved_broadcasts():
+    state = CronState(last_shadow_alerts_seen=["RED_PIPELINE — ..."])
+    now = datetime(2026, 4, 26, 12, 0, tzinfo=timezone.utc)
+    with _stub_shadow_alerts([]):
+        with patch("strategies.cli.cron_sidecar._send_telegram") as send:
+            check_shadow_alerts(state, dry_run=False, now_utc=now)
+    assert send.call_count == 1
+    msg = send.call_args.args[0]
+    assert "Shadow" in msg
+    assert "RESOLVED" in msg
+
+
+def test_shadow_alert_probe_failure_preserves_state():
+    state = CronState(last_shadow_alerts_seen=["A"])
+    now = datetime(2026, 4, 26, 12, 0, tzinfo=timezone.utc)
+    with _stub_shadow_alerts(None):
+        with patch("strategies.cli.cron_sidecar._send_telegram") as send:
+            check_shadow_alerts(state, dry_run=False, now_utc=now)
+    assert send.call_count == 0
+    assert state.last_shadow_alerts_seen == ["A"]
+
+
+def test_shadow_alert_disabled_via_env(monkeypatch):
+    monkeypatch.setenv("SHADOW_ALERT_BROADCAST", "0")
+    state = CronState()
+    now = datetime(2026, 4, 26, 12, 0, tzinfo=timezone.utc)
+    with _stub_shadow_alerts(["X"]):
+        with patch("strategies.cli.cron_sidecar._send_telegram") as send:
+            check_shadow_alerts(state, dry_run=False, now_utc=now)
+    assert send.call_count == 0
+
+
+def test_supertrend_and_shadow_alerts_independent():
+    """Adding to one source's seen-list doesn't affect the other."""
+    state = CronState(
+        last_alerts_seen=["sup-A"],
+        last_shadow_alerts_seen=["sh-X"],
+    )
+    now = datetime(2026, 4, 26, 12, 0, tzinfo=timezone.utc)
+    # SUPERTREND probe returns same → no broadcast for it
+    # SHADOW probe returns different → broadcasts NEW + RESOLVED
+    with _stub_alerts(["sup-A"]), _stub_shadow_alerts(["sh-Y"]):
+        with patch("strategies.cli.cron_sidecar._send_telegram") as send:
+            from strategies.cli.cron_sidecar import check_operations_alerts
+            check_operations_alerts(state, dry_run=False, now_utc=now)
+            check_shadow_alerts(state, dry_run=False, now_utc=now)
+    # Only SHADOW broadcasts: NEW sh-Y + RESOLVED sh-X = 2 messages
+    assert send.call_count == 2
+
+
+def test_tick_invokes_both_alert_checks_on_5min_marks():
+    state = CronState()
+    now = datetime(2026, 4, 26, 12, 5, tzinfo=timezone.utc)
+    with patch(
+        "strategies.cli.cron_sidecar.check_operations_alerts",
+        return_value=False,
+    ) as ck1, patch(
+        "strategies.cli.cron_sidecar.check_shadow_alerts",
+        return_value=False,
+    ) as ck2:
+        tick(now, state, dry_run=False)
+    ck1.assert_called_once()
+    ck2.assert_called_once()
+
+
+def test_state_legacy_file_without_shadow_keys(tmp_path):
+    """Pre-R73 state files must load with empty shadow defaults."""
+    legacy = tmp_path / "state.json"
+    legacy.write_text(json.dumps({
+        "last_daily_date": "2026-04-26",
+        "last_alerts_seen": ["A"],
+        # No last_shadow_alerts_seen / last_shadow_alerts_check_iso
+    }))
+    s = CronState.load(legacy)
+    assert s.last_alerts_seen == ["A"]
+    assert s.last_shadow_alerts_seen == []
+    assert s.last_shadow_alerts_check_iso == ""
+
+
+def test_state_save_load_preserves_both_alert_streams(tmp_path):
+    s = CronState(
+        last_alerts_seen=["sup-1"],
+        last_shadow_alerts_seen=["sh-1", "sh-2"],
+    )
+    f = tmp_path / "state.json"
+    s.save(f)
+    loaded = CronState.load(f)
+    assert loaded.last_alerts_seen == ["sup-1"]
+    assert loaded.last_shadow_alerts_seen == ["sh-1", "sh-2"]

@@ -193,6 +193,82 @@ def get_leaderboard(
 _DENSITY_WINDOWS = [("1h", 1), ("6h", 6), ("24h", 24)]
 
 
+# =================================================================== #
+# R73: actionable alerts for SHADOW pipeline
+# =================================================================== #
+def _build_shadow_alerts(
+    *,
+    health: str,
+    health_reason: str | None,
+    density: dict,
+    latency: dict,
+    skipped_reasons: dict,
+    positions: dict,
+) -> list[str]:
+    """Compose actionable alert strings for the SHADOW pipeline.
+
+    Mirrors R68 SUPERTREND alerts pattern:
+      - Each alert is a short imperative pointing at a known failure mode
+      - Empty list = healthy
+      - R69 cron sidecar broadcasts diff to Telegram on next 5min poll
+
+    Alert rules:
+      RED_PIPELINE         — health=red (no 24h activity, WS likely dead)
+      LATENCY_BUDGET_EXCEEDED — p95 > 15s
+      COLD_START_DRIFT_DOMINANT — > 50% of skips are cold_start_drift,
+                                  R72 warmup may have failed or new wallet
+                                  dropped in mid-stream
+      ALL_SKIPPED_NO_PAPER — ≥10 skips in 1h but 0 paper_trade fills
+                              → signal pipeline broken between classify
+                                and shadow execute
+      ZERO_TRADEABLE_WALLETS — positions distinct_wallets count == 0
+                                (whitelist resolution likely empty)
+    """
+    alerts: list[str] = []
+
+    if health == "red":
+        alerts.append(
+            f"RED_PIPELINE — {health_reason or 'no 24h activity'}; "
+            "check WS listener + reconciler in shadow daemon logs"
+        )
+
+    p95 = latency.get("p95_ms")
+    if p95 is not None and p95 > 15_000:
+        alerts.append(
+            f"LATENCY_BUDGET_EXCEEDED — 24h p95 {p95}ms > 15000ms budget; "
+            "WS connection or DB writes are slow; check Supabase health"
+        )
+
+    # cold_start_drift dominance
+    total_24h_skips = sum(skipped_reasons.values()) if skipped_reasons else 0
+    cold = skipped_reasons.get("cold_start_drift", 0)
+    if total_24h_skips >= 20 and cold / max(total_24h_skips, 1) > 0.5:
+        alerts.append(
+            f"COLD_START_DRIFT_DOMINANT — {cold}/{total_24h_skips} skips "
+            "are cold_start_drift; consider running R72 warmup "
+            "(redeploy supertrend-cron or smart-money-shadow)"
+        )
+
+    # All-skip-no-paper anomaly (1h window)
+    d1h = density.get("1h") or {}
+    skips_1h = d1h.get("skipped", 0)
+    paper_1h = (d1h.get("paper_open", 0) + d1h.get("paper_closed", 0))
+    if skips_1h >= 10 and paper_1h == 0:
+        alerts.append(
+            f"ALL_SKIPPED_NO_PAPER — {skips_1h} skips / 0 paper_trades "
+            "in 1h; aggregator or shadow simulator likely broken"
+        )
+
+    if positions.get("distinct_wallets", 0) == 0:
+        alerts.append(
+            "ZERO_TRADEABLE_WALLETS — sm_wallet_positions empty; "
+            "shadow daemon may not have started warmup, or whitelist "
+            "is empty (check shadow daemon logs for 'shadow daemon: N tradeable')"
+        )
+
+    return alerts
+
+
 def _percentile(sorted_values: list[int], p: float) -> int | None:
     if not sorted_values:
         return None
@@ -331,6 +407,13 @@ def get_signal_health() -> dict:
             health = "green"
             health_reason = None
 
+        # ---- R73 actionable alerts (mirrors R68 SUPERTREND ops pattern) ----
+        alerts = _build_shadow_alerts(
+            health=health, health_reason=health_reason,
+            density=density, latency=latency,
+            skipped_reasons=reasons, positions=positions,
+        )
+
         result = {
             "configured": True,
             "checked_at": now.isoformat(),
@@ -341,6 +424,10 @@ def get_signal_health() -> dict:
             "latency_24h": latency,
             "skipped_by_reason_24h": reasons,
             "positions": positions,
+            # R73: list of actionable alert strings; empty = healthy
+            "alerts": alerts,
+            "alert_count": len(alerts),
+            "status": "ok" if not alerts else "degraded",
         }
     except Exception as exc:
         logger.exception("signal-health query failed: %s", exc)

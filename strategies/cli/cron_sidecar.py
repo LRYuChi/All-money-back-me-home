@@ -56,13 +56,18 @@ class CronState:
     last_weekly_date: str = ""       # YYYY-MM-DD UTC of last Monday fire
     last_regime_slot: str = ""       # YYYY-MM-DDTHH (00/06/12/18 hour bucket)
     last_regime_value: str = ""      # last regime string e.g. "trending"
-    # R69: alert dispatch state
+    # R69: alert dispatch state (SUPERTREND)
     last_alerts_seen: list = None    # type: ignore[assignment]  # list[str]
     last_alerts_check_iso: str = ""  # iso timestamp of last poll
+    # R73: alert dispatch state (SHADOW pipeline)
+    last_shadow_alerts_seen: list = None    # type: ignore[assignment]
+    last_shadow_alerts_check_iso: str = ""
 
     def __post_init__(self):
         if self.last_alerts_seen is None:
             self.last_alerts_seen = []
+        if self.last_shadow_alerts_seen is None:
+            self.last_shadow_alerts_seen = []
 
     @classmethod
     def load(cls, path: Path) -> "CronState":
@@ -295,6 +300,84 @@ def check_operations_alerts(state: CronState, *, dry_run: bool,
     return True
 
 
+# =================================================================== #
+# R73: poll /api/smart-money/signal-health alerts + diff-broadcast
+# =================================================================== #
+def _fetch_shadow_alerts() -> list[str] | None:
+    """GET /signal-health from compose-internal API. Returns alerts list
+    or None on failure. Mirrors _fetch_operations_alerts for SHADOW pipeline."""
+    import json as _json
+    import urllib.error
+    import urllib.request
+
+    api = os.environ.get(
+        "SHADOW_OPERATIONS_API_URL",
+        "http://api:8000/api/smart-money/signal-health",
+    )
+    try:
+        req = urllib.request.Request(api)
+        with urllib.request.urlopen(req, timeout=8) as resp:
+            data = _json.loads(resp.read().decode())
+        # Note: when supabase is unavailable the endpoint returns
+        # {configured: false, ...} and no alerts field — treat as empty
+        alerts = data.get("alerts", [])
+        if not isinstance(alerts, list):
+            return []
+        return [str(a) for a in alerts]
+    except (urllib.error.URLError, urllib.error.HTTPError, OSError) as e:
+        logger.debug("shadow alerts probe failed: %s", e)
+        return None
+    except Exception as e:
+        logger.debug("shadow alerts probe unexpected error: %s", e)
+        return None
+
+
+def check_shadow_alerts(state: CronState, *, dry_run: bool,
+                        now_utc: datetime) -> bool:
+    """Diff current SHADOW alerts against last-seen, broadcast deltas.
+
+    Same pattern as check_operations_alerts but for SHADOW pipeline.
+    Default poll cadence: every 5 min (gated by tick).
+    """
+    if os.environ.get("SHADOW_ALERT_BROADCAST", "1") != "1":
+        return False
+    current = _fetch_shadow_alerts()
+    if current is None:
+        return False
+
+    last_set = set(state.last_shadow_alerts_seen or [])
+    cur_set = set(current)
+    new_alerts = [a for a in current if a not in last_set]
+    resolved = [a for a in (state.last_shadow_alerts_seen or []) if a not in cur_set]
+
+    if not new_alerts and not resolved:
+        state.last_shadow_alerts_check_iso = now_utc.isoformat()
+        return True
+
+    for alert in new_alerts:
+        msg = (
+            f"⚠️ *Shadow Alert (NEW)*\n"
+            f"`{alert}`\n"
+            f"_{now_utc.strftime('%Y-%m-%d %H:%M UTC')}_\n"
+            f"_See /api/smart-money/signal-health for full snapshot_"
+        )
+        _send_telegram(msg, dry_run=dry_run)
+        logger.info("posted NEW shadow alert to telegram: %s", alert[:80])
+
+    for alert in resolved:
+        msg = (
+            f"✅ *Shadow Alert (RESOLVED)*\n"
+            f"`{alert}`\n"
+            f"_{now_utc.strftime('%Y-%m-%d %H:%M UTC')}_"
+        )
+        _send_telegram(msg, dry_run=dry_run)
+        logger.info("posted RESOLVED shadow alert: %s", alert[:80])
+
+    state.last_shadow_alerts_seen = current
+    state.last_shadow_alerts_check_iso = now_utc.isoformat()
+    return True
+
+
 def tick(now_utc: datetime, state: CronState, *, dry_run: bool) -> bool:
     """Run any due jobs. Returns True if state changed (caller persists)."""
     changed = False
@@ -307,10 +390,12 @@ def tick(now_utc: datetime, state: CronState, *, dry_run: bool) -> bool:
     # Cheap probe (one HTTP GET); only POSTs when actually stopped.
     _ensure_freqtrade_running(dry_run=dry_run)
 
-    # R69: every 5 minutes, poll /operations alerts and broadcast diff
-    # to Telegram. Cheap probe; broadcast only on add/remove.
+    # R69: every 5 minutes, poll SUPERTREND /operations alerts.
+    # R73: same cadence, poll SHADOW /signal-health alerts.
     if minute % 5 == 0:
         if check_operations_alerts(state, dry_run=dry_run, now_utc=now_utc):
+            changed = True
+        if check_shadow_alerts(state, dry_run=dry_run, now_utc=now_utc):
             changed = True
 
     # --- daily_summary at 00:05 UTC ---------------------------------- #

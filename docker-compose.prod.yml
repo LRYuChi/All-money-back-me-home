@@ -264,6 +264,10 @@ services:
       # delta (NEW + RESOLVED) to Telegram. Disable with =0.
       - OPERATIONS_API_URL=http://api:8000/api/supertrend/operations
       - SUPERTREND_ALERT_BROADCAST=${SUPERTREND_ALERT_BROADCAST:-1}
+      # R73: parallel poll of SHADOW pipeline alerts (smart-money daemon).
+      # Same 5min cadence, separate Telegram label "Shadow Alert".
+      - SHADOW_OPERATIONS_API_URL=http://api:8000/api/smart-money/signal-health
+      - SHADOW_ALERT_BROADCAST=${SHADOW_ALERT_BROADCAST:-1}
     restart: unless-stopped
     logging:
       driver: json-file
