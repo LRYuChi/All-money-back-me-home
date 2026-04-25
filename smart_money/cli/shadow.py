@@ -35,6 +35,7 @@ from fusion import (
     load_weights,
     yfinance_vix_provider,
 )
+from execution.pending_orders import build_queue, make_intent_callback
 from fusion.regime import MarketContext
 from shared.signals.adapters import from_smart_money
 from shared.signals.history import SignalHistoryWriter, build_writer, record_safe
@@ -141,6 +142,13 @@ def build_parser() -> argparse.ArgumentParser:
         "--context-cache-ttl", type=int, default=300,
         help="Seconds to cache MarketContext lookups (default 300).",
     )
+    parser.add_argument(
+        "--intent-mode",
+        choices=["shadow", "paper", "live", "notify"],
+        default="shadow",
+        help="Execution mode tagged on every pending_order produced by "
+             "the strategy runtime (default shadow).",
+    )
     parser.add_argument("--log-level", default="INFO",
                         choices=["DEBUG", "INFO", "WARNING", "ERROR"])
     return parser
@@ -201,16 +209,24 @@ def _maybe_build_strategy_runtime(args: argparse.Namespace) -> StrategyRuntime |
             )
             return Regime.SIDEWAYS_HIGH_VOL
 
+    # Round 16: persist intents into pending_orders queue. Mode comes from
+    # CLI flag — `shadow` for first deployment, `paper`/`live` after Phase F
+    # adapters land. NoOp queue (when DB not configured) just logs.
+    queue = build_queue(settings)
+    on_intent = make_intent_callback(queue, mode=args.intent_mode)
+
     runtime = StrategyRuntime(
         registry=registry,
         fuser=fuser,
         regime_provider=_regime_provider,
         capital_provider=lambda: capital,
+        on_intent=on_intent,
     )
     logger.info(
         "strategy runtime: enabled (%d active strategies, capital=$%.0f, "
-        "context_provider=%s)",
+        "context_provider=%s, queue=%s, intent_mode=%s)",
         len(active), capital, type(context_provider).__name__,
+        type(queue).__name__, args.intent_mode,
     )
     return runtime
 
