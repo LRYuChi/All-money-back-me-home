@@ -8,6 +8,9 @@ exchange — bad for multi-exchange support.
 Backends:
   - NoOpSymbolCatalog       — every symbol "supported" (G2 fail-open)
   - InMemorySymbolCatalog   — caller seeds; tests + smoke
+  - YamlSymbolCatalog       — loads a curated whitelist from YAML
+                              (round 35; pre-F.1.x ccxt wiring path)
+  - CachedSymbolCatalog     — wraps loader() with TTL refresh
   - <Exchange>SymbolCatalog — per-adapter: queries the exchange's
                               instruments endpoint, caches with TTL
 
@@ -19,6 +22,7 @@ from __future__ import annotations
 
 import logging
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
 from typing import Iterable, Protocol
 
 logger = logging.getLogger(__name__)
@@ -64,6 +68,56 @@ class InMemorySymbolCatalog:
 
     def all_supported(self) -> set[str]:
         return set(self._supported)
+
+
+# ================================================================== #
+# YAML loader
+# ================================================================== #
+class YamlSymbolCatalog(InMemorySymbolCatalog):
+    """Reads a curated whitelist from YAML and seeds an InMemory catalog.
+
+    Schema:
+        symbols:
+          - crypto:OKX:BTC/USDT:USDT
+          - crypto:OKX:ETH/USDT:USDT
+          - crypto:OKX:SOL/USDT:USDT
+
+    Used as the prod path for G2 until ccxt-okx wiring (F.1.x) replaces
+    it with a live catalog refresh from the exchange's instruments endpoint.
+    Curated YAML is intentional — it's an opt-in tradeable list, narrower
+    than "everything OKX lists" (avoids accidentally trading a low-volume
+    pair the strategy was never tested on).
+    """
+
+    @classmethod
+    def from_path(cls, path: Path | str) -> "YamlSymbolCatalog":
+        try:
+            import yaml
+        except ImportError as e:
+            raise RuntimeError(
+                "YamlSymbolCatalog requires PyYAML — pip install pyyaml"
+            ) from e
+
+        p = Path(path)
+        if not p.exists():
+            raise FileNotFoundError(f"symbol catalog not found: {p}")
+
+        data = yaml.safe_load(p.read_text())
+        if not isinstance(data, dict):
+            raise ValueError(
+                f"symbol catalog YAML must be a mapping; got {type(data).__name__}"
+            )
+        raw = data.get("symbols") or []
+        if not isinstance(raw, list):
+            raise ValueError(
+                f"symbol catalog 'symbols' must be a list; got {type(raw).__name__}"
+            )
+
+        m = cls(symbols=[str(s) for s in raw])
+        logger.info(
+            "loaded symbol catalog from %s: %d symbols", p, len(m.all_supported()),
+        )
+        return m
 
 
 # ================================================================== #
@@ -126,9 +180,49 @@ class CachedSymbolCatalog:
         return self._cached
 
 
+# ================================================================== #
+# Factory
+# ================================================================== #
+def build_symbol_catalog(settings) -> "SymbolCatalog":  # noqa: ANN001
+    """Yaml > NoOp.
+
+    settings.symbol_catalog_path (env: SM_SYMBOL_CATALOG_PATH) — when set,
+    loads YamlSymbolCatalog. Otherwise NoOp (G2 fail-opens, useful in dev/
+    shadow without a curated list).
+
+    Phase F.1.x will add an OKXSymbolCatalog branch once ccxt is wired —
+    for now the curated YAML is the prod path.
+    """
+    raw_path = (
+        getattr(settings, "symbol_catalog_path", "")
+        or ""
+    ).strip()
+    if not raw_path:
+        logger.info(
+            "symbol_catalog: NoOp (no SM_SYMBOL_CATALOG_PATH) — "
+            "G2 will allow every symbol",
+        )
+        return NoOpSymbolCatalog()
+    try:
+        return YamlSymbolCatalog.from_path(raw_path)
+    except FileNotFoundError as e:
+        logger.warning(
+            "symbol_catalog: %s; falling back to NoOp", e,
+        )
+        return NoOpSymbolCatalog()
+    except Exception as e:
+        logger.error(
+            "symbol_catalog: failed to load %s (%s); falling back to NoOp",
+            raw_path, e,
+        )
+        return NoOpSymbolCatalog()
+
+
 __all__ = [
     "CachedSymbolCatalog",
     "InMemorySymbolCatalog",
     "NoOpSymbolCatalog",
     "SymbolCatalog",
+    "YamlSymbolCatalog",
+    "build_symbol_catalog",
 ]

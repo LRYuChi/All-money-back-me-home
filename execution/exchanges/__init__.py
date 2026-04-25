@@ -18,6 +18,8 @@ from execution.exchanges.symbol_catalog import (
     InMemorySymbolCatalog,
     NoOpSymbolCatalog,
     SymbolCatalog,
+    YamlSymbolCatalog,
+    build_symbol_catalog,
 )
 from execution.exchanges.types import (
     ExchangeError,
@@ -32,5 +34,7 @@ __all__ = [
     "InMemorySymbolCatalog",
     "NoOpSymbolCatalog",
     "SymbolCatalog",
+    "YamlSymbolCatalog",
+    "build_symbol_catalog",
     "make_client_order_id",
 ]

@@ -30,6 +30,7 @@ from execution.pending_orders import (
     build_default_registry,
     build_queue,
 )
+from execution.exchanges import NoOpSymbolCatalog, build_symbol_catalog
 from risk import (
     ConsecutiveLossDaysGuard,
     CorrelationCapGuard,
@@ -43,6 +44,7 @@ from risk import (
     NoOpWinRateProvider,
     PerMarketExposureGuard,
     PerStrategyExposureGuard,
+    SymbolSupportedGuard,
     build_correlation_matrix,
     build_exposure_provider,
     build_pnl_aggregator,
@@ -83,9 +85,10 @@ def build_parser() -> argparse.ArgumentParser:
     )
     p.add_argument(
         "--with-guards", action="store_true",
-        help="Enable risk guard pipeline (G1 latency / G3 min_size / G4-G6 "
-             "exposure caps / G7 correlation cap (opt-in) / G8 daily loss CB / "
-             "G9 consecutive losses) before dispatch.",
+        help="Enable risk guard pipeline (G1 latency / G2 symbol-supported "
+             "(opt-in) / G3 min_size / G4-G6 exposure caps / G7 correlation "
+             "cap (opt-in) / G8 daily loss CB / G9 consecutive losses / "
+             "G10 Kelly (opt-in)) before dispatch.",
     )
     p.add_argument(
         "--capital-usd", type=float, default=10_000.0,
@@ -118,6 +121,11 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument(
         "--consecutive-loss-days", type=int, default=3,
         help="G9 consecutive losing days threshold (default 3 — matches D7).",
+    )
+    p.add_argument(
+        "--symbol-supported", action="store_true",
+        help="G2 deny orders for symbols not in the catalog (loaded from "
+             "SM_SYMBOL_CATALOG_PATH; NoOp catalog → fail-open).",
     )
     p.add_argument(
         "--correlation-cap-pct", type=float, default=0.0,
@@ -173,6 +181,22 @@ def _build_guard_pipeline(args: argparse.Namespace):
     guards: list = [
         LatencyBudgetGuard(budget_seconds=args.latency_budget_sec),
         MinSizeGuard(default_min_usd=args.min_notional_usd),
+    ]
+
+    # G2 placement: right after the cheap deterministic guards (G1, G3),
+    # before any DB-touching guard. Catches typos/delistings without
+    # spending DB queries on a doomed order.
+    if args.symbol_supported:
+        catalog = build_symbol_catalog(settings)
+        if isinstance(catalog, NoOpSymbolCatalog):
+            logger.warning(
+                "G2 symbol-supported requested but catalog is NoOp "
+                "(SM_SYMBOL_CATALOG_PATH unset / file missing) — "
+                "guard will fail-open until a real catalog is configured",
+            )
+        guards.append(SymbolSupportedGuard(catalog=catalog))
+
+    guards.extend([
         DailyLossCircuitBreakerGuard(
             loss_threshold_pct=args.daily_loss_pct,
             pnl_aggregator=pnl_agg,
@@ -183,7 +207,7 @@ def _build_guard_pipeline(args: argparse.Namespace):
         ),
         PerStrategyExposureGuard(cap_pct_of_capital=args.max_strategy_pct),
         PerMarketExposureGuard(default_cap_pct=args.max_market_pct),
-    ]
+    ])
     # G7 placement: between per-market and global. Reasoning — per-market
     # caps a whole asset class; G7 catches "too many strongly-correlated
     # symbols within that class"; G6 then enforces total leverage.

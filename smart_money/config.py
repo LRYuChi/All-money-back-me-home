@@ -105,6 +105,10 @@ class Settings(BaseSettings):
     supabase_url: str = Field(default="", alias="SUPABASE_URL")
     supabase_service_key: str = Field(default="", alias="SUPABASE_SERVICE_KEY")
 
+    # Risk layer auxiliary inputs (Phase G round 29 + 35)
+    correlation_matrix_path: str = Field(default="", alias="SM_CORRELATION_MATRIX_PATH")
+    symbol_catalog_path: str = Field(default="", alias="SM_SYMBOL_CATALOG_PATH")
+
     # AI layer (Phase 6,預設 disabled)
     ai_layer_enabled: bool = False
     ai_endpoint: str = "https://api.acetoken.ai/v1/messages"

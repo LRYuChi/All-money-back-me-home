@@ -87,7 +87,8 @@
 | (manual) | #32 | Phase F.1 第一步 + Phase G 收尾 — execution/exchanges/ scaffolding (ExchangeRequest/Response types + deterministic SHA-256 client_order_id + CachedSymbolCatalog with first-load fail-closed) + OKX 完整包 (OKXClient Protocol + FakeOKXClient + OKXLiveDispatcher 6-status mapping + idempotency 透過 coid 重送 + OKXSymbolCatalog) + G2 SymbolSupportedGuard (10/10 guards 完整) 34 tests，全 1280 tests 綠 | ✅ 完成 |
 | (manual) | #33 | Phase E 收尾 — strategy_engine/cli/loader.py (validate/load 子命令，--dir/--file 互斥，--pattern 自訂 glob，--dry-run，全批 atomic on parse-fail，個別 upsert error 不終止其他) + smoke 通過 config/strategies/ 16 tests，全 1296 tests 綠 | ✅ 完成 |
 | (manual) | #34 | Phase B 收尾 — credential audit hook (round 7 leftover): shared/credentials/audit.py 4 backends (NoOp/InMemory/Postgres/Supabase) + with_actor() ContextVar context manager + resolve_actor 三層 fallback (explicit→ctx→env→None) + 全 3 store backend (InMemory/Supabase/Postgres) hook 進 write/read/delete/rotate + fire-and-forget on audit failure (不阻塞 op) + audit_history(name) 25 tests，全 1321 tests 綠 | ✅ 完成 |
-| — | — | **下輪待辦**：ccxt-okx 真實 wiring (需 OKX_API_KEY) OR Phase H live ramp 計畫 OR Phase E dashboard (需碰 apps/web) OR Phase D LLM 整合 (等 R2 拍板) | ⬜ |
+| (loop #1) | #35 | G2 接入 prod chain — YamlSymbolCatalog (curated whitelist, schema validation, defensive str coercion) + build_symbol_catalog factory (Yaml > NoOp，missing/malformed file fail-open) + smart_money config 加 SM_SYMBOL_CATALOG_PATH + cli/work.py `--symbol-supported` flag + G2 在 G3 後 DB-touching guards 前的最佳位置 14 tests，全 1335 tests 綠；**10/10 guards 真正 production-wired** | ✅ 完成 |
+| — | — | **下輪待辦**：pending_order_events 寫入 (status transition audit，migration 020 早就 ship 表但無 writer) OR ccxt-okx 真實 wiring (需 OKX_API_KEY) OR worker SUBMITTED-state polling (live mode 真用得上) OR pending_orders timeout/expired (避免卡死 PENDING) | ⬜ |
 
 ---
 
