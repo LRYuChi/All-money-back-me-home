@@ -16,9 +16,10 @@ if str(_API_SRC) not in sys.path:
 
 def _import_router():
     from src.routers.supertrend import (
-        _alignment_count, _extract_last_row, _likely_side, _resolve_journal_dir,
-        router, supertrend_evaluations, supertrend_health, supertrend_scanner,
-        supertrend_skipped, supertrend_snapshot, supertrend_trades,
+        _alignment_count, _build_ops_alerts, _extract_last_row, _likely_side,
+        _resolve_journal_dir, router, supertrend_evaluations, supertrend_health,
+        supertrend_operations, supertrend_scanner, supertrend_skipped,
+        supertrend_snapshot, supertrend_trades,
     )
     return {
         "router": router,
@@ -28,17 +29,19 @@ def _import_router():
         "skipped": supertrend_skipped,
         "scanner": supertrend_scanner,
         "evaluations": supertrend_evaluations,
+        "operations": supertrend_operations,
         "health": supertrend_health,
         "alignment_count": _alignment_count,
         "likely_side": _likely_side,
         "extract_last_row": _extract_last_row,
+        "build_ops_alerts": _build_ops_alerts,
     }
 
 
 # =================================================================== #
 # Router structure
 # =================================================================== #
-def test_router_has_7_endpoints():
+def test_router_has_8_endpoints():
     mod = _import_router()
     paths = {r.path for r in mod["router"].routes}
     assert paths == {
@@ -48,6 +51,7 @@ def test_router_has_7_endpoints():
         "/api/supertrend/skipped",
         "/api/supertrend/scanner",
         "/api/supertrend/evaluations",
+        "/api/supertrend/operations",
         "/api/supertrend/health",
     }
 
@@ -754,3 +758,179 @@ def test_evaluations_counts_fired_tiers(monkeypatch, tmp_path):
     assert out["tier_fired_count"]["confirmed"] == 1
     assert out["tier_fired_count"]["scout"] == 2
     assert out["tier_fired_count"]["pre_scout"] == 0
+
+
+# =================================================================== #
+# /operations — R68 (alert helper)
+# =================================================================== #
+def test_alerts_empty_when_all_healthy():
+    mod = _import_router()
+    alerts = mod["build_ops_alerts"](
+        bot_state="running", n_pairs=17,
+        eval_summary={
+            "n_evaluations": 100,
+            "tier_fired_count": {"confirmed": 1, "scout": 2, "pre_scout": 0},
+            "failures_top": {},
+        },
+        health={"ok": True}, recent_trades=3, journal_ok=True,
+    )
+    assert alerts == []
+
+
+def test_alerts_flag_bot_stopped():
+    mod = _import_router()
+    alerts = mod["build_ops_alerts"](
+        bot_state="stopped", n_pairs=17,
+        eval_summary={}, health={"ok": True},
+        recent_trades=0, journal_ok=True,
+    )
+    assert any("BOT_STATE" in a for a in alerts)
+
+
+def test_alerts_flag_empty_whitelist():
+    mod = _import_router()
+    alerts = mod["build_ops_alerts"](
+        bot_state="running", n_pairs=0,
+        eval_summary={}, health={"ok": True},
+        recent_trades=0, journal_ok=True,
+    )
+    assert any("WHITELIST_EMPTY" in a for a in alerts)
+
+
+def test_alerts_flag_thin_whitelist():
+    mod = _import_router()
+    alerts = mod["build_ops_alerts"](
+        bot_state="running", n_pairs=3,
+        eval_summary={}, health={"ok": True},
+        recent_trades=0, journal_ok=True,
+    )
+    assert any("WHITELIST_THIN" in a for a in alerts)
+
+
+def test_alerts_flag_journal_stale():
+    mod = _import_router()
+    alerts = mod["build_ops_alerts"](
+        bot_state="running", n_pairs=17,
+        eval_summary={"n_evaluations": 5},
+        health={"ok": False, "reason": "no events in last 1d"},
+        recent_trades=0, journal_ok=False,
+    )
+    assert any("JOURNAL_STALE" in a for a in alerts)
+
+
+def test_alerts_no_fires_24h_with_dominant_blocker():
+    mod = _import_router()
+    alerts = mod["build_ops_alerts"](
+        bot_state="running", n_pairs=17,
+        eval_summary={
+            "n_evaluations": 200,
+            "tier_fired_count": {"confirmed": 0, "scout": 0, "pre_scout": 0},
+            "failures_top": {"vol<=1.2*ma": 178, "atr_not_rising": 152},
+        },
+        health={"ok": True}, recent_trades=0, journal_ok=True,
+    )
+    fire_alert = next((a for a in alerts if "NO_FIRES_24H" in a), None)
+    assert fire_alert is not None
+    assert "vol<=1.2*ma" in fire_alert
+    assert "regime mismatch" in fire_alert.lower()
+
+
+def test_alerts_no_pipeline_activity():
+    """Bot running, but evaluations are zero → eval journal off / strategy stuck."""
+    mod = _import_router()
+    alerts = mod["build_ops_alerts"](
+        bot_state="running", n_pairs=17,
+        eval_summary={"n_evaluations": 0},
+        health={"ok": True}, recent_trades=0, journal_ok=True,
+    )
+    assert any("NO_PIPELINE_ACTIVITY" in a for a in alerts)
+
+
+def test_alerts_no_fires_alert_skipped_when_eval_count_low():
+    """< 50 evaluations isn't enough sample to declare 'no fires' — silent."""
+    mod = _import_router()
+    alerts = mod["build_ops_alerts"](
+        bot_state="running", n_pairs=17,
+        eval_summary={
+            "n_evaluations": 10,
+            "tier_fired_count": {"confirmed": 0, "scout": 0, "pre_scout": 0},
+            "failures_top": {"vol<=1.2*ma": 8},
+        },
+        health={"ok": True}, recent_trades=0, journal_ok=True,
+    )
+    assert not any("NO_FIRES_24H" in a for a in alerts)
+
+
+# =================================================================== #
+# /operations — R68 (endpoint integration)
+# =================================================================== #
+def test_operations_handles_freqtrade_unreachable(monkeypatch, tmp_path):
+    """When freqtrade is down, endpoint still returns a response; errors logged."""
+    from unittest.mock import patch
+    monkeypatch.setenv("SUPERTREND_JOURNAL_DIR", str(tmp_path))
+    mod = _import_router()
+    with patch(
+        "src.routers.supertrend._ft_get",
+        side_effect=RuntimeError("connection refused"),
+    ):
+        out = mod["operations"](eval_window_days=1, perf_window_days=7)
+    assert "bot" in out
+    assert "errors" in out
+    assert "bot" in out["errors"]
+    # Status degraded because bot unknown + alerts fired
+    assert out["status"] == "degraded"
+
+
+def test_operations_returns_full_snapshot_when_healthy(monkeypatch, tmp_path):
+    from datetime import datetime, timezone
+    from unittest.mock import patch
+    from strategies.journal import TradeJournal
+
+    monkeypatch.setenv("SUPERTREND_JOURNAL_DIR", str(tmp_path))
+    j = TradeJournal(tmp_path)
+    now = datetime.now(timezone.utc).isoformat()
+    j.write({
+        "event_type": "evaluation", "timestamp": now,
+        "candle_ts": now, "state": {}, "pair": "BTC/USDT:USDT",
+        "confirmed_fired": True, "confirmed_failures": [],
+        "scout_fired": False, "scout_failures": [],
+        "pre_scout_fired": False, "pre_scout_failures": [],
+    })
+    mod = _import_router()
+    fake_responses = {
+        "/api/v1/show_config": {
+            "state": "running", "dry_run": True,
+            "strategy": "SupertrendStrategy", "max_open_trades": 3,
+        },
+        "/api/v1/whitelist": {"whitelist": ["BTC/USDT:USDT"] * 17},
+    }
+    with patch(
+        "src.routers.supertrend._ft_get",
+        side_effect=lambda path, **kw: fake_responses.get(path, {}),
+    ):
+        out = mod["operations"](eval_window_days=1, perf_window_days=7)
+    assert out["bot"]["state"] == "running"
+    assert out["whitelist"]["n_pairs"] == 17
+    assert out["pipeline"]["evaluations"]["n_evaluations"] == 1
+    assert out["pipeline"]["evaluations"]["tier_fired_count"]["confirmed"] == 1
+    assert out["status"] == "ok"
+    assert out["alert_count"] == 0
+
+
+def test_operations_includes_switchboard_view(monkeypatch, tmp_path):
+    from unittest.mock import patch
+    monkeypatch.setenv("SUPERTREND_JOURNAL_DIR", str(tmp_path))
+    monkeypatch.setenv("SUPERTREND_FR_ALPHA", "1")
+    monkeypatch.setenv("SUPERTREND_KELLY_MODE", "continuous")
+    mod = _import_router()
+    with patch(
+        "src.routers.supertrend._ft_get",
+        side_effect=RuntimeError("doesn't matter for this test"),
+    ):
+        out = mod["operations"](eval_window_days=1, perf_window_days=7)
+    sw = out["switchboard"]
+    assert sw["fr_alpha"] == "1"
+    assert sw["kelly_mode"] == "continuous"
+    # Defaults preserved for unset
+    assert sw["live_mode"] == "0"
+    assert sw["regime_filter"] == "1"

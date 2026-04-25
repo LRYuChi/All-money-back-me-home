@@ -516,6 +516,226 @@ def supertrend_scanner(
 
 
 # =================================================================== #
+# /operations — R68 — unified ops snapshot
+# =================================================================== #
+def _ft_show_config_state() -> dict:
+    """Quick freqtrade /show_config probe — never raises."""
+    try:
+        return _ft_get("/api/v1/show_config", timeout=3.0)
+    except Exception:
+        return {}
+
+
+def _ft_whitelist_size() -> int:
+    try:
+        return len((_ft_get("/api/v1/whitelist", timeout=3.0) or {}).get("whitelist", []))
+    except Exception:
+        return -1
+
+
+def _build_ops_alerts(
+    bot_state: str, n_pairs: int, eval_summary: dict,
+    health: dict, recent_trades: int, journal_ok: bool,
+) -> list[str]:
+    """Compose the 'should I do something' list. Empty = all OK.
+
+    Each alert is a short imperative string that points at a known
+    failure mode the operator should investigate.
+    """
+    alerts: list[str] = []
+
+    if bot_state and bot_state != "running":
+        alerts.append(
+            f"BOT_STATE={bot_state} — issue POST /api/v1/start (R60 autostart "
+            f"sidecar should fix within 30s if container rebooted)"
+        )
+
+    if n_pairs == 0:
+        alerts.append(
+            "WHITELIST_EMPTY — VolumePairList init failed; check freqtrade "
+            "logs for OKX-not-supported / refresh_period errors (R63)"
+        )
+    elif 0 < n_pairs < 5:
+        alerts.append(
+            f"WHITELIST_THIN ({n_pairs} pairs) — pairlist filters may be "
+            "too aggressive; review AgeFilter / SpreadFilter / VolatilityFilter"
+        )
+
+    if not journal_ok:
+        reason = health.get("reason", "unknown")
+        alerts.append(f"JOURNAL_STALE — {reason}")
+
+    # Pipeline pressure check: if 0 fires + lots of evaluations, flag the
+    # dominant blocker so operator can see "is this market chop or strategy bug?"
+    fires = eval_summary.get("tier_fired_count", {})
+    n_fires = sum(fires.values()) if fires else 0
+    n_evals = eval_summary.get("n_evaluations", 0)
+    if n_fires == 0 and n_evals >= 50:
+        top = next(iter((eval_summary.get("failures_top") or {}).items()), None)
+        if top:
+            alerts.append(
+                f"NO_FIRES_24H — {n_evals} evaluations, dominant blocker: "
+                f"{top[0]} ({top[1]} hits). Likely market regime mismatch, "
+                "not a code bug — see /api/supertrend/evaluations for full breakdown"
+            )
+
+    if recent_trades == 0 and n_evals == 0:
+        alerts.append(
+            "NO_PIPELINE_ACTIVITY — bot may not be running populate_entry_trend; "
+            "verify SUPERTREND_EVAL_JOURNAL=1 + freqtrade INFO logs"
+        )
+
+    return alerts
+
+
+@router.get("/operations")
+def supertrend_operations(
+    eval_window_days: int = Query(1, ge=1, le=7),
+    perf_window_days: int = Query(7, ge=1, le=90),
+) -> dict[str, Any]:
+    """One-stop operations snapshot — composes outputs from the 6 other
+    endpoints + computes actionable alerts.
+
+    Single GET = full system status. Bookmark-friendly for ops dashboards.
+    Best-effort end-to-end: any sub-component failure populates errors[]
+    and the rest still renders.
+    """
+    out: dict[str, Any] = {
+        "fetched_at": datetime.now(timezone.utc).isoformat(),
+        "errors": {},
+    }
+
+    # ---- bot state (freqtrade /show_config) ---- #
+    cfg = _ft_show_config_state()
+    bot_state = str(cfg.get("state", "unknown"))
+    out["bot"] = {
+        "state": bot_state,
+        "dry_run": cfg.get("dry_run"),
+        "strategy": cfg.get("strategy"),
+        "max_open_trades": cfg.get("max_open_trades"),
+    }
+    if not cfg:
+        out["errors"]["bot"] = "freqtrade /show_config unreachable"
+
+    # ---- whitelist size ---- #
+    n_pairs = _ft_whitelist_size()
+    out["whitelist"] = {"n_pairs": n_pairs if n_pairs >= 0 else None}
+    if n_pairs < 0:
+        out["errors"]["whitelist"] = "freqtrade /whitelist unreachable"
+
+    # ---- env switchboard (read-only view of what's enabled) ---- #
+    out["switchboard"] = {
+        "regime_filter": os.environ.get("SUPERTREND_REGIME_FILTER", "1"),
+        "kelly_mode": os.environ.get("SUPERTREND_KELLY_MODE", "three_stage"),
+        "exit_mode": os.environ.get("SUPERTREND_EXIT_MODE", "weighted"),
+        "fr_alpha": os.environ.get("SUPERTREND_FR_ALPHA", "0"),
+        "orderbook_confirm": os.environ.get("SUPERTREND_ORDERBOOK_CONFIRM", "0"),
+        "correlation_filter": os.environ.get("SUPERTREND_CORRELATION_FILTER", "0"),
+        "eval_journal": os.environ.get("SUPERTREND_EVAL_JOURNAL", "1"),
+        "live_mode": os.environ.get("SUPERTREND_LIVE", "0"),
+    }
+
+    # ---- pipeline activity from journal ---- #
+    journal_dir = _resolve_journal_dir()
+    journal_ok = journal_dir.exists()
+    health: dict[str, Any] = {"ok": False}
+    eval_summary: dict[str, Any] = {}
+    n_recent_trades = 0
+    n_recent_skipped = 0
+    last_event_ts = None
+    if journal_ok:
+        try:
+            from strategies.journal import TradeJournal
+            journal = TradeJournal(journal_dir)
+            now = datetime.now(timezone.utc)
+            rows = journal.read_range(
+                from_date=now - timedelta(days=eval_window_days), to_date=now,
+            )
+            evals = [r for r in rows if r.get("event_type") == "evaluation"]
+            tier_fires = {"confirmed": 0, "scout": 0, "pre_scout": 0}
+            failure_counter: dict[str, int] = {}
+            for ev in evals:
+                for t in ("confirmed", "scout", "pre_scout"):
+                    if ev.get(f"{t}_fired"):
+                        tier_fires[t] += 1
+                    for f in (ev.get(f"{t}_failures") or []):
+                        failure_counter[f] = failure_counter.get(f, 0) + 1
+            eval_summary = {
+                "n_evaluations": len(evals),
+                "tier_fired_count": tier_fires,
+                "failures_top": dict(
+                    sorted(failure_counter.items(), key=lambda kv: kv[1],
+                           reverse=True)[:5]
+                ),
+            }
+            n_recent_trades = sum(
+                1 for r in rows if r.get("event_type") == "exit"
+            )
+            n_recent_skipped = sum(
+                1 for r in rows
+                if r.get("event_type") in ("skipped", "circuit_breaker")
+            )
+            if rows:
+                last_event_ts = max(r.get("timestamp", "") for r in rows)
+                health = {
+                    "ok": True, "last_event_ts": last_event_ts,
+                    "events_in_window": len(rows),
+                }
+            else:
+                health = {
+                    "ok": False, "reason": f"no events in last {eval_window_days}d",
+                }
+        except Exception as e:
+            out["errors"]["pipeline"] = str(e)
+            health = {"ok": False, "reason": f"journal read failed: {e}"}
+    else:
+        health = {"ok": False, "reason": f"journal missing: {journal_dir}"}
+
+    out["pipeline"] = {
+        "journal_ok": journal_ok,
+        "health": health,
+        "evaluations": eval_summary,
+        "recent_trades": n_recent_trades,
+        "recent_skipped": n_recent_skipped,
+    }
+
+    # ---- performance snapshot (delegate via journal) ---- #
+    if journal_ok:
+        try:
+            from strategies.journal import TradeJournal
+            from strategies.performance import PerformanceAggregator
+            journal = TradeJournal(journal_dir)
+            agg = PerformanceAggregator(journal)
+            now = datetime.now(timezone.utc)
+            snap = agg.snapshot(
+                from_date=now - timedelta(days=perf_window_days),
+                to_date=now,
+            )
+            out["performance"] = {
+                "window_days": perf_window_days,
+                "n_trades": snap.n_trades,
+                "win_rate": snap.win_rate,
+                "sum_pnl_usd": snap.sum_pnl_usd,
+                "max_drawdown_usd": snap.max_drawdown_usd,
+            }
+        except Exception as e:
+            out["errors"]["performance"] = str(e)
+
+    # ---- composed actionable alerts ---- #
+    out["alerts"] = _build_ops_alerts(
+        bot_state=bot_state,
+        n_pairs=n_pairs if n_pairs >= 0 else 0,
+        eval_summary=eval_summary,
+        health=health,
+        recent_trades=n_recent_trades,
+        journal_ok=journal_ok,
+    )
+    out["alert_count"] = len(out["alerts"])
+    out["status"] = "ok" if not out["alerts"] else "degraded"
+    return out
+
+
+# =================================================================== #
 # /health
 # =================================================================== #
 @router.get("/health")
