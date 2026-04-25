@@ -84,6 +84,10 @@ services:
       - ./config/freqtrade:/freqtrade/config
       - ft-data:/freqtrade/user_data/data
       - trade-data:/freqtrade/user_data/shared_data
+      # Round 46: SupertrendStrategy writes structured journal here.
+      # Mounted to host so `python -m strategies.cli.journal_report`
+      # on the host can read it without entering the container.
+      - ./trading_log:/freqtrade/trading_log
     environment:
       - DATA_DIR=/freqtrade/user_data/shared_data
       - FRED_API_KEY=${FRED_API_KEY}
@@ -195,12 +199,25 @@ services:
     volumes:
       - ./smart_money:/app/smart_money:ro
       - ./config/smart_money:/app/config/smart_money:ro
+      # Shadow daemon imports from these packages (rounds 14+); they must be
+      # mounted alongside smart_money/ for `import fusion`, `import execution`,
+      # `import shared`, `import strategy_engine` to resolve.
+      - ./fusion:/app/fusion:ro
+      - ./execution:/app/execution:ro
+      - ./shared:/app/shared:ro
+      - ./strategy_engine:/app/strategy_engine:ro
+      - ./risk:/app/risk:ro
+      - ./config/fusion:/app/config/fusion:ro
+      - ./config/strategies:/app/config/strategies:ro
     environment:
       - PYTHONUNBUFFERED=1
       - DATABASE_URL=${SM_DATABASE_URL:-}
       - SUPABASE_URL=${SUPABASE_URL}
       - SUPABASE_SERVICE_KEY=${SUPABASE_SERVICE_ROLE_KEY}
       - SM_HL_API_URL=${HL_API_URL:-https://api.hyperliquid.xyz}
+      # Round 7 + 34: master key for credential store decrypt (OKX keys etc.)
+      - MASTER_SECRET=${MASTER_SECRET:-}
+      - MASTER_SECRET_OLD=${MASTER_SECRET_OLD:-}
       # Shadow daemon needs a wide stop timeout so it can flush the queue,
       # unsubscribe cleanly, and close its WS connection.
     stop_grace_period: 30s
