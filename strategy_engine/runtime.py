@@ -22,6 +22,12 @@ Intent dispatch:
   - `on_intent(intent)` is invoked SYNCHRONOUSLY per fire — failures
     are logged but never propagated, so a failing pending_orders write
     can't poison the strategy loop.
+
+Round 28: optional TTL cache on registry.list_active() reduces DB load
+when the runtime ticks faster than strategies change. Cache is opt-in
+(`registry_refresh_sec=None` = re-query every tick, original behavior).
+Callers who just flipped a strategy can call `refresh_strategies()` to
+invalidate immediately.
 """
 from __future__ import annotations
 
@@ -55,16 +61,23 @@ class StrategyRuntime:
         regime_provider: RegimeProvider,
         capital_provider: CapitalProvider,
         on_intent: IntentCallback | None = None,
+        *,
+        registry_refresh_sec: float | None = None,
     ) -> None:
         self._registry = registry
         self._fuser = fuser
         self._regime_provider = regime_provider
         self._capital_provider = capital_provider
         self._on_intent = on_intent or _log_intent
+        self._registry_refresh_sec = registry_refresh_sec
 
         # Per-(symbol, horizon) signal buffer
         self._buffers: dict[tuple[str, str], list[UniversalSignal]] = defaultdict(list)
         self._lock = threading.Lock()
+
+        # Registry list_active() cache (round 28)
+        self._cached_active: list | None = None
+        self._cache_loaded_at: datetime | None = None
 
         # Stats counters (reset on `reset_stats()`)
         self._stats = {
@@ -73,6 +86,9 @@ class StrategyRuntime:
             "ticks": 0,
             "intents_fired": 0,
             "intent_callback_errors": 0,
+            "registry_calls": 0,
+            "registry_cache_hits": 0,
+            "skipped_disabled_runtime_check": 0,
         }
 
     # ---------------------------------------------------------------- #
@@ -100,11 +116,16 @@ class StrategyRuntime:
 
         Returns the list of fired intents (also dispatched via on_intent
         as a side effect).
+
+        Defence-in-depth (round 28): even strategies returned from the
+        cached active list get a `parsed.enabled` re-check before evaluate
+        — protects against a flip happening between cache loads (the
+        worst-case window equals registry_refresh_sec).
         """
         self._stats["ticks"] += 1
         regime = self._regime_provider()
         capital = self._capital_provider()
-        active = self._registry.list_active()
+        active = self._load_active()
 
         # Snapshot buffers under lock to keep eval lock-free
         with self._lock:
@@ -119,6 +140,10 @@ class StrategyRuntime:
             for rec in active:
                 strat = rec.parsed
                 if strat.symbol != symbol or strat.timeframe != horizon:
+                    continue
+                # Defence-in-depth: re-check enabled in case cache is stale
+                if not strat.enabled:
+                    self._stats["skipped_disabled_runtime_check"] += 1
                     continue
                 ctx = self._build_context(fused, regime, capital)
                 intent = evaluate(strat, ctx, fused_signal=fused)
@@ -137,6 +162,33 @@ class StrategyRuntime:
                     )
 
         return intents
+
+    def refresh_strategies(self) -> None:
+        """Force the next evaluate_all to re-query the registry. Call this
+        after any out-of-band registry mutation (set_enabled, upsert)."""
+        self._cached_active = None
+        self._cache_loaded_at = None
+
+    def _load_active(self) -> list:
+        """Return active strategies, hitting cache if TTL still valid."""
+        if self._registry_refresh_sec is None:
+            self._stats["registry_calls"] += 1
+            return self._registry.list_active()
+
+        now = datetime.now(timezone.utc)
+        if (
+            self._cached_active is not None
+            and self._cache_loaded_at is not None
+            and (now - self._cache_loaded_at).total_seconds()
+                < self._registry_refresh_sec
+        ):
+            self._stats["registry_cache_hits"] += 1
+            return self._cached_active
+
+        self._stats["registry_calls"] += 1
+        self._cached_active = self._registry.list_active()
+        self._cache_loaded_at = now
+        return self._cached_active
 
     # ---------------------------------------------------------------- #
     # Introspection
