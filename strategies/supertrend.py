@@ -46,7 +46,60 @@ try:
 except ImportError:
     _TG = False
 
+# Round 46: structured trade journal (JSONL events) + performance aggregator
+try:
+    from strategies.journal import (
+        CircuitBreakerEvent,
+        EntryEvent,
+        ExitEvent,
+        MultiTfState,
+        PartialExitEvent,
+        TradeJournal,
+        TrailingUpdateEvent,
+        default_stoploss_plan,
+        default_take_profit_plan,
+        now_iso,
+    )
+    _JOURNAL_DIR = os.environ.get(
+        "SUPERTREND_JOURNAL_DIR", "trading_log/journal",
+    )
+    _journal: TradeJournal | None = TradeJournal(_JOURNAL_DIR)
+except Exception as _e:   # pragma: no cover — defensive
+    _journal = None
+
 logger = logging.getLogger(__name__)
+
+
+def _safe_journal_write(event) -> None:
+    """Wrapper: journal failures NEVER block trading."""
+    if _journal is None:
+        return
+    try:
+        _journal.write(event)
+    except Exception as e:
+        logger.warning("trade journal write failed: %s", e)
+
+
+def _snapshot_state(dataframe_row) -> MultiTfState:
+    """Pull the multi-TF + indicator snapshot from the latest analyzed row."""
+    if dataframe_row is None:
+        return MultiTfState()
+    g = lambda k, d=0: dataframe_row.get(k, d) if hasattr(dataframe_row, "get") else d  # noqa
+    try:
+        return MultiTfState(
+            st_1d=int(g("st_1d", 0) or 0),
+            st_1d_duration=int(g("st_1d_duration", 0) or 0),
+            dir_4h_score=float(g("dir_4h_score", 0.0) or 0.0),
+            st_1h=int(g("st_1h", 0) or 0),
+            st_15m=int(g("st_trend", 0) or 0),
+            adx=float(g("adx", 0.0) or 0.0),
+            atr=float(g("atr", 0.0) or 0.0),
+            trend_quality=float(g("trend_quality", 0.0) or 0.0),
+            direction_score=float(g("direction_score", 0.0) or 0.0),
+            funding_rate=float(g("funding_rate", 0.0) or 0.0),
+        )
+    except Exception:
+        return MultiTfState()
 
 
 def _send_to_all_bots(text: str) -> None:
@@ -338,6 +391,11 @@ class SupertrendStrategy(IStrategy):
         Phase 3: Trail at 70% of max profit
 
         Shorts use tighter thresholds (1.0/2.5/5.0 vs 1.5/3.0/6.0).
+
+        Round 46: persists max_profit + trailing_phase to trade custom data
+        so confirm_trade_exit can record the journal exit event with full
+        post-mortem context. Phase transitions emit a trailing_update
+        journal event for live debugging.
         """
         profit_pct = current_profit * 100
 
@@ -347,23 +405,58 @@ class SupertrendStrategy(IStrategy):
         else:
             p1, p2, p3 = 1.5, 3.0, 6.0
 
+        # Round 46: track max profit ever seen + current phase via Freqtrade
+        # custom data (key-value store per trade). Defensive: getter/setter
+        # may be missing in older FT versions or on naked Trade objects.
+        prior_max = 0.0
+        prior_phase = 0
+        try:
+            prior_max = float(trade.get_custom_data("max_profit_pct", 0.0) or 0.0)
+            prior_phase = int(trade.get_custom_data("trailing_phase", 0) or 0)
+        except Exception:
+            pass
+
+        if profit_pct > prior_max:
+            try:
+                trade.set_custom_data("max_profit_pct", profit_pct)
+            except Exception:
+                pass
+
+        # Determine current phase
         if profit_pct >= p3:
-            # Phase 3: Lock 70% of profit
-            return stoploss_from_open(current_profit * 0.70, current_profit,
-                                      is_short=trade.is_short)
+            phase = 3
+            sl = stoploss_from_open(current_profit * 0.70, current_profit,
+                                    is_short=trade.is_short)
+        elif profit_pct >= p2:
+            phase = 2
+            sl = stoploss_from_open(current_profit * 0.50, current_profit,
+                                    is_short=trade.is_short)
+        elif profit_pct >= p1:
+            phase = 1
+            sl = stoploss_from_open(0.003, current_profit,
+                                    is_short=trade.is_short)
+        else:
+            phase = 0
+            sl = -0.05
 
-        if profit_pct >= p2:
-            # Phase 2: Lock 50% of profit
-            return stoploss_from_open(current_profit * 0.50, current_profit,
-                                      is_short=trade.is_short)
+        # Persist phase + emit journal event ONLY on phase transition
+        if phase != prior_phase:
+            try:
+                trade.set_custom_data("trailing_phase", phase)
+            except Exception:
+                pass
+            _safe_journal_write(TrailingUpdateEvent(
+                timestamp=now_iso(),
+                pair=pair,
+                side="short" if trade.is_short else "long",
+                phase=phase,
+                new_sl_pct=float(sl) * 100,
+                max_profit_seen_pct=max(prior_max, profit_pct),
+                current_profit_pct=profit_pct,
+                note=f"Phase {prior_phase} → {phase}",
+            ))
 
-        if profit_pct >= p1:
-            # Phase 1: Breakeven + 0.3% (covers OKX fees + slippage)
-            return stoploss_from_open(0.003, current_profit,
-                                      is_short=trade.is_short)
-
-        # Phase 0: Static -5%
-        return -0.05
+        return sl
 
     # Two-phase: scout DCA + partial exits
     position_adjustment_enable = True
@@ -447,6 +540,26 @@ class SupertrendStrategy(IStrategy):
                 "Circuit breaker active — last %d closed trades all losses within %dh cooldown. "
                 "Skipping new entry.", self._CB_LOSS_STREAK, self._CB_COOLDOWN_HOURS,
             )
+            # Round 46: journal the skip + Telegram alert (loud)
+            try:
+                pair = kwargs.get("pair", "")
+                _safe_journal_write(CircuitBreakerEvent(
+                    timestamp=now_iso(),
+                    pair=pair,
+                    side=side or "unknown",
+                    streak_length=self._CB_LOSS_STREAK,
+                    cooldown_remaining_hours=float(self._CB_COOLDOWN_HOURS),
+                    note=f"CB tripped — skipping entry on {pair}",
+                ))
+                _send_to_all_bots(
+                    f"⛔ *斷路器啟動*\n"
+                    f"連續 `{self._CB_LOSS_STREAK}` 次虧損，"
+                    f"暫停 `{self._CB_COOLDOWN_HOURS}h` 進場\n"
+                    f"已跳過: `{pair}` ({side or '?'})\n"
+                    f"請檢查: 市場 regime / 訊號品質 / 倉位大小"
+                )
+            except Exception as e:
+                logger.warning("CB journal/alert failed: %s", e)
             return 0.0
 
         target_pct = self._calc_rolling_kelly()
@@ -507,6 +620,20 @@ class SupertrendStrategy(IStrategy):
             or (not is_long and last.get("st_1h", -1) == 1)
         )
         if current_profit > 0.15 and exits_done == 0 and is_1h_against:
+            # Round 46: journal the partial exit decision
+            _safe_journal_write(PartialExitEvent(
+                timestamp=now_iso(),
+                pair=trade.pair,
+                side="long" if is_long else "short",
+                entry_price=float(trade.open_rate),
+                exit_price=float(current_rate),
+                portion_pct=50.0,
+                profit_pct_at_partial=current_profit * 100,
+                profit_usd_at_partial=trade.calc_profit(current_rate),
+                trigger="15% profit + 1H trend against",
+                state=_snapshot_state(last),
+                note="P1: lock first half",
+            ))
             return -(trade.stake_amount * 0.50)
 
         is_15m_against = (
@@ -514,6 +641,19 @@ class SupertrendStrategy(IStrategy):
             or (not is_long and last.get("st_trend", -1) == 1)
         )
         if current_profit > 0.30 and exits_done == 1 and is_15m_against:
+            _safe_journal_write(PartialExitEvent(
+                timestamp=now_iso(),
+                pair=trade.pair,
+                side="long" if is_long else "short",
+                entry_price=float(trade.open_rate),
+                exit_price=float(current_rate),
+                portion_pct=30.0,
+                profit_pct_at_partial=current_profit * 100,
+                profit_usd_at_partial=trade.calc_profit(current_rate),
+                trigger="30% profit + 15m trend against",
+                state=_snapshot_state(last),
+                note="P2: take more off the table",
+            ))
             return -(trade.stake_amount * 0.30)
 
         return None
@@ -521,39 +661,173 @@ class SupertrendStrategy(IStrategy):
     def confirm_trade_entry(self, pair: str, order_type: str, amount: float,
                             rate: float, time_in_force: str, current_time: datetime,
                             entry_tag: str | None, side: str, **kwargs) -> bool:
-        """Send trade entry to both Telegram bots."""
+        """Round 46: rich entry — Telegram + structured journal event with
+        full reasoning, planned SL/TP plan, and multi-TF state."""
         dataframe, _ = self.dp.get_analyzed_dataframe(pair, self.timeframe)
-        ds = tq = 0.0
-        if len(dataframe) > 0:
-            last = dataframe.iloc[-1]
-            ds = float(last.get("direction_score", 0))
-            tq = float(last.get("trend_quality", 0))
+        last_row = dataframe.iloc[-1] if len(dataframe) > 0 else None
+        state = _snapshot_state(last_row)
+
+        leverage = float(kwargs.get("leverage") or 1.0)
+        notional_usd = amount * rate
+        stake_usd = notional_usd / leverage if leverage > 0 else notional_usd
+
+        sl_plan = default_stoploss_plan(side)
+        tp_plan = default_take_profit_plan()
+
+        kelly_full = self._calc_rolling_kelly()
+        # Tag-conditioned scaling that mirrors custom_stake_amount logic
+        kelly_scaled = kelly_full * (0.25 if entry_tag == "scout" else 0.75)
+        quality_scale = 0.7 + state.trend_quality * 0.6
+
+        # Persist the entry event (journal failures silently ignored)
+        try:
+            _safe_journal_write(EntryEvent(
+                timestamp=now_iso(),
+                pair=pair,
+                side=side,
+                entry_tag=entry_tag or "unknown",
+                entry_price=float(rate),
+                amount=float(amount),
+                notional_usd=notional_usd,
+                leverage=leverage,
+                stake_usd=stake_usd,
+                state=state,
+                stoploss_plan=sl_plan,
+                take_profit_plan=tp_plan,
+                kelly_fraction=kelly_full,
+                kelly_window=self._KELLY_LOOKBACK,
+                quality_scale=quality_scale,
+                cb_active=False,   # if cb_active we wouldn't be here
+                note=f"Entry {entry_tag} {side} @ {rate:.4f}",
+            ))
+        except Exception as e:
+            logger.warning("entry journal write failed: %s", e)
+
+        # Rich Telegram message (now includes SL/TP plan + leverage + Kelly + state)
         emoji = "🟢" if side == "long" else "🔴"
         phase = "🔍 試單" if entry_tag == "scout" else "✅ 確認"
+
+        sl_at = rate * (1 + sl_plan.initial_sl_pct / 100) if side == "long" \
+                else rate * (1 - sl_plan.initial_sl_pct / 100)
+
         _send_to_all_bots(
             f"{emoji} *進場 {side.upper()}* ({phase})\n"
-            f"幣種: `{pair}`\n"
-            f"價格: `{rate:.2f}`\n"
-            f"方向分數: `{ds:+.2f}` | 品質: `{tq:.2f}`\n"
-            f"策略: Supertrend 4L Scout"
+            f"幣種: `{pair}` 價格: `{rate:.4f}`\n"
+            f"\n"
+            f"💰 *倉位*\n"
+            f"   名目: `${notional_usd:,.0f}` | 槓桿: `{leverage:.1f}x` "
+            f"| 保證金: `${stake_usd:,.0f}`\n"
+            f"   Kelly: `{kelly_full:.1%}` (×`{0.25 if entry_tag == 'scout' else 0.75:.0%}` for {entry_tag}) "
+            f"| 品質係數: `{quality_scale:.2f}`\n"
+            f"\n"
+            f"🛡️ *停損計畫*\n"
+            f"   初始 SL: `{sl_plan.initial_sl_pct:.1f}%` (≈ `{sl_at:.4f}`)\n"
+            f"   階段 1: 獲利 `{sl_plan.phase_1_trigger_pct:.1f}%` "
+            f"→ 鎖盈 `{sl_plan.phase_1_lock_pct:+.1f}%` (覆蓋手續費)\n"
+            f"   階段 2: 獲利 `{sl_plan.phase_2_trigger_pct:.1f}%` "
+            f"→ 鎖 `{sl_plan.phase_2_lock_pct:.0%}` 利潤\n"
+            f"   階段 3: 獲利 `{sl_plan.phase_3_trigger_pct:.1f}%` "
+            f"→ 鎖 `{sl_plan.phase_3_lock_pct:.0%}` 利潤\n"
+            f"\n"
+            f"🎯 *停利規劃*\n"
+            f"   `{tp_plan.partial_1_at_profit_pct:.0f}%` 獲利 + `1H` 反轉 → 出 `{tp_plan.partial_1_off_pct:.0f}%`\n"
+            f"   `{tp_plan.partial_2_at_profit_pct:.0f}%` 獲利 + `15m` 反轉 → 再出 `{tp_plan.partial_2_off_pct:.0f}%`\n"
+            f"   `1D` 反轉 → 全平 (尾單放飛)\n"
+            f"\n"
+            f"📊 *多時框狀態*\n"
+            f"   1D: `{_arrow(state.st_1d)}` ({state.st_1d_duration:.0f}日) | "
+            f"4H: `{state.dir_4h_score:+.2f}` | "
+            f"1H: `{_arrow(state.st_1h)}` | "
+            f"15m: `{_arrow(state.st_15m)}`\n"
+            f"   方向分: `{state.direction_score:+.2f}` | 品質: `{state.trend_quality:.2f}` "
+            f"| ADX: `{state.adx:.1f}`\n"
+            f"   ATR: `{state.atr:.4f}` | FR: `{state.funding_rate:+.4%}`\n"
+            f"\n"
+            f"策略: Supertrend 4L Scout (R46)"
         )
         return True
 
     def confirm_trade_exit(self, pair: str, trade: Trade, order_type: str,
                            amount: float, rate: float, time_in_force: str,
                            exit_reason: str, current_time: datetime, **kwargs) -> bool:
-        """Send trade exit to both Telegram bots."""
+        """Round 46: rich exit — Telegram + structured journal with max
+        profit ever seen, trailing phase at exit, and final state."""
         pnl_pct = trade.calc_profit_ratio(rate) * 100
         pnl_usd = trade.calc_profit(rate)
         dur = (current_time - trade.open_date_utc).total_seconds() / 3600
+
+        # Pull the max profit + phase recorded by custom_stoploss
+        max_profit_pct = pnl_pct
+        trailing_phase = 0
+        try:
+            max_profit_pct = max(
+                float(trade.get_custom_data("max_profit_pct", 0.0) or 0.0),
+                pnl_pct,
+            )
+            trailing_phase = int(trade.get_custom_data("trailing_phase", 0) or 0)
+        except Exception:
+            pass
+
+        # Determine if it was a partial-followed-by-close (multiple exits)
+        n_partials = getattr(trade, "nr_of_successful_exits", 0)
+
+        dataframe, _ = self.dp.get_analyzed_dataframe(pair, self.timeframe)
+        last_row = dataframe.iloc[-1] if len(dataframe) > 0 else None
+        state = _snapshot_state(last_row)
+
+        side = "short" if trade.is_short else "long"
+
+        try:
+            _safe_journal_write(ExitEvent(
+                timestamp=now_iso(),
+                pair=pair,
+                side=side,
+                entry_price=float(trade.open_rate),
+                exit_price=float(rate),
+                pnl_pct=float(pnl_pct),
+                pnl_usd=float(pnl_usd),
+                duration_hours=float(dur),
+                exit_reason=exit_reason,
+                max_profit_pct=float(max_profit_pct),
+                trailing_phase_at_exit=trailing_phase,
+                n_partials_taken=int(n_partials),
+                state=state,
+                entry_tag=getattr(trade, "enter_tag", "unknown") or "unknown",
+                note=f"{side} {pair} {pnl_pct:+.2f}% via {exit_reason}",
+            ))
+        except Exception as e:
+            logger.warning("exit journal write failed: %s", e)
+
         emoji = "💰" if pnl_pct > 0 else "💸"
+        # Show how much we left on the table (max - final)
+        slippage = max_profit_pct - pnl_pct
+        slippage_note = (
+            f" (高點留 `{slippage:+.2f}%` 在桌上)"
+            if pnl_pct > 0 and slippage > 0.5 else ""
+        )
+
         _send_to_all_bots(
-            f"{emoji} *出場 {'SHORT' if trade.is_short else 'LONG'}*\n"
+            f"{emoji} *出場 {side.upper()}*\n"
             f"幣種: `{pair}`\n"
-            f"P&L: `{pnl_pct:+.2f}%` (`{pnl_usd:+.2f}$`)\n"
-            f"持倉: `{dur:.1f}h` | 原因: `{exit_reason}`"
+            f"P&L: `{pnl_pct:+.2f}%` (`${pnl_usd:+.2f}`)\n"
+            f"進/出: `{trade.open_rate:.4f}` → `{rate:.4f}`\n"
+            f"持倉: `{dur:.1f}h` | 原因: `{exit_reason}`\n"
+            f"最高未實現: `{max_profit_pct:+.2f}%`"
+            f"{slippage_note}\n"
+            f"trailing 階段: `{trailing_phase}/3` | 已部分出場: `{n_partials}` 次\n"
+            f"出場時 1D `{_arrow(state.st_1d)}` 1H `{_arrow(state.st_1h)}` "
+            f"15m `{_arrow(state.st_15m)}`"
         )
         return True
+
+
+def _arrow(st: int) -> str:
+    """Tiny formatter: +1 → ▲, -1 → ▼, else →"""
+    if st > 0:
+        return "▲"
+    if st < 0:
+        return "▼"
+    return "→"
 
     def leverage(self, pair: str, current_time: datetime, current_rate: float,
                  proposed_leverage: float, max_leverage: float,
