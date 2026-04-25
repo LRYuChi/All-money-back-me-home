@@ -10,6 +10,7 @@ from typing import Any
 
 import pytest
 
+from execution.exchanges import RetryPolicy
 from execution.exchanges.okx import (
     CcxtOKXClient,
     canonical_to_ccxt,
@@ -20,6 +21,11 @@ from execution.exchanges.types import (
     ExchangeResponse,
     ExchangeResponseStatus,
 )
+
+
+# Fast policy for tests that exercise the failure path — keeps test
+# runtime sub-second instead of 1.5s per test from default backoff.
+NO_RETRY = RetryPolicy(max_attempts=1, base_delay_sec=0)
 
 
 # ================================================================== #
@@ -261,7 +267,8 @@ def test_response_canceled_status_maps_to_rejected():
 def test_network_exception_maps_to_network_error():
     class NetworkError(Exception): pass
     stub = StubCcxt(create_exception=NetworkError("conn reset"))
-    c = CcxtOKXClient(api_key="a", secret="b", passphrase="c", client=stub)
+    c = CcxtOKXClient(api_key="a", secret="b", passphrase="c",
+                      client=stub, retry_policy=NO_RETRY)
     r = c.place_order(make_request())
     assert r.status == ExchangeResponseStatus.NETWORK_ERROR
     assert r.error_code == "NetworkError"
@@ -270,7 +277,8 @@ def test_network_exception_maps_to_network_error():
 def test_request_timeout_maps_to_network_error():
     class RequestTimeout(Exception): pass
     stub = StubCcxt(create_exception=RequestTimeout("timeout"))
-    c = CcxtOKXClient(api_key="a", secret="b", passphrase="c", client=stub)
+    c = CcxtOKXClient(api_key="a", secret="b", passphrase="c",
+                      client=stub, retry_policy=NO_RETRY)
     r = c.place_order(make_request())
     assert r.status == ExchangeResponseStatus.NETWORK_ERROR
 
@@ -332,7 +340,8 @@ def test_cancel_order_returns_false_on_order_not_found():
 
 def test_cancel_order_returns_false_on_other_exceptions():
     stub = StubCcxt(cancel_exception=ConnectionError("net down"))
-    c = CcxtOKXClient(api_key="a", secret="b", passphrase="c", client=stub)
+    c = CcxtOKXClient(api_key="a", secret="b", passphrase="c",
+                      client=stub, retry_policy=NO_RETRY)
     assert c.cancel_order("x") is False
 
 

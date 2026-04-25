@@ -14,6 +14,7 @@ later F.1.x rounds.
 """
 
 from execution.exchanges.idempotency import make_client_order_id
+from execution.exchanges.retry import RetryPolicy, retry_with_backoff
 from execution.exchanges.symbol_catalog import (
     InMemorySymbolCatalog,
     NoOpSymbolCatalog,
@@ -33,8 +34,10 @@ __all__ = [
     "ExchangeResponse",
     "InMemorySymbolCatalog",
     "NoOpSymbolCatalog",
+    "RetryPolicy",
     "SymbolCatalog",
     "YamlSymbolCatalog",
     "build_symbol_catalog",
     "make_client_order_id",
+    "retry_with_backoff",
 ]

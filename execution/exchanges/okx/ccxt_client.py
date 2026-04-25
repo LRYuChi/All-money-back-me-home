@@ -28,6 +28,7 @@ import logging
 from typing import Any
 
 from execution.exchanges.okx.client import OKXClient
+from execution.exchanges.retry import RetryPolicy, retry_with_backoff
 from execution.exchanges.types import (
     ExchangeRequest,
     ExchangeResponse,
@@ -67,6 +68,7 @@ class CcxtOKXClient:
         passphrase: str,
         demo: bool = True,
         client: Any = None,            # injectable for tests
+        retry_policy: RetryPolicy | None = None,
     ):
         if not (api_key and secret and passphrase):
             raise ValueError(
@@ -87,6 +89,12 @@ class CcxtOKXClient:
                 # x-simulated-trading: 1 header automatically
                 self._exchange.set_sandbox_mode(True)
                 logger.info("ccxt-okx: sandbox/demo mode enabled")
+
+        # Round 43: bounded retry/backoff for transient network errors.
+        # Default policy is conservative (3 attempts, 0.5s base, 5s cap).
+        # Wraps idempotent ccxt calls — place_order is idempotent thanks
+        # to OKX clOrdId dedup; fetch/cancel are intrinsically idempotent.
+        self._retry_policy = retry_policy or RetryPolicy()
 
     # ---------------------------------------------------------------- #
     # OKXClient Protocol implementation
@@ -114,7 +122,7 @@ class CcxtOKXClient:
         params.update(request.extra)
 
         try:
-            raw = self._exchange.create_order(
+            raw = self._with_retry(self._exchange.create_order, "okx.create_order")(
                 symbol=ccxt_symbol,
                 type=ccxt_type,
                 side=ccxt_side,
@@ -129,7 +137,7 @@ class CcxtOKXClient:
 
     def cancel_order(self, client_order_id: str) -> bool:
         try:
-            self._exchange.cancel_order(
+            self._with_retry(self._exchange.cancel_order, "okx.cancel_order")(
                 id=None, symbol=None,
                 params={"clOrdId": client_order_id},
             )
@@ -157,7 +165,7 @@ class CcxtOKXClient:
         """
         ccxt_symbol = canonical_to_ccxt(symbol)
         try:
-            raw = self._exchange.fetch_order(
+            raw = self._with_retry(self._exchange.fetch_order, "okx.fetch_order")(
                 id="",     # ccxt requires positional but okx uses clOrdId
                 symbol=ccxt_symbol,
                 params={"clOrdId": client_order_id},
@@ -199,6 +207,14 @@ class CcxtOKXClient:
     # ---------------------------------------------------------------- #
     # Helpers
     # ---------------------------------------------------------------- #
+    def _with_retry(self, fn, op_name: str):
+        """Wrap a bound ccxt method with the configured retry policy.
+        Lazy per-call wrapping (cheap closure) so __init__ doesn't fail
+        when callers inject a partial stub client missing some methods."""
+        return retry_with_backoff(
+            fn, policy=self._retry_policy, op_name=op_name,
+        )
+
     def _notional_to_amount(
         self, ccxt_symbol: str, notional_usd: float, limit_price: float | None,
     ) -> float:
