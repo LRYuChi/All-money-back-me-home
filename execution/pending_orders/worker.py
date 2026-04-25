@@ -1,10 +1,19 @@
-"""PendingOrderWorker — claim from queue → dispatch → mark terminal.
+"""PendingOrderWorker — claim from queue → guards → dispatch → mark terminal.
 
 Architecture:
   - Worker calls `queue.claim_next_pending(mode)` in a loop
-  - Each claimed order is passed to the matching `Dispatcher` (per mode)
-  - Dispatcher returns `DispatchResult` describing outcome
+  - Optional `risk_pipeline` (GuardPipeline) checks/scales the order
+  - Surviving orders are passed to the matching `Dispatcher`
   - Worker updates queue with terminal status + last_error
+
+Pipeline integration (round 19):
+  - `risk_pipeline=None` → no guards, direct dispatch
+  - `risk_pipeline` set + `context_provider` set → call
+    pipeline.evaluate(order, ctx) before dispatch:
+      DENY → mark REJECTED with `guard:<name>` + reason
+      SCALE → use updated notional in subsequent dispatch
+  - context_provider receives the order so it can look up live exposures
+    keyed by strategy_id / market
 
 Dispatcher Protocol is intentionally tiny — concrete dispatchers live
 in execution/dispatchers/*.py per mode. Phase F.1 lands the OKX
@@ -23,7 +32,7 @@ from __future__ import annotations
 import asyncio
 import logging
 from dataclasses import dataclass
-from typing import Protocol
+from typing import Any, Callable, Protocol
 
 from execution.pending_orders.queue import (
     PendingOrderNotFound,
@@ -36,6 +45,12 @@ from execution.pending_orders.types import (
 )
 
 logger = logging.getLogger(__name__)
+
+
+# Caller's hook to populate the GuardContext for an incoming order.
+# Returns risk.guards.GuardContext but typed as Any here to avoid hard
+# dependency on risk/ when guards aren't being used.
+ContextProvider = Callable[[PendingOrder], Any]
 
 
 @dataclass(slots=True, frozen=True)
@@ -112,10 +127,20 @@ class PendingOrderWorker:
         dispatcher: Dispatcher,
         *,
         idle_sleep_sec: float = 1.0,
+        risk_pipeline: Any = None,                    # risk.guards.GuardPipeline | None
+        context_provider: ContextProvider | None = None,
     ) -> None:
         self._queue = queue
         self._dispatcher = dispatcher
         self._idle_sleep = idle_sleep_sec
+        self._risk_pipeline = risk_pipeline
+        self._context_provider = context_provider
+        # Sanity: pipeline without context_provider can't run — fail loudly
+        if risk_pipeline is not None and context_provider is None:
+            raise ValueError(
+                "risk_pipeline requires context_provider — pipeline needs "
+                "a GuardContext per order to evaluate exposure / latency",
+            )
         self._stats = {
             "claimed": 0,
             "filled": 0,
@@ -123,6 +148,8 @@ class PendingOrderWorker:
             "cancelled": 0,
             "partially_filled": 0,
             "dispatcher_errors": 0,
+            "guard_denies": 0,
+            "guard_scales": 0,
         }
 
     @property
@@ -130,12 +157,18 @@ class PendingOrderWorker:
         return self._dispatcher.mode
 
     def process_one(self) -> int:
-        """Claim + dispatch one order. Returns 1 if processed, 0 if queue empty."""
+        """Claim → guards → dispatch one order. Returns 1 if processed, 0 if queue empty."""
         order = self._queue.claim_next_pending(self._dispatcher.mode)
         if order is None:
             return 0
 
         self._stats["claimed"] += 1
+
+        # Pipeline check (round 19)
+        if self._risk_pipeline is not None:
+            blocked = self._run_guards(order)
+            if blocked:
+                return 1
 
         try:
             result = self._dispatcher.dispatch(order)
@@ -180,6 +213,60 @@ class PendingOrderWorker:
             self._stats["partially_filled"] += 1
 
         return 1
+
+    def _run_guards(self, order: PendingOrder) -> bool:
+        """Returns True if pipeline blocked the order (REJECTED), False
+        if it allowed/scaled and dispatch should proceed.
+
+        Caller has already incremented `claimed`. On DENY this method
+        increments `guard_denies` + `rejected` and writes status.
+        On SCALE: increments `guard_scales` (order.target_notional_usd
+        already mutated by pipeline)."""
+        try:
+            ctx = self._context_provider(order)
+            run = self._risk_pipeline.evaluate(order, ctx)
+        except Exception as e:
+            # Treat pipeline crashes as DENY to fail safe
+            logger.exception(
+                "guard pipeline crashed on order id=%d: %s — treating as REJECTED",
+                order.id, e,
+            )
+            try:
+                self._queue.update_status(
+                    order.id, PendingOrderStatus.REJECTED,
+                    last_error=f"guard_pipeline_error: {type(e).__name__}: {e}",
+                )
+            except PendingOrderNotFound:
+                pass
+            self._stats["rejected"] += 1
+            self._stats["guard_denies"] += 1
+            return True
+
+        # Detect any SCALE for stats
+        for d in run.decisions:
+            if d.result.value == "scale":
+                self._stats["guard_scales"] += 1
+
+        if not run.accepted:
+            denying = next(
+                (d for d in run.decisions if d.result.value == "deny"), None,
+            )
+            reason = (
+                f"guard:{denying.guard_name}: {denying.reason}"
+                if denying else "guard:unknown_deny"
+            )
+            try:
+                self._queue.update_status(
+                    order.id, PendingOrderStatus.REJECTED, last_error=reason,
+                )
+            except PendingOrderNotFound:
+                logger.warning("order id=%d disappeared after DENY", order.id)
+            self._stats["rejected"] += 1
+            self._stats["guard_denies"] += 1
+            logger.info("guard DENY id=%d → %s", order.id, reason)
+            return True
+
+        return False
 
     def stats(self) -> dict[str, int]:
         return dict(self._stats)

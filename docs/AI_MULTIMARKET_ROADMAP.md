@@ -38,7 +38,7 @@
 | **D. AI + 融合** | ✅ basic | Regime ✅；SignalFuser ✅；**MarketContext provider (HL daily 200d + MA200/slope/vol/DD + 可選 VIX + TTL cache) ✅**；AI LLM 整合 ⬜ | R2 (LLM 供應) 仍待拍板 |
 | **E. 策略 DSL** | ✅ basic | DSL ✅；evaluator ✅；registry ✅；首個 prod 策略 ✅；e2e 整合 ✅；StrategyRuntime + daemon wiring ✅；**daemon 接真實 regime ✅**；dashboard / 多策略 ⬜ | rule-only 鏈路 daemon 內全程可跑 |
 | **F. 跨市場** | 🟡 | Pending Orders middleware ✅；**Worker (claim → dispatch → mark + LogOnlyDispatcher + CLI + async run_forever) ✅**；OKX live adapter / IBKR / TW broker ⬜ | QD P0-1+pending_order_worker 借鑒；shadow/notify mode 全循環可跑 |
-| **G. 風險統一** | 🟡 | **GuardPipeline + 5 builtin guards (G1 latency / G3 min_size / G4 strategy_exposure / G5 market_exposure / G6 global_exposure) ✅**；G2 SymbolSupported (待 F.1)、G7 Correlation、G8/G9 CB、G10 Kelly + worker 接入 ⬜ | scale → mutate → 下游再 evaluate 已 work |
+| **G. 風險統一** | 🟡 | GuardPipeline + 5 builtin guards ✅；**Worker 接 pipeline (DENY → REJECTED with guard_name + reason / SCALE → mutate → dispatch / pipeline crash → fail-safe REJECT) ✅**；G2/G7/G8/G9/G10 ⬜ | closing loop with guards 完整可運行 |
 | **H. Live ramp** | ⬜ | — | — |
 
 ### ⏸ 待手動介入清單（loop 自動跳過）
@@ -69,7 +69,8 @@
 | 2026-04-25 08:07 UTC | #16 | Phase F 起點 — Pending Orders queue × 4 + dispatcher + idempotency + state machine + migration 020 + StrategyRuntime 接 + 35 tests | ✅ 完成 |
 | 2026-04-25 08:37 UTC | #17 | Phase F 續 — Pending Orders Worker (claim/dispatch/terminal + LogOnly dispatcher + async run_forever + CLI + 14 tests) | ✅ 完成 |
 | 2026-04-25 09:07 UTC | #18 | Phase G 起點 — Risk Guard pipeline + 5 builtin guards (latency / min_size / strategy_exposure / market_exposure / global_exposure) + scale-mutate semantics + 24 tests | ✅ 完成 |
-| — | — | **下輪待辦**：Worker 接 GuardPipeline (pre-dispatch) OR Daily Loss CB (G8 — 需 PnL aggregator) OR Kronos (需 R1) | ⬜ |
+| 2026-04-25 09:37 UTC | #19 | Phase G 續 — Worker 接 GuardPipeline (DENY 短路 / SCALE mutate / context_provider / pipeline-crash fail-safe / 8 stats counters) + 10 tests | ✅ 完成 |
+| — | — | **下輪待辦**：PnL aggregator + DailyLossCB (G8) OR OKX live adapter (Phase F.1 需 R6) OR Kronos (需 R1) | ⬜ |
 
 ---
 
