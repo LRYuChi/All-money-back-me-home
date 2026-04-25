@@ -89,3 +89,11 @@ APT:
 SUI:
   okx: "SUI/USDT:USDT"
   min_notional_usd: 10
+
+# R80 (2026-04-26): added after live SHADOW skip telemetry showed
+# 233/24h unknown_symbol skips, ALL on HYPE — single most-traded
+# whale wallet on Hyperliquid (their native token).
+# OKX listed HYPE-USDT-SWAP on 2025-02-21, max 50x leverage, lot 0.1.
+HYPE:
+  okx: "HYPE/USDT:USDT"
+  min_notional_usd: 10

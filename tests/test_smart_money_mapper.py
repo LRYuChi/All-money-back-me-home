@@ -49,6 +49,29 @@ def test_load_real_config_file_parses_if_present():
     assert "ETH" in m.known_symbols()
 
 
+def test_high_volume_perps_must_be_mapped():
+    """R80 regression guard — symbols added because live SHADOW telemetry
+    showed significant unknown_symbol skip volume on them.
+
+    Each entry here was added in response to a real ops incident. Removing
+    one will reintroduce the silent skip pattern for that symbol.
+
+    HYPE: 233/24h skips (2026-04-26) — Hyperliquid native token, single
+          most-traded perp by a tracked whale wallet. OKX listed
+          HYPE-USDT-SWAP 2025-02-21.
+    """
+    default = Path("config/smart_money/symbol_map.yaml")
+    if not default.exists():
+        pytest.skip("default config not present in this environment")
+    m = SymbolMapper.load(default)
+    must_have = ["BTC", "ETH", "SOL", "HYPE"]
+    missing = [s for s in must_have if s not in m.known_symbols()]
+    assert not missing, (
+        f"R80 regression: high-volume perps missing from symbol_map: "
+        f"{missing}. See test docstring for context."
+    )
+
+
 # ------------------------------------------------------------------ #
 # Lookup
 # ------------------------------------------------------------------ #
