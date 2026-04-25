@@ -12,6 +12,9 @@ Endpoints:
     GET /stats     → {worker: stats_dict, sweep: stats_dict|null,
                       queue_depth: int, uptime_sec: float}
                      200 always
+    GET /metrics   → Prometheus 0.0.4 text exposition format
+                     200 always (probe failures surface as
+                     worker_stats_ok / queue_probe_ok / sweep_stats_ok = 0)
 
 Implementation uses asyncio.start_server + a tiny HTTP/1.0 parser to
 avoid pulling aiohttp/FastAPI into the trading-engine deps. Server is
@@ -139,6 +142,13 @@ def _route(state: _HealthzState, path: str) -> bytes:
             "uptime_sec": round(time.monotonic() - state.started_at, 3),
         })
 
+    if path == "/metrics" or path.startswith("/metrics?"):
+        return _http_response(
+            "200 OK",
+            _render_prometheus(state),
+            content_type="text/plain; version=0.0.4; charset=utf-8",
+        )
+
     return _http_response("404 Not Found", {"error": f"unknown path {path!r}"})
 
 
@@ -169,6 +179,128 @@ def _sweep_to_dict(sweep_obj: Any) -> dict:
     except Exception:
         pass
     return {"repr": repr(sweep_obj)}
+
+
+# ================================================================== #
+# Prometheus exposition format (round 40)
+# ================================================================== #
+# Maps worker stat keys (from PendingOrderWorker.stats()) into:
+#   - counters: monotonically-increasing totals (claims, fills, errors)
+#   - gauges: point-in-time values (none currently from worker)
+#
+# Worker stats schema (round 17 + 19 + 26):
+#   claimed, filled, rejected, cancelled, partially_filled,
+#   dispatcher_errors, guard_denies, guard_scales,
+#   side_effects_invoked, side_effect_errors
+
+_WORKER_COUNTERS: dict[str, tuple[str, str]] = {
+    # stat_key → (metric_name, help_text)
+    "claimed":              ("worker_orders_claimed_total",
+                             "Total orders claimed from queue by worker"),
+    "filled":               ("worker_orders_filled_total",
+                             "Total orders that reached FILLED terminal"),
+    "rejected":             ("worker_orders_rejected_total",
+                             "Total orders that reached REJECTED terminal"),
+    "cancelled":            ("worker_orders_cancelled_total",
+                             "Total orders that reached CANCELLED terminal"),
+    "partially_filled":     ("worker_orders_partially_filled_total",
+                             "Total orders that hit PARTIALLY_FILLED"),
+    "dispatcher_errors":    ("worker_dispatcher_errors_total",
+                             "Total dispatcher exceptions caught"),
+    "guard_denies":         ("worker_guard_denies_total",
+                             "Total guard pipeline DENY decisions"),
+    "guard_scales":         ("worker_guard_scales_total",
+                             "Total guard pipeline SCALE decisions"),
+    "side_effects_invoked": ("worker_side_effects_invoked_total",
+                             "Total guard side-effect handler invocations"),
+    "side_effect_errors":   ("worker_side_effect_errors_total",
+                             "Total guard side-effect handler exceptions"),
+}
+
+_SWEEP_COUNTERS: dict[str, tuple[str, str]] = {
+    "iterations":    ("sweeper_iterations_total",
+                      "Total sweeper iterations (one per --sweep-interval-sec tick)"),
+    "total_expired": ("sweeper_orders_expired_total",
+                      "Total orders moved to EXPIRED by sweeper"),
+    "errors":        ("sweeper_errors_total",
+                      "Total sweep_expired() exceptions caught + swallowed"),
+}
+
+
+def _render_prometheus(state: _HealthzState) -> str:
+    """Render all metrics in Prometheus 0.0.4 text exposition format.
+
+    Always returns a complete payload — provider exceptions are converted
+    into per-metric absences (ops sees missing series, not a 500). The
+    `worker_stats_ok` / `sweep_stats_ok` / `queue_probe_ok` gauges let
+    Prometheus alert on probe failure.
+    """
+    lines: list[str] = []
+
+    # --- Uptime gauge (always present) ---
+    lines.append("# HELP worker_uptime_seconds Process uptime since worker start")
+    lines.append("# TYPE worker_uptime_seconds gauge")
+    lines.append(f"worker_uptime_seconds {time.monotonic() - state.started_at:.3f}")
+
+    # --- Worker counters ---
+    worker_ok = 1
+    worker_dict: dict[str, int] = {}
+    try:
+        worker_dict = dict(state.worker_stats())
+    except Exception as e:
+        logger.warning("/metrics: worker stats probe failed: %s", e)
+        worker_ok = 0
+
+    for key, (metric_name, help_text) in _WORKER_COUNTERS.items():
+        lines.append(f"# HELP {metric_name} {help_text}")
+        lines.append(f"# TYPE {metric_name} counter")
+        if key in worker_dict:
+            lines.append(f"{metric_name} {int(worker_dict[key])}")
+        # If the stat key is missing, intentionally don't emit the series —
+        # rolling out a new counter shouldn't break dashboards that
+        # `or vector(0)` it.
+
+    lines.append("# HELP worker_stats_ok 1 if worker stats probe succeeded, 0 otherwise")
+    lines.append("# TYPE worker_stats_ok gauge")
+    lines.append(f"worker_stats_ok {worker_ok}")
+
+    # --- Sweep counters ---
+    sweep_ok = 1
+    sweep_dict: dict = {}
+    if state.sweep_stats is not None:
+        try:
+            sweep_obj = state.sweep_stats()
+            if sweep_obj is not None:
+                sweep_dict = _sweep_to_dict(sweep_obj)
+            else:
+                # Sweeper hasn't reported yet — series intentionally absent
+                sweep_dict = {}
+        except Exception as e:
+            logger.debug("/metrics: sweep probe failed: %s", e)
+            sweep_ok = 0
+
+    for key, (metric_name, help_text) in _SWEEP_COUNTERS.items():
+        lines.append(f"# HELP {metric_name} {help_text}")
+        lines.append(f"# TYPE {metric_name} counter")
+        if key in sweep_dict:
+            lines.append(f"{metric_name} {int(sweep_dict[key])}")
+
+    lines.append("# HELP sweep_stats_ok 1 if sweep stats provider returned successfully, 0 otherwise")
+    lines.append("# TYPE sweep_stats_ok gauge")
+    lines.append(f"sweep_stats_ok {sweep_ok}")
+
+    # --- Queue depth gauge ---
+    depth, queue_ok = _probe_queue(state.queue_provider)
+    lines.append("# HELP pending_orders_pending_depth Current PENDING queue depth (sampled)")
+    lines.append("# TYPE pending_orders_pending_depth gauge")
+    if queue_ok:
+        lines.append(f"pending_orders_pending_depth {depth}")
+    lines.append("# HELP queue_probe_ok 1 if queue.list_recent succeeded, 0 otherwise")
+    lines.append("# TYPE queue_probe_ok gauge")
+    lines.append(f"queue_probe_ok {1 if queue_ok else 0}")
+
+    # Trailing newline is required by Prometheus
+    return "\n".join(lines) + "\n"
 
 
 # ================================================================== #
