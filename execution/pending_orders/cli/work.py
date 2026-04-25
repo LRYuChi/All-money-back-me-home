@@ -30,6 +30,7 @@ from execution.pending_orders import (
     background_sweep_loop,
     build_default_registry,
     build_queue,
+    serve_healthz,
 )
 from execution.exchanges import NoOpSymbolCatalog, build_symbol_catalog
 from risk import (
@@ -178,6 +179,16 @@ def build_parser() -> argparse.ArgumentParser:
         "--sweep-dispatching-max-age", type=float, default=0,
         help="Background sweeper: DISPATCHING older than N seconds → "
              "EXPIRED, worker likely crashed (0 = bucket disabled).",
+    )
+    p.add_argument(
+        "--healthz-port", type=int, default=0,
+        help="Bind /healthz + /ready + /stats HTTP endpoints on this port "
+             "(0 = disabled). Listens on 127.0.0.1 only by default.",
+    )
+    p.add_argument(
+        "--healthz-host", default="127.0.0.1",
+        help="Healthz bind host (default 127.0.0.1; use 0.0.0.0 for "
+             "external scrapers, with appropriate firewalling).",
     )
     p.add_argument("--log-level", default="INFO",
                    choices=["DEBUG", "INFO", "WARNING", "ERROR"])
@@ -388,6 +399,7 @@ async def run_worker(args: argparse.Namespace) -> int:
 
     # Round 38: optional background sweeper sidecar
     sweeper_task: asyncio.Task | None = None
+    sweeper_stats_holder: dict = {"latest": None}
     if args.sweep_interval_sec > 0:
         if args.sweep_pending_max_age <= 0 and args.sweep_dispatching_max_age <= 0:
             logger.warning(
@@ -395,14 +407,36 @@ async def run_worker(args: argparse.Namespace) -> int:
                 "sweeper will run but never expire anything. Pass at least "
                 "--sweep-pending-max-age or --sweep-dispatching-max-age.",
             )
-        sweeper_task = asyncio.create_task(background_sweep_loop(
-            queue, stop,
-            interval_sec=args.sweep_interval_sec,
-            pending_max_age_sec=args.sweep_pending_max_age,
-            dispatching_max_age_sec=args.sweep_dispatching_max_age,
-        ))
+
+        async def _sweeper_with_stats():
+            stats = await background_sweep_loop(
+                queue, stop,
+                interval_sec=args.sweep_interval_sec,
+                pending_max_age_sec=args.sweep_pending_max_age,
+                dispatching_max_age_sec=args.sweep_dispatching_max_age,
+            )
+            sweeper_stats_holder["latest"] = stats
+            return stats
+        sweeper_task = asyncio.create_task(_sweeper_with_stats())
+
+    # Round 39: optional /healthz HTTP server sidecar
+    healthz_server = None
+    if args.healthz_port > 0:
+        healthz_server = await serve_healthz(
+            port=args.healthz_port,
+            host=args.healthz_host,
+            worker_stats=worker.stats,
+            queue_provider=lambda: queue,
+            sweep_stats=lambda: sweeper_stats_holder.get("latest"),
+        )
 
     await worker.run_forever(stop)
+    if healthz_server is not None:
+        healthz_server.close()
+        try:
+            await asyncio.wait_for(healthz_server.wait_closed(), timeout=2.0)
+        except asyncio.TimeoutError:
+            logger.warning("healthz server did not close within 2s")
     if sweeper_task is not None:
         # stop_event is set; sweeper exits between sweeps. Await its
         # final stats so the log line matches reality.
