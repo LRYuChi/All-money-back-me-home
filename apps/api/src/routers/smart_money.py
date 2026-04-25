@@ -264,6 +264,20 @@ def _build_shadow_alerts(
             "observing. Resolves as wallets complete fresh open→close cycles."
         )
 
+    # R78: scale_not_simulated_in_shadow dominance (P4c by-design)
+    # Whales adding to positions don't trigger paper-trade adjustments in
+    # shadow mode (size-stacking bug avoidance — P5 will handle live).
+    # If this dominates, it means observed whales are mostly scaling not
+    # opening fresh — interesting market signal but no shadow action.
+    sns = skipped_reasons.get("scale_not_simulated_in_shadow", 0)
+    if total_24h_skips >= 20 and sns / max(total_24h_skips, 1) > 0.3:
+        alerts.append(
+            f"SCALE_NOT_SIMULATED_DOMINANT — {sns}/{total_24h_skips} skips "
+            "are scale_not_simulated_in_shadow; whales are scaling existing "
+            "positions rather than opening fresh ones. P4c skips these to "
+            "avoid size-stacking bugs — P5 will handle live position adjusts."
+        )
+
     # All-skip-no-paper anomaly (1h window)
     d1h = density.get("1h") or {}
     skips_1h = d1h.get("skipped", 0)

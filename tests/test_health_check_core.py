@@ -279,6 +279,46 @@ def test_zero_tradeable_wallets_still_hard_even_with_cold_start():
 
 
 # =================================================================== #
+# R78: scale_not_simulated_in_shadow added to by-design white-list
+# =================================================================== #
+def test_all_skipped_no_paper_downgraded_when_scale_not_simulated_dominates():
+    """R78: scale-up skip is by-design (P4c). Should downgrade just like R76/R77."""
+    p = _healthy_shadow_payload()
+    p["alerts"] = ["ALL_SKIPPED_NO_PAPER — 381 skips / 0 paper in 1h"]
+    p["skipped_by_reason_24h"] = {
+        "scale_not_simulated_in_shadow": 371,
+        "cold_start_drift": 66,
+        "close_without_open": 10,
+    }
+    res = hc.evaluate_shadow(p)
+    # All 3 by-design reasons sum to 447, total = 447 → 100% coverage
+    # ALL_SKIPPED_NO_PAPER alert visible, but NOT a hard problem
+    assert any("ALL_SKIPPED_NO_PAPER" in a for a in res["alerts"])
+    assert not any("ALL_SKIPPED_NO_PAPER" in pr for pr in res["problems"])
+
+
+def test_all_skipped_no_paper_still_hard_when_only_scale_below_threshold():
+    """Even if scale_not_simulated is the largest, if combined with other
+    by-design < 50% of total, still treated as hard."""
+    p = _healthy_shadow_payload()
+    p["alerts"] = ["ALL_SKIPPED_NO_PAPER — many skips"]
+    p["skipped_by_reason_24h"] = {
+        "scale_not_simulated_in_shadow": 30,
+        "unknown_symbol": 70,    # 70% real-bug reason
+    }
+    res = hc.evaluate_shadow(p)
+    # 30/100 = 30% by-design < 50% threshold → still hard
+    assert any("ALL_SKIPPED_NO_PAPER" in pr for pr in res["problems"])
+
+
+def test_known_by_design_skip_reasons_constant_includes_all_three():
+    """Lock in the white-list contents so future drift is explicit."""
+    assert "cold_start_drift" in hc._KNOWN_BY_DESIGN_SKIP_REASONS
+    assert "close_without_open" in hc._KNOWN_BY_DESIGN_SKIP_REASONS
+    assert "scale_not_simulated_in_shadow" in hc._KNOWN_BY_DESIGN_SKIP_REASONS
+
+
+# =================================================================== #
 # has_hard_problems
 # =================================================================== #
 def test_has_hard_problems_false_when_both_clean():

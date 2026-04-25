@@ -69,21 +69,35 @@ _SHADOW_HARD_PROBLEM_ALERTS = (
     "ALL_SKIPPED_NO_PAPER",
 )
 
-# R77: skip reasons that are KNOWN cold-start artifacts. When these
-# dominate the skip distribution, ALL_SKIPPED_NO_PAPER is a symptom of
-# warmup gap, not a real pipeline bug — downgrade to known-degraded.
-#   cold_start_drift   (R72 forward-only — classifier prev state unknown)
-#   close_without_open (R76 — simulator paper book lacks the OPEN side)
-_KNOWN_COLD_START_REASONS = ("cold_start_drift", "close_without_open")
+# Skip reasons that are BY-DESIGN SHADOW LIMITATIONS — not pipeline bugs.
+# When these dominate the skip distribution, ALL_SKIPPED_NO_PAPER is a
+# symptom of normal forward-only operation, not a downstream failure.
+# Downgrade to known-degraded so iteration work is not blocked.
+#
+# R77: cold_start_drift (classifier prev state unknown; R72 forward-only)
+#      close_without_open (simulator paper book lacks OPEN side; R76)
+# R78: scale_not_simulated_in_shadow (P4c skips scale-ups to avoid
+#      size-stacking bugs; P5 will handle properly)
+#
+# To add another by-design reason: append to this tuple ONLY (single
+# source of truth, propagates to health_check + alert classifier).
+_KNOWN_BY_DESIGN_SKIP_REASONS = (
+    "cold_start_drift",
+    "close_without_open",
+    "scale_not_simulated_in_shadow",
+)
+# Backward-compat alias (kept for tests / external callers from R77 era)
+_KNOWN_COLD_START_REASONS = _KNOWN_BY_DESIGN_SKIP_REASONS
+
 _COLD_START_DOMINANCE_THRESHOLD = 0.5   # > 50% → downgrade
 
 
 def _all_skipped_explained_by_cold_start(skipped: dict) -> bool:
-    """R77: True when known cold-start reasons account for > threshold of skips."""
+    """R77+R78: True when known by-design reasons account for > threshold of skips."""
     total = sum(skipped.values()) if skipped else 0
     if total <= 0:
         return False
-    cold = sum(skipped.get(r, 0) for r in _KNOWN_COLD_START_REASONS)
+    cold = sum(skipped.get(r, 0) for r in _KNOWN_BY_DESIGN_SKIP_REASONS)
     return (cold / total) > _COLD_START_DOMINANCE_THRESHOLD
 
 
