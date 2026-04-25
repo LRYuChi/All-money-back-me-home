@@ -101,3 +101,17 @@ def test_volumepairlist_uses_candles_mode_for_okx(cfg):
         "VolumePairList on OKX MUST set lookback_timeframe alongside "
         "lookback_days to enable candles-based mode."
     )
+    # Freqtrade rejects refresh_period < one timeframe span. With 1d
+    # lookback that's 86400s. Anything smaller and bot startup ERRORs
+    # before pairlists init → same zero-scan failure mode.
+    tf = vol.get("lookback_timeframe", "1d")
+    tf_seconds = {
+        "1m": 60, "5m": 300, "15m": 900, "1h": 3600,
+        "4h": 14400, "1d": 86400, "1w": 604800,
+    }.get(tf, 86400)
+    rp = vol.get("refresh_period", 0)
+    assert rp >= tf_seconds, (
+        f"VolumePairList refresh_period={rp}s must be >= one "
+        f"lookback_timeframe ({tf} = {tf_seconds}s) or freqtrade "
+        f"refuses to start the pairlist plugin."
+    )
