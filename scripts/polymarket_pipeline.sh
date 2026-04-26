@@ -47,12 +47,35 @@ log() {
 }
 
 # ─── Lockfile (flock on Linux cron host; mkdir fallback elsewhere) ──────────
+# R122 incident 2026-04-27:
+#   prod 上 flock-based lock 莫名持有 16 小時 (root cause 未明 — 可能
+#   docker container restart 留下 zombie fd holder, 或 cron job 被 kill -9
+#   未走正常 cleanup). 後續每 5min cron 都 acquire_lock fail → log 'previous
+#   run still holding lock; skipping' → 整 pipeline silent 停跑 16 hours.
+#   Stale lock detection 之前只在 mkdir fallback path 有, flock path 沒有.
+#   R122 把 stale detection 也加到 flock path.
 LOCK_DIR="${LOCK_FILE}.d"
+LOCK_STALE_SEC="${LOCK_STALE_SEC:-1800}"   # 30 min default
 acquire_lock() {
     if command -v flock >/dev/null 2>&1; then
         exec 200>"$LOCK_FILE"
-        flock -n 200
-        return $?
+        if flock -n 200; then
+            return 0
+        fi
+        # R122: flock failed → check if lockfile is stale (> 30 min).
+        # If so, kill it + retry. Avoid the silent 16h-stuck pattern.
+        local file_mtime age now
+        now="$(date +%s)"
+        file_mtime="$(stat -c %Y "$LOCK_FILE" 2>/dev/null || stat -f %m "$LOCK_FILE" 2>/dev/null || echo 0)"
+        age=$(( now - file_mtime ))
+        if [ "$age" -gt "$LOCK_STALE_SEC" ]; then
+            log "STALE LOCK detected (age=${age}s > ${LOCK_STALE_SEC}s) — removing + retry"
+            rm -f "$LOCK_FILE"
+            exec 200>"$LOCK_FILE"
+            flock -n 200
+            return $?
+        fi
+        return 1   # lock fresh,真的有別人在跑
     fi
     # Portable atomic fallback via mkdir
     if mkdir "$LOCK_DIR" 2>/dev/null; then
@@ -65,7 +88,7 @@ acquire_lock() {
         now="$(date +%s)"
         lock_mtime="$(stat -c %Y "$LOCK_DIR" 2>/dev/null || stat -f %m "$LOCK_DIR" 2>/dev/null || echo 0)"
         age=$(( now - lock_mtime ))
-        if [ "$age" -gt 1800 ]; then
+        if [ "$age" -gt "$LOCK_STALE_SEC" ]; then
             rm -rf "$LOCK_DIR"
             if mkdir "$LOCK_DIR" 2>/dev/null; then
                 trap 'rm -rf "$LOCK_DIR"' EXIT
