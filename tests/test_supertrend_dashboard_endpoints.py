@@ -841,6 +841,7 @@ def test_alerts_flag_journal_stale():
 
 
 def test_alerts_no_fires_24h_with_dominant_blocker():
+    """R108: dominant blocker is named + actionable advice attached."""
     mod = _import_router()
     alerts = mod["build_ops_alerts"](
         bot_state="running", n_pairs=17,
@@ -854,7 +855,9 @@ def test_alerts_no_fires_24h_with_dominant_blocker():
     fire_alert = next((a for a in alerts if "NO_FIRES_24H" in a), None)
     assert fire_alert is not None
     assert "vol<=1.2*ma" in fire_alert
-    assert "regime mismatch" in fire_alert.lower()
+    # R108: vol<=1.2*ma is above the R89 floor (1.0) → suggests loosening
+    assert "SUPERTREND_VOL_MULT" in fire_alert
+    assert "1.0" in fire_alert
 
 
 def test_alerts_no_pipeline_activity():

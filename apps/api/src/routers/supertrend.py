@@ -681,16 +681,18 @@ def _build_ops_alerts(
 
     # Pipeline pressure check: if 0 fires + lots of evaluations, flag the
     # dominant blocker so operator can see "is this market chop or strategy bug?"
+    # R108: now also include actionable advice mapping the dominant
+    # failure reason to the corresponding tunable env.
     fires = eval_summary.get("tier_fired_count", {})
     n_fires = sum(fires.values()) if fires else 0
     n_evals = eval_summary.get("n_evaluations", 0)
     if n_fires == 0 and n_evals >= 50:
         top = next(iter((eval_summary.get("failures_top") or {}).items()), None)
         if top:
+            advice = _suggest_for_failure(top[0])
             alerts.append(
                 f"NO_FIRES_24H — {n_evals} evaluations, dominant blocker: "
-                f"{top[0]} ({top[1]} hits). Likely market regime mismatch, "
-                "not a code bug — see /api/supertrend/evaluations for full breakdown"
+                f"{top[0]} ({top[1]} hits). {advice}"
             )
 
     if recent_trades == 0 and n_evals == 0:
@@ -1039,6 +1041,93 @@ def _build_guard_rejection_alerts(
                 f"for the per-event detail."
             )
     return alerts
+
+
+def _suggest_for_failure(failure_text: str) -> str:
+    """R108: map a R66 EvaluationEvent dominant failure reason to actionable
+    advice. Each suggestion names the env var that controls that gate
+    (R87/R89/R91), preferred fallback step, and any caveat.
+
+    The matching is loose-prefix because R93 dynamically formats the text
+    from current env (e.g. vol_mult=1.0 → "vol<=1*ma", vol_mult=1.2 →
+    "vol<=1.2*ma"). We don't need exact equality — just to identify the
+    gate family.
+    """
+    f = failure_text.lower()
+    # Volume gate (R89)
+    if f.startswith("vol<=") and "*ma" in f:
+        if f.startswith("vol<=1*ma") or f.startswith("vol<=0"):
+            return (
+                "Volume gate already at minimum effective level (R89 vol_mult=1.0). "
+                "Backtests showed 0.8 brings no extra alpha, so this is signal "
+                "of genuine market chop — wait for regime shift, no env tweak helps."
+            )
+        return (
+            "Loosen via SUPERTREND_VOL_MULT (R89): default 1.2 → try 1.0. "
+            "R89 backtest validated 8/8 wins at 1.0 vs 5/5 at 1.2 (6 months). "
+            "See docs/reports/r89_vol_mult_findings.md before deploying."
+        )
+    # Quality gate (R91)
+    if f.startswith("quality<="):
+        return (
+            "Loosen via SUPERTREND_QUALITY_MIN (R91): default 0.5 → try 0.4. "
+            "Run A/B backtest matrix in docs/reports/r91_quality_gates_design.md "
+            "first; bar is WR ≥ 87.5% on R89 6-month window."
+        )
+    # ADX gate (R91)
+    if f.startswith("adx<="):
+        return (
+            "Loosen via SUPERTREND_ADX_MIN (R91): default 25 → try 20. "
+            "Lower ADX = weaker trend, higher chop risk; backtest carefully."
+        )
+    # ATR rising (R91)
+    if "atr_not_rising" in f:
+        return (
+            "Disable via SUPERTREND_REQUIRE_ATR_RISING=0 (R91). CAUTION: "
+            "ATR rising is a trend-confirmation gate; disabling raises false "
+            "positive risk in choppy regimes. Backtest before deploying."
+        )
+    # Multi-tf alignment failures — strategy waiting for market alignment
+    if any(s in f for s in (
+        "all_bullish=false", "all_bearish=false",
+        "bull_just_formed=false", "bear_just_formed=false",
+        "pair_bullish_2tf_just_formed=false", "pair_bearish_2tf_just_formed=false",
+        "st_buy=false", "st_sell=false",
+        "st_trend!=", "st_1h_already_aligned",
+    )):
+        return (
+            "Multi-timeframe alignment not satisfied — this is the strategy "
+            "WAITING for a setup, not a bug. No env tweak will help; this "
+            "fires when 1d/4h/1h/15m haven't lined up. Wait for trend regime."
+        )
+    # Funding rate filter
+    if f.startswith("fr_blocks_"):
+        return (
+            "Funding contra-signal blocking. Default OFF; if SUPERTREND_FR_ALPHA=1 "
+            "is set, consider unsetting to disable this filter. R57 was opt-in "
+            "alpha — not required for core strategy."
+        )
+    # Direction concentration / R48 regime / R58 correlation / CB
+    if "regime:" in f or "direction_concentration" in f or "R58" in f:
+        return (
+            "Portfolio-level guard active (regime / concentration / correlation). "
+            "Working as designed; check confidence and BTC regime via /api/supertrend/regime."
+        )
+    if "CB tripped" in failure_text:
+        return (
+            "Account-level circuit breaker tripped (R48). Check most recent "
+            "exits — strategy auto-pauses after consecutive losses."
+        )
+    if "confirmed_disabled_R87" in failure_text:
+        return (
+            "R87 disable_confirmed=1 active — confirmed tier intentionally off. "
+            "scout/pre_scout still fireable. No action needed."
+        )
+    # Fallback
+    return (
+        "See /api/supertrend/evaluations for full breakdown. Likely market "
+        "regime mismatch or strategy waiting for alignment, not a code bug."
+    )
 
 
 def _build_guards_never_fired_alert(
