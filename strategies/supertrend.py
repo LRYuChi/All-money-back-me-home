@@ -1941,17 +1941,32 @@ class SupertrendStrategy(IStrategy):
 
         return True
 
-    # R99: leverage() must be a class method on the strategy. Was previously
-    # mis-indented inside the module-level `_arrow` helper after the class
-    # body, so Freqtrade never called it and live trading silently fell back
-    # to whatever the config / default specified instead of the
-    # quality-weighted 1.5–5× range. Backtests were likely unaffected
-    # (Freqtrade may pull leverage from config in backtest mode), which is
-    # why P&L numbers in r84-r90 reports could still validate the strategy
-    # while live behaviour diverged.
+    # R99: leverage() must be a class method on the strategy.
+    #
+    # R112 (2026-04-26): R111 backtest verification proved R99's "make
+    # leverage actually compute 1.5-5x" CHANGE breaks backtest
+    # reproducibility — R47 trailing-stop / custom_stoploss % thresholds
+    # were designed for leverage=1 (the silent dead-code value pre-R99),
+    # so leverage 5x makes -1% price move = -5% leveraged P&L = instant
+    # SL trigger → 8 trades baseline collapsed to 1 trade with 0:00:00
+    # duration. See docs/reports/r111_backtest_reproducibility_break.md.
+    #
+    # Resolution: keep the class-method scope (so it's not silent
+    # dead-code again — that defeats deploy verification), but DEFAULT
+    # to 1.0 leverage which matches the R85-R90 backtest baselines.
+    # Opt into dynamic leverage via SUPERTREND_LEVERAGE_DYNAMIC=1 ONLY
+    # AFTER R47 trailing has been refactored to be leverage-aware
+    # (currently a TODO — R113 candidate).
     def leverage(self, pair: str, current_time: datetime, current_rate: float,
                  proposed_leverage: float, max_leverage: float,
                  entry_tag: str | None, side: str, **kwargs) -> float:
+        # R112: default = 1.0 (preserves R85-R90 backtest baselines).
+        # SUPERTREND_LEVERAGE_DYNAMIC=1 to opt into R99's quality-weighted
+        # 1.5-5x — but DON'T enable in prod until R47 trailing/custom_stoploss
+        # % thresholds are divided by leverage (otherwise SL trips instantly).
+        if os.environ.get("SUPERTREND_LEVERAGE_DYNAMIC", "0") != "1":
+            return 1.0
+
         dataframe, _ = self.dp.get_analyzed_dataframe(pair, self.timeframe)
         if len(dataframe) == 0:
             return 2.0

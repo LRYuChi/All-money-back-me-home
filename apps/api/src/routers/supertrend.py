@@ -834,6 +834,8 @@ def supertrend_operations(
         # R105: guards safety toggles
         "guards_enabled": os.environ.get("SUPERTREND_GUARDS_ENABLED", "1"),
         "guards_require_load": os.environ.get("SUPERTREND_GUARDS_REQUIRE_LOAD", "0"),
+        # R112: leverage dynamic toggle (default 0 = 1x for backtest compat)
+        "leverage_dynamic": os.environ.get("SUPERTREND_LEVERAGE_DYNAMIC", "0"),
     }
 
     # ---- pipeline activity from journal ---- #

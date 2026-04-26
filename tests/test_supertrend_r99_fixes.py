@@ -34,7 +34,30 @@ def test_leverage_is_class_method_not_nested():
     assert "max_leverage" in sig.parameters
 
 
-def test_leverage_returns_quality_weighted_value():
+def test_leverage_default_returns_1_for_backtest_compatibility(monkeypatch):
+    """R112: default leverage must be 1.0 to preserve R85-R90 backtest
+    baselines. Dynamic leverage is opt-in via SUPERTREND_LEVERAGE_DYNAMIC=1."""
+    monkeypatch.delenv("SUPERTREND_LEVERAGE_DYNAMIC", raising=False)
+    s = SupertrendStrategy.__new__(SupertrendStrategy)
+    s.timeframe = "15m"
+    s.dp = MagicMock()
+    df = pd.DataFrame([{"trend_quality": 0.8, "adx": 30.0}])
+    s.dp.get_analyzed_dataframe.return_value = (df, None)
+    from datetime import datetime, timezone
+    lev = s.leverage(
+        pair="BTC/USDT:USDT",
+        current_time=datetime.now(timezone.utc),
+        current_rate=50000.0,
+        proposed_leverage=1.0,
+        max_leverage=10.0,
+        entry_tag="scout",
+        side="long",
+    )
+    assert lev == pytest.approx(1.0)
+
+
+def test_leverage_returns_quality_weighted_value(monkeypatch):
+    monkeypatch.setenv("SUPERTREND_LEVERAGE_DYNAMIC", "1")
     s = SupertrendStrategy.__new__(SupertrendStrategy)
     s.timeframe = "15m"
     s.dp = MagicMock()
@@ -56,7 +79,8 @@ def test_leverage_returns_quality_weighted_value():
     assert lev == pytest.approx(4.2)
 
 
-def test_leverage_clamps_to_min_1_5():
+def test_leverage_clamps_to_min_1_5(monkeypatch):
+    monkeypatch.setenv("SUPERTREND_LEVERAGE_DYNAMIC", "1")
     s = SupertrendStrategy.__new__(SupertrendStrategy)
     s.timeframe = "15m"
     s.dp = MagicMock()
@@ -72,7 +96,8 @@ def test_leverage_clamps_to_min_1_5():
     assert lev == pytest.approx(1.5)
 
 
-def test_leverage_clamps_to_max_5():
+def test_leverage_clamps_to_max_5(monkeypatch):
+    monkeypatch.setenv("SUPERTREND_LEVERAGE_DYNAMIC", "1")
     s = SupertrendStrategy.__new__(SupertrendStrategy)
     s.timeframe = "15m"
     s.dp = MagicMock()
