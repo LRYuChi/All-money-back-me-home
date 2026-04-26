@@ -93,6 +93,53 @@ R85 candidates:
 2. Re-run R84 with -3% SL (Option A)
 3. Update CLAUDE.md to flag "DO NOT GO LIVE without R84 follow-up"
 
+---
+
+## R85 Update (2026-04-26) — 🎯 Found the actual root cause
+
+Re-ran the backtest twice with R57/R58 alpha filters and -3% SL — both
+produced **identical** PF 0.37 / 36 trades. Confirmed:
+- Alpha filters don't fire in backtest (regime detector needs live HL
+  data, FR rarely extreme, correlation needs n_open ≥ 2)
+- `--stoploss -0.03` config override has no effect because R47
+  custom_stoploss callback overrides the class attribute
+
+**Then broke down by enter_tag** and found the smoking gun:
+
+```
+pre_scout : 3 trades, +0.52% avg, 100% WR  ← profitable!
+scout     : 2 trades, +0.31% avg, 100% WR  ← profitable!
+confirmed : 31 trades, -0.84% avg, 48.4% WR ← LOSER (86% of trades)
+```
+
+The `confirmed` tier (4-tf aligned, highest conviction, R49 gives 0.85
+Kelly fraction) is the SOURCE of the entire loss. The `pre_scout` and
+`scout` tiers (R49 gives them 0.25 / 0.50 fractions) are perfect.
+
+**Hypothesis**: `confirmed` entries fire AFTER full alignment which means
+the trend is already mature → high reversal risk. `pre_scout` enters
+during formation → captures more of the move.
+
+R49 Kelly sizing is INVERTED relative to actual edge:
+  Current:  pre_scout 0.25 / scout 0.50 / confirmed 0.85
+  Suggested: pre_scout 0.85 / scout 0.50 / confirmed 0.25 (or 0)
+
+Exit reason breakdown also shows `trailing_stop_loss` accounts for 26/36
+exits (72%) with avg -0.69%. R47's 4-phase trailing might be cutting
+winners too aggressively.
+
+### R86 candidates (very actionable)
+
+1. **Invert R49 Kelly fractions** — pre_scout big, confirmed small/off
+2. **Disable confirmed tier entirely** in populate_entry_trend
+3. **Loosen trailing logic** in custom_stoploss (Phase 2/3 thresholds)
+4. **Re-test with extended sample** (more trades to confirm 100% WR
+   on pre_scout/scout isn't pure luck from N=3)
+
+Sample size caveat: pre_scout 100% WR on N=3 could be variance, but the
+DIRECTION of the asymmetry (early-entry > late-entry) matches well-known
+momentum strategy literature.
+
 ## Reproduce
 
 ```bash
