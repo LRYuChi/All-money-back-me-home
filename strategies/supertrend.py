@@ -556,16 +556,38 @@ class SupertrendStrategy(IStrategy):
         two_tf_bull_just = pair_bull_2tf and not prev_pair_bull_2tf
         two_tf_bear_just = pair_bear_2tf and not prev_pair_bear_2tf
 
-        # Common quality gate
+        # Common quality gate — mirror the SAME env reads as
+        # populate_entry_trend so the diagnostic reflects the actual
+        # gates in effect (R87/R89/R91). Hardcoded thresholds here
+        # would mislead the operator about why entries don't fire.
+        try:
+            _vol_mult = float(os.environ.get("SUPERTREND_VOL_MULT", "1.2"))
+        except (ValueError, TypeError):
+            _vol_mult = 1.2
+        try:
+            _quality_min = float(os.environ.get("SUPERTREND_QUALITY_MIN", "0.5"))
+        except (ValueError, TypeError):
+            _quality_min = 0.5
+        try:
+            _adx_min = float(os.environ.get("SUPERTREND_ADX_MIN", str(self.adx_threshold)))
+        except (ValueError, TypeError):
+            _adx_min = float(self.adx_threshold)
+        _require_atr_rising = (
+            os.environ.get("SUPERTREND_REQUIRE_ATR_RISING", "1") != "0"
+        )
+        _confirmed_disabled = (
+            os.environ.get("SUPERTREND_DISABLE_CONFIRMED", "0") == "1"
+        )
+
         quality_fails = []
-        if adx <= self.adx_threshold:
-            quality_fails.append(f"adx<={self.adx_threshold}")
-        if vol <= vol_ma * 1.2:
-            quality_fails.append("vol<=1.2*ma")
-        if not atr_rising:
+        if adx <= _adx_min:
+            quality_fails.append(f"adx<={_adx_min:g}")
+        if vol <= vol_ma * _vol_mult:
+            quality_fails.append(f"vol<={_vol_mult:g}*ma")
+        if _require_atr_rising and not atr_rising:
             quality_fails.append("atr_not_rising")
-        if quality_score <= 0.5:
-            quality_fails.append("quality<=0.5")
+        if quality_score <= _quality_min:
+            quality_fails.append(f"quality<={_quality_min:g}")
 
         # Confirmed: st_buy & all_bullish & quality & fr_ok_long  (or short variant)
         conf_long_fails = list(quality_fails)
@@ -584,11 +606,19 @@ class SupertrendStrategy(IStrategy):
         if not fr_short:
             conf_short_fails.append("fr_blocks_short")
 
-        confirmed_fired = len(conf_long_fails) == 0 or len(conf_short_fails) == 0
-        confirmed_failures = (
-            conf_long_fails if len(conf_long_fails) <= len(conf_short_fails)
-            else conf_short_fails
-        )
+        # When R87 disables confirmed tier, _write_evaluation_event must
+        # report the tier as un-fireable so /scanner closest_to_fire
+        # doesn't surface confirmed candidates that will never actually
+        # enter. Use a sentinel failure that's stable + greppable.
+        if _confirmed_disabled:
+            confirmed_fired = False
+            confirmed_failures = ["confirmed_disabled_R87"]
+        else:
+            confirmed_fired = len(conf_long_fails) == 0 or len(conf_short_fails) == 0
+            confirmed_failures = (
+                conf_long_fails if len(conf_long_fails) <= len(conf_short_fails)
+                else conf_short_fails
+            )
 
         # Scout: bull_just_formed & st_trend==-1 & quality & fr_ok_long
         sc_long_fails = list(quality_fails)

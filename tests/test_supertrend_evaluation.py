@@ -228,3 +228,74 @@ def test_eval_journal_opt_out_via_env(monkeypatch):
         ):
             s._write_evaluation_event(df, {"pair": "X"})
     assert captured == []
+
+
+# =================================================================== #
+# R93: env-aware diagnostic — failure-reason text must mirror env vars
+# =================================================================== #
+def test_vol_mult_env_reflected_in_failure_text(strategy, monkeypatch):
+    """SUPERTREND_VOL_MULT=1.0 → failure text says 'vol<=1*ma' not '1.2*ma'."""
+    monkeypatch.setenv("SUPERTREND_VOL_MULT", "1.0")
+    df = _mk_dataframe(volume=80.0, volume_ma_20=100.0)  # vol < 1.0×ma
+    ev = _capture_event(strategy, df)
+    assert "vol<=1*ma" in ev.confirmed_failures
+    assert "vol<=1.2*ma" not in ev.confirmed_failures   # old hardcode gone
+
+
+def test_vol_mult_default_preserves_legacy_text(strategy, monkeypatch):
+    monkeypatch.delenv("SUPERTREND_VOL_MULT", raising=False)
+    df = _mk_dataframe(volume=110.0, volume_ma_20=100.0)  # vol < 1.2×ma
+    ev = _capture_event(strategy, df)
+    assert "vol<=1.2*ma" in ev.confirmed_failures
+
+
+def test_quality_min_env_reflected_in_failure_text(strategy, monkeypatch):
+    monkeypatch.setenv("SUPERTREND_QUALITY_MIN", "0.4")
+    df = _mk_dataframe(trend_quality=0.35)
+    ev = _capture_event(strategy, df)
+    assert "quality<=0.4" in ev.confirmed_failures
+
+
+def test_adx_min_env_reflected_in_failure_text(strategy, monkeypatch):
+    monkeypatch.setenv("SUPERTREND_ADX_MIN", "20")
+    df = _mk_dataframe(adx=18.0)
+    ev = _capture_event(strategy, df)
+    assert "adx<=20" in ev.confirmed_failures
+
+
+def test_atr_rising_disabled_skips_atr_failure(strategy, monkeypatch):
+    """SUPERTREND_REQUIRE_ATR_RISING=0 → atr_not_rising never appears."""
+    monkeypatch.setenv("SUPERTREND_REQUIRE_ATR_RISING", "0")
+    df = _mk_dataframe(atr_rising=False)
+    ev = _capture_event(strategy, df)
+    assert "atr_not_rising" not in ev.confirmed_failures
+
+
+# =================================================================== #
+# R93: confirmed-disabled (R87) — diagnostic must mark tier un-fireable
+# =================================================================== #
+def test_confirmed_disabled_marks_tier_unfireable(strategy, monkeypatch):
+    """SUPERTREND_DISABLE_CONFIRMED=1 → confirmed_fired=False with sentinel."""
+    monkeypatch.setenv("SUPERTREND_DISABLE_CONFIRMED", "1")
+    # Build a candle that WOULD fire confirmed_long if not disabled
+    df = _mk_dataframe(
+        all_bullish=True, st_buy=True, fr_ok_long=True,
+        adx=30.0, volume=200.0, volume_ma_20=100.0,
+        atr_rising=True, trend_quality=0.8,
+    )
+    ev = _capture_event(strategy, df)
+    assert ev.confirmed_fired is False
+    assert ev.confirmed_failures == ["confirmed_disabled_R87"]
+
+
+def test_confirmed_enabled_default_can_still_fire(strategy, monkeypatch):
+    """Default behaviour (no env) — confirmed tier evaluates normally."""
+    monkeypatch.delenv("SUPERTREND_DISABLE_CONFIRMED", raising=False)
+    df = _mk_dataframe(
+        all_bullish=True, st_buy=True, fr_ok_long=True,
+        adx=30.0, volume=200.0, volume_ma_20=100.0,
+        atr_rising=True, trend_quality=0.8,
+    )
+    ev = _capture_event(strategy, df)
+    assert ev.confirmed_fired is True
+    assert ev.confirmed_failures == []   # all conditions met
