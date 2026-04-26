@@ -158,16 +158,40 @@ function distancePct(current: number, target: number): number {
   return ((target - current) / current) * 100;
 }
 
-type Tab = 'overview' | 'positions' | 'history' | 'journal' | 'performance';
+type Tab = 'overview' | 'positions' | 'history' | 'journal' | 'entries' | 'performance';
 type SortKey = 'time' | 'pnl' | 'pnl_pct' | 'symbol';
 
 const REFRESH_MS = 60_000;
+
+// R114: 進場邏輯 entry — supertrend journal 寫的 EntryEvent
+interface EntryLogEntry {
+  timestamp: string;
+  pair: string;
+  side: 'long' | 'short';
+  entry_tag: string;       // pre_scout / scout / confirmed
+  entry_price: number;
+  notional_usd?: number;
+  leverage?: number;
+  stake_usd?: number;
+  kelly_fraction?: number;
+  quality_scale?: number;
+  entry_logic_summary?: string;   // R114: multi-line markdown 說明為什麼觸發
+  note?: string;
+}
+
+interface EntriesResponse {
+  entries: EntryLogEntry[];
+  n_total_in_window?: number;
+  window_days?: number;
+  error?: string;
+}
 
 export default function TradesPage() {
   const [data, setData] = useState<PaperTradeData | null>(null);
   const [perf, setPerf] = useState<PerformanceData | null>(null);
   const [equity, setEquity] = useState<EquityPoint[]>([]);
   const [journal, setJournal] = useState<JournalData | null>(null);
+  const [entries, setEntries] = useState<EntryLogEntry[]>([]);   // R114
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [tab, setTab] = useState<Tab>('overview');
@@ -175,18 +199,20 @@ export default function TradesPage() {
 
   const fetchAll = useCallback(async () => {
     try {
-      const [tradeData, perfData, eqData, journalData] = await Promise.all([
+      const [tradeData, perfData, eqData, journalData, entriesData] = await Promise.all([
         apiClient.get<PaperTradeData>('/api/dashboard/ft-trades').catch(() =>
           apiClient.get<PaperTradeData>('/api/strategy/trades/paper')
         ),
         apiClient.get<PerformanceData>('/api/strategy/trades/paper/performance').catch(() => null),
         apiClient.get<EquityPoint[]>('/api/strategy/trades/paper/equity-curve').catch(() => []),
         apiClient.get<JournalData>('/api/dashboard/journal').catch(() => ({ trades: [], grade_stats: {} })),
+        apiClient.get<EntriesResponse>('/api/supertrend/entries?days=30').catch(() => ({ entries: [] } as EntriesResponse)),
       ]);
       setData(tradeData);
       setPerf(perfData);
       setEquity(eqData);
       setJournal(journalData);
+      setEntries(entriesData?.entries || []);
       setLastUpdateDate(new Date());
       setError(null);
     } catch (err) {
@@ -224,6 +250,7 @@ export default function TradesPage() {
     { key: 'overview', label: '總覽' },
     { key: 'positions', label: `持倉 (${data.open_positions.length})` },
     { key: 'history', label: `歷史 (${data.closed_trades.length})` },
+    { key: 'entries', label: `📋 進場邏輯 (${entries.length})` },   // R114
     { key: 'journal', label: `日誌 (${journal?.trades.length ?? 0})` },
     { key: 'performance', label: '績效分析' },
   ];
@@ -309,6 +336,7 @@ export default function TradesPage() {
         {tab === 'overview' && <OverviewTab data={data} equity={equity} />}
         {tab === 'positions' && <PositionsTab positions={data.open_positions} />}
         {tab === 'history' && <HistoryTab trades={data.closed_trades} />}
+        {tab === 'entries' && <EntriesTab entries={entries} />}
         {tab === 'journal' && <JournalTab journal={journal} />}
         {tab === 'performance' && <PerformanceTab perf={perf} data={data} />}
       </div>
@@ -931,6 +959,113 @@ function FilterPills<T extends string>({
         >
           {o.v}
         </button>
+      ))}
+    </div>
+  );
+}
+
+// ------------------------------------------------------------------
+// 進場邏輯 (R114) — supertrend journal 的 EntryEvent.entry_logic_summary
+// ------------------------------------------------------------------
+
+function EntriesTab({ entries }: { entries: EntryLogEntry[] }) {
+  if (entries.length === 0) {
+    return (
+      <div className="rounded-xl bg-gray-800/40 border border-gray-700 p-12 text-center text-gray-500">
+        <div className="text-lg mb-2">📋 尚無進場紀錄</div>
+        <div className="text-sm">
+          每次策略觸發進場時會在這裡記錄完整觸發條件（哪個 tier、3-tf/2-tf 對齊狀況、4 條
+          quality gate 各條結果）。對應 EntryEvent.entry_logic_summary，由 R114 寫入。
+        </div>
+      </div>
+    );
+  }
+
+  const tierColor: Record<string, string> = {
+    pre_scout: 'bg-yellow-900/40 text-yellow-200 border-yellow-700/60',
+    scout: 'bg-blue-900/40 text-blue-200 border-blue-700/60',
+    confirmed: 'bg-purple-900/40 text-purple-200 border-purple-700/60',
+  };
+
+  return (
+    <div className="space-y-3">
+      <div className="text-xs text-gray-400 mb-2">
+        每筆 entry 完整觸發條件（含 4 條 quality gate 結果與 tier-specific 對齊檢查）。資料源：
+        <code className="text-gray-300 mx-1">/api/supertrend/entries</code>
+      </div>
+      {entries.map((e, i) => (
+        <div
+          key={`${e.timestamp}-${i}`}
+          className="rounded-xl bg-gray-900 border border-gray-800 p-4"
+        >
+          <div className="flex items-center justify-between mb-3 gap-2 flex-wrap">
+            <div className="flex items-center gap-2">
+              <span className="text-white font-medium">{shortPair(e.pair)}</span>
+              <span
+                className={`text-xs px-2 py-0.5 rounded ${
+                  e.side === 'long' ? 'bg-green-900/50 text-green-400' : 'bg-red-900/50 text-red-400'
+                }`}
+              >
+                {e.side === 'long' ? 'LONG' : 'SHORT'}
+              </span>
+              <span
+                className={`text-xs font-bold px-2 py-0.5 rounded border ${
+                  tierColor[e.entry_tag] || 'bg-gray-700 text-gray-200 border-gray-600'
+                }`}
+              >
+                {e.entry_tag}
+              </span>
+              <span className="text-gray-300 text-sm">${fmt(e.entry_price)}</span>
+            </div>
+            <div className="text-xs text-gray-500">
+              {e.timestamp ? new Date(e.timestamp).toLocaleString('zh-TW') : '—'}
+            </div>
+          </div>
+
+          {/* sizing 摘要 */}
+          {(e.notional_usd || e.leverage || e.kelly_fraction) && (
+            <div className="flex flex-wrap gap-x-4 gap-y-1 text-xs text-gray-400 mb-3">
+              {e.notional_usd != null && (
+                <span>
+                  名目: <span className="text-gray-200">${fmt(e.notional_usd)}</span>
+                </span>
+              )}
+              {e.leverage != null && (
+                <span>
+                  槓桿: <span className="text-gray-200">{e.leverage.toFixed(1)}x</span>
+                </span>
+              )}
+              {e.stake_usd != null && (
+                <span>
+                  保證金: <span className="text-gray-200">${fmt(e.stake_usd)}</span>
+                </span>
+              )}
+              {e.kelly_fraction != null && (
+                <span>
+                  Kelly: <span className="text-gray-200">{(e.kelly_fraction * 100).toFixed(1)}%</span>
+                </span>
+              )}
+              {e.quality_scale != null && (
+                <span>
+                  品質係數: <span className="text-gray-200">{e.quality_scale.toFixed(2)}</span>
+                </span>
+              )}
+            </div>
+          )}
+
+          {/* R114 entry_logic_summary — 用 monospace + pre 保留排版 */}
+          {e.entry_logic_summary ? (
+            <pre
+              className="text-xs text-gray-200 bg-gray-950 border border-gray-800 rounded p-3 whitespace-pre-wrap font-mono leading-relaxed overflow-x-auto"
+            >
+              {e.entry_logic_summary}
+            </pre>
+          ) : (
+            <div className="text-xs text-gray-500 italic">
+              （此筆 entry 為 R114 部署前寫入，無詳細邏輯紀錄）
+            </div>
+          )}
+        </div>
       ))}
     </div>
   );
