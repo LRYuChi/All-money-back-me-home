@@ -22,6 +22,13 @@ def _stage_fraction(tag: str, mode: str = "three_stage") -> float:
             "scout":     0.50,
             "confirmed": 0.85,
         }.get(tag or "", 0.50)
+    elif mode == "three_stage_inverted":
+        # R86: inverted mapping — pre_scout big, confirmed small
+        return {
+            "pre_scout": 0.85,
+            "scout":     0.50,
+            "confirmed": 0.25,
+        }.get(tag or "", 0.50)
     elif mode == "binary":
         return 0.25 if tag == "scout" else 0.75
     return 1.0   # continuous handled separately
@@ -166,3 +173,44 @@ def test_continuous_strength_in_valid_range():
             for a in [0, 25, 50, 100]:
                 s = _continuous_strength(q, d, a)
                 assert 0.10 <= s <= 1.0
+
+
+# =================================================================== #
+# R86: three_stage_inverted (early-entry favoured)
+# =================================================================== #
+def test_inverted_pre_scout_gets_85_percent():
+    """R86 inversion: pre_scout (earliest, was 0.25) NOW gets max 0.85."""
+    assert _stage_fraction("pre_scout", "three_stage_inverted") == 0.85
+
+
+def test_inverted_scout_unchanged_at_50_percent():
+    """Middle tier sizing stays the same."""
+    assert _stage_fraction("scout", "three_stage_inverted") == 0.50
+
+
+def test_inverted_confirmed_demoted_to_25_percent():
+    """R86 inversion: confirmed (4-tf aligned, was 0.85) NOW gets only 0.25.
+    Per R85 backtest, confirmed tier is the source of all loss."""
+    assert _stage_fraction("confirmed", "three_stage_inverted") == 0.25
+
+
+def test_inverted_progression_reverses_three_stage():
+    """Inverted mode reverses the sizing-vs-conviction relationship."""
+    pre = _stage_fraction("pre_scout", "three_stage_inverted")
+    sc = _stage_fraction("scout", "three_stage_inverted")
+    cf = _stage_fraction("confirmed", "three_stage_inverted")
+    assert pre > sc > cf   # inverse of three_stage progression
+
+
+def test_inverted_unknown_tag_defaults_to_scout_size():
+    assert _stage_fraction("ghost_tag", "three_stage_inverted") == 0.50
+
+
+def test_inverted_total_capital_equal_to_three_stage():
+    """Sum of three fractions equal — no net portfolio exposure change,
+    just redistribution by tier."""
+    s_normal = sum(_stage_fraction(t, "three_stage")
+                   for t in ("pre_scout", "scout", "confirmed"))
+    s_inverted = sum(_stage_fraction(t, "three_stage_inverted")
+                     for t in ("pre_scout", "scout", "confirmed"))
+    assert s_normal == s_inverted == 1.60

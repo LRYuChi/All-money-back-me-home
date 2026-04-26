@@ -1333,9 +1333,10 @@ class SupertrendStrategy(IStrategy):
 
         # R49: tag-conditioned Kelly fraction.
         # Mode controlled by SUPERTREND_KELLY_MODE env:
-        #   binary       — legacy 0.25 / 0.75 (scout / confirmed only)
-        #   three_stage  — default: 0.25 / 0.50 / 0.85 (pre_scout / scout / confirmed)
-        #   continuous   — kelly × quality × |dir_score| × adx_norm (all tags equal)
+        #   binary             — legacy 0.25 / 0.75 (scout / confirmed only)
+        #   three_stage        — default: 0.25 / 0.50 / 0.85 (pre_scout / scout / confirmed)
+        #   three_stage_inverted — R86: 0.85 / 0.50 / 0.25 (early-entry favoured)
+        #   continuous         — kelly × quality × |dir_score| × adx_norm (all tags equal)
         kelly_mode = os.environ.get("SUPERTREND_KELLY_MODE", "three_stage")
 
         if kelly_mode == "continuous":
@@ -1354,11 +1355,23 @@ class SupertrendStrategy(IStrategy):
             else:
                 target_pct *= 0.30   # safe fallback
         elif kelly_mode == "three_stage":
-            # New 3-tier scaling
+            # R49 default 3-tier scaling
             stage_map = {
                 "pre_scout": 0.25,   # earliest signal, smallest test
                 "scout":     0.50,   # 1D+4H+1H aligned, mid-size
                 "confirmed": 0.85,   # 4-tf perfect alignment, near-max
+            }
+            target_pct *= stage_map.get(entry_tag or "", 0.50)
+        elif kelly_mode == "three_stage_inverted":
+            # R86: inverted Kelly fractions based on R85 backtest finding.
+            # 6-month data showed pre_scout 100% WR, scout 100% WR, but
+            # confirmed -0.84% / 48% WR. Hypothesis: confirmed enters AFTER
+            # 4-tf alignment is already mature → trend ready to reverse.
+            # Pre-scout enters during formation → captures move.
+            stage_map = {
+                "pre_scout": 0.85,   # earliest signal NOW gets max sizing
+                "scout":     0.50,   # mid-size unchanged
+                "confirmed": 0.25,   # demote late-aligned tier
             }
             target_pct *= stage_map.get(entry_tag or "", 0.50)
         else:
