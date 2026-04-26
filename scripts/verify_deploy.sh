@@ -40,8 +40,31 @@ fail() {
 }
 ok() { green "  ✓ $1"; }
 
+# ─── Check 0: working-tree consistency (R113) ──────────────────────────
+# R104 + R112 both incidents had the same root cause: prod
+# strategies/supertrend.py md5 didn't match the git commit content
+# because git reset --hard left the working tree stale (still unclear
+# whether it's a docker-volume cache or git refspec issue). The fix is
+# defensive — explicitly diff the file md5 vs the committed content
+# md5 BEFORE running any other check. Catches "deployed but not really"
+# in 2 seconds.
+echo "[0/6] working-tree consistency (R113 — deploy lie detector)"
+if [ -f /opt/ambmh/strategies/supertrend.py ]; then
+    fs_md5=$(md5sum /opt/ambmh/strategies/supertrend.py | awk '{print $1}')
+    git_md5=$(cd /opt/ambmh && git show HEAD:strategies/supertrend.py | md5sum | awk '{print $1}')
+    if [ "$fs_md5" = "$git_md5" ]; then
+        ok "strategies/supertrend.py md5 matches HEAD"
+    else
+        fail "strategies/supertrend.py md5 ≠ HEAD content (fs=$fs_md5, git=$git_md5) — stale working tree, deploy is a LIE"
+        echo "    Fix: cd /opt/ambmh && git stash 2>/dev/null; git reset --hard origin/main"
+    fi
+else
+    ok "(strategies/supertrend.py not on this host)"
+fi
+
 # ─── Check 1: container health ──────────────────────────────────────────
-echo "[1/5] Container health"
+echo
+echo "[1/6] Container health"
 ps_out=$(run "docker ps --format '{{.Names}}|{{.Status}}'" 2>/dev/null || true)
 for svc in api freqtrade telegram-bot supertrend-cron smart-money smart-money-shadow; do
     line=$(echo "$ps_out" | grep "ambmh-${svc}-1" || true)
@@ -60,7 +83,7 @@ done
 
 # ─── Check 2: freqtrade can import guards (R104 root cause check) ──────
 echo
-echo "[2/5] freqtrade container can import guards (R104 fix)"
+echo "[2/6] freqtrade container can import guards (R104 fix)"
 guards_check=$(run "docker exec ambmh-freqtrade-1 sh -c 'cd /freqtrade/user_data/strategies && python3 -c \"from guards.pipeline import create_default_pipeline; print(len(create_default_pipeline().guards))\" 2>&1'" 2>/dev/null || echo "EXEC_FAILED")
 if echo "$guards_check" | grep -qE "^[0-9]+$"; then
     n=$(echo "$guards_check" | head -1)
@@ -75,7 +98,7 @@ fi
 
 # ─── Check 3: env consistency between api and freqtrade (R94 caveat) ────
 echo
-echo "[3/5] env consistency: api vs freqtrade SUPERTREND_*"
+echo "[3/6] env consistency: api vs freqtrade SUPERTREND_*"
 mismatch=0
 for var in SUPERTREND_DISABLE_CONFIRMED SUPERTREND_VOL_MULT SUPERTREND_KELLY_MODE \
            SUPERTREND_QUALITY_MIN SUPERTREND_REQUIRE_ATR_RISING \
@@ -90,9 +113,25 @@ for var in SUPERTREND_DISABLE_CONFIRMED SUPERTREND_VOL_MULT SUPERTREND_KELLY_MOD
     fi
 done
 
-# ─── Check 4: /operations alerts ─────────────────────────────────────────
+# ─── Check 4: /operations alerts + nginx 502 auto-recover ─────────────
+# R113: when multiple containers recreate at once, nginx upstream DNS
+# cache stays pointing to the old container IP → 502. We've hit this 3
+# times now (R104 incident, R112 verify, this session). Auto-detect and
+# reload nginx in-line so verify doesn't FAIL just because of stale DNS.
 echo
-echo "[4/5] /api/supertrend/operations alert check"
+echo "[4/6] /api/supertrend/operations alert check (auto-recover from nginx 502)"
+nginx_status=$(run "curl -sS -m 5 -o /dev/null -w '%{http_code}' http://localhost/api/supertrend/operations" 2>/dev/null || echo "000")
+if [ "$nginx_status" = "502" ] || [ "$nginx_status" = "504" ]; then
+    yellow "  nginx returned $nginx_status — auto-reloading upstream DNS"
+    run "docker compose -f $COMPOSE_FILE exec -T nginx nginx -s reload" >/dev/null 2>&1 || true
+    sleep 3
+    nginx_status=$(run "curl -sS -m 5 -o /dev/null -w '%{http_code}' http://localhost/api/supertrend/operations" 2>/dev/null || echo "000")
+    if [ "$nginx_status" = "200" ]; then
+        ok "nginx recovered after reload (was $nginx_status before)"
+    else
+        fail "nginx still returns $nginx_status after reload — manual investigation needed"
+    fi
+fi
 ops_alerts=$(run "docker exec ambmh-api-1 python3 -c \"
 import urllib.request, json
 r = urllib.request.urlopen('http://localhost:8000/api/supertrend/operations')
@@ -117,7 +156,7 @@ fi
 
 # ─── Check 5: guards state from freqtrade (truth source) ─────────────────
 echo
-echo "[5/5] freqtrade-side guards state (authoritative)"
+echo "[5/6] freqtrade-side guards state (authoritative)"
 state=$(run "docker exec ambmh-freqtrade-1 sh -c 'cd /freqtrade/user_data/strategies && python3 -c \"from guards.pipeline import get_state_summary; import json; print(json.dumps(get_state_summary(), default=str))\"'" 2>/dev/null || echo "{}")
 if echo "$state" | grep -q "consecutive_losses"; then
     ok "freqtrade guards state readable: $state"
