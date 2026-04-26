@@ -208,6 +208,22 @@ else
     fail "could not read freqtrade-side guards state"
 fi
 
+# ─── Check 6: scripts/*.sh +x permission audit (R124) ──────────────────
+# R122 (polymarket_pipeline.sh)、R123 (4 個 scripts)、R124 (wfo_segment_v1.sh)
+# 這三輪都是同一根因：git-tracked mode = 100644 → cron `timeout 240 /path/script.sh`
+# 直接 exec 失敗 (Permission denied)，但 cron 不 alert，log 也只記一行。
+# Defensive: 每次 deploy 後審查所有 scripts/*.sh 必須 +x，缺的列出來。
+echo
+echo "[6/6] scripts/*.sh +x permission audit (R122/R123/R124 pattern)"
+nox=$(run "cd /opt/ambmh && find scripts -name '*.sh' -type f ! -perm -u+x 2>/dev/null" 2>/dev/null || echo "")
+if [ -z "$nox" ]; then
+    ok "all scripts/*.sh have +x permission"
+else
+    fail "scripts missing +x (cron will silently fail with 'Permission denied'):"
+    echo "$nox" | sed 's/^/    /'
+    echo "    Fix: chmod +x <file> && git update-index --chmod=+x <file> && git commit"
+fi
+
 # ─── Summary ────────────────────────────────────────────────────────────
 echo
 if [ $fail_count -eq 0 ]; then
