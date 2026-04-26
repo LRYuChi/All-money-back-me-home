@@ -396,9 +396,18 @@ class SupertrendStrategy(IStrategy):
         return dataframe
 
     def populate_entry_trend(self, dataframe: DataFrame, metadata: dict) -> DataFrame:
+        # R89: vol multiplier configurable via SUPERTREND_VOL_MULT env.
+        # R66 telemetry showed vol <= 1.2*MA20 was the #1 blocker (207
+        # hits). Default kept at 1.2 for backward-compat; lower to 1.0
+        # (or 0.8) to fire more trades. Backtest first to confirm WR
+        # doesn't degrade.
+        try:
+            vol_mult = float(os.environ.get("SUPERTREND_VOL_MULT", "1.2"))
+        except (ValueError, TypeError):
+            vol_mult = 1.2
         quality = (
             (dataframe["adx"] > self.adx_threshold)
-            & (dataframe["volume"] > dataframe["volume_ma_20"] * 1.2)
+            & (dataframe["volume"] > dataframe["volume_ma_20"] * vol_mult)
             & dataframe["atr_rising"]
             & (dataframe["trend_quality"] > 0.5)
         )
