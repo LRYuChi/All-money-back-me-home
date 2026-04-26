@@ -35,16 +35,16 @@ cd "$PROJECT_DIR"
 
 echo "=== Hot redeploy: $SERVICE ==="
 
-echo "[1/5] Preflight..."
+echo "[1/6] Preflight..."
 if ! python3 scripts/preflight_check.py; then
     echo "ERROR: preflight failed — aborting redeploy."
     exit 1
 fi
 
-echo "[2/5] git pull..."
+echo "[2/6] git pull..."
 git pull origin main 2>&1 | tail -3
 
-echo "[3/5] Recreating $SERVICE..."
+echo "[3/6] Recreating $SERVICE..."
 docker compose -f docker-compose.prod.yml up -d --no-deps $REBUILD_FLAG \
     --force-recreate "$SERVICE" 2>&1 | tail -5
 
@@ -58,11 +58,11 @@ case "$SERVICE" in
     *)
         WAIT=10 ;;
 esac
-echo "[4/5] Waiting ${WAIT}s for $SERVICE to settle..."
+echo "[4/6] Waiting ${WAIT}s for $SERVICE to settle..."
 sleep "$WAIT"
 
 # Post-redeploy fix-ups by service
-echo "[5/5] Post-deploy fix-ups..."
+echo "[5/6] Post-deploy fix-ups..."
 
 # API recreate → nginx upstream DNS cache stale → 502 until reload.
 # We've manually done this every API redeploy this week — bake it in.
@@ -94,6 +94,54 @@ if [ "$SERVICE" = "freqtrade" ]; then
                 || echo "  /start failed — check container logs" ;;
         *)        echo "  freqtrade bot: state=$state (likely still booting)" ;;
     esac
+fi
+
+echo ""
+echo "[6/6] Post-deploy verification (R109)..."
+# Run verify_deploy.sh to catch silent-failure-class issues immediately
+# (R104 incident: code shipped but guards.* not importable in freqtrade
+# container went undetected for a week. verify_deploy probes the actual
+# container runtime — if it FAILS here we want to know in red text +
+# Telegram, not the next time someone opens the dashboard).
+#
+# Skip the verification only when REDEPLOY_SKIP_VERIFY=1 is set
+# (e.g. nginx-only redeploy where API may briefly be down anyway).
+if [ "${REDEPLOY_SKIP_VERIFY:-0}" = "1" ]; then
+    echo "  REDEPLOY_SKIP_VERIFY=1 — skipping verify_deploy.sh"
+elif [ -x scripts/verify_deploy.sh ]; then
+    set +e
+    bash scripts/verify_deploy.sh > /tmp/verify_deploy.log 2>&1
+    verify_rc=$?
+    set -e
+    if [ "$verify_rc" -eq 0 ]; then
+        echo "  ✓ verify_deploy passed"
+    else
+        echo ""
+        echo "  ✗ verify_deploy FAILED — output:"
+        cat /tmp/verify_deploy.log | sed 's/^/    /'
+        # Telegram alert if creds are present (best-effort, don't crash redeploy)
+        if [ -f .env ]; then
+            TG_TOKEN=$(grep -E '^TELEGRAM_TOKEN=' .env | cut -d= -f2- || true)
+            TG_CHAT=$(grep -E '^TELEGRAM_CHAT_ID=' .env | cut -d= -f2- || true)
+            if [ -n "${TG_TOKEN:-}" ] && [ -n "${TG_CHAT:-}" ]; then
+                MSG="🚨 R109: redeploy of \`$SERVICE\` left the system FAILING verify_deploy. Check VPS for tail of /tmp/verify_deploy.log. Possible R104-class silent failure if guard import or env mismatch is reported."
+                curl -sS -m 10 \
+                    "https://api.telegram.org/bot${TG_TOKEN}/sendMessage" \
+                    -d "chat_id=${TG_CHAT}" --data-urlencode "text=${MSG}" \
+                    > /dev/null 2>&1 || echo "    (telegram alert send failed)"
+            fi
+        fi
+        echo ""
+        echo "  ⚠️  Service redeploy succeeded but verification flagged issues."
+        echo "     Manual review required. Common causes:"
+        echo "       - guard import failure (R104) → check freqtrade container can import guards.pipeline"
+        echo "       - env mismatch (R94) → check api/freqtrade SUPERTREND_* envs match"
+        echo "       - GUARDS_NEVER_FIRED — see incident_2026-04-26_silent_guards_failure.md"
+        # Non-zero exit so CI / cron wrapper notice
+        exit 3
+    fi
+else
+    echo "  scripts/verify_deploy.sh not executable — skipping (run chmod +x)"
 fi
 
 echo ""
