@@ -1130,10 +1130,21 @@ class SupertrendStrategy(IStrategy):
         except Exception:
             balance = 1000.0
         leverage = float(kwargs.get("leverage") or 1.0)
+        # R103: GuardContext.amount must be the UNLEVERAGED stake (USDT),
+        # NOT the leveraged notional. The guards (MaxPositionGuard,
+        # TotalExposureGuard, DirectionalExposureGuard) all do
+        # `position_value = ctx.amount * ctx.leverage` internally.
+        # Passing notional (amount*rate) here would double-count: with
+        # 5x leverage, the guard would compute position 25x the real
+        # value and silently reject every entry. The bb_squeeze pattern
+        # this was copied from has the same bug (lower priority — not
+        # the active prod strategy). For supertrend we divide back out.
+        notional = amount * rate            # USDT position value (with leverage)
+        stake = notional / leverage if leverage > 0 else notional
         ctx = GuardContext(
             symbol=pair,
             side=("short" if side == "short" else "long"),
-            amount=amount * rate,                   # notional, not coin size
+            amount=stake,                   # unleveraged USDT — guards multiply by leverage
             leverage=leverage,
             account_balance=balance,
         )

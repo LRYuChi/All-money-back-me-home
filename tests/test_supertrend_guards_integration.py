@@ -165,14 +165,15 @@ def test_guard_check_exception_is_fail_closed(strategy, monkeypatch):
 
 
 # =================================================================== #
-# Context construction
+# Context construction (R103-corrected)
 # =================================================================== #
-def test_guard_context_uses_notional_not_coin_size(strategy, monkeypatch):
-    """The pipeline expects amount = notional (USDT), not coin size,
-    so position-pct guards work correctly."""
+def test_guard_context_passes_unleveraged_stake(strategy, monkeypatch):
+    """R103: GuardContext.amount must be UNLEVERAGED stake. Guards do
+    position_value = ctx.amount * ctx.leverage internally, so passing
+    notional (already-leveraged) would double-count and silently reject
+    legitimate entries once leverage > 1."""
     monkeypatch.delenv("SUPERTREND_GUARDS_ENABLED", raising=False)
     fake_pipeline = MagicMock()
-    fake_pipeline.run.return_value = None
     captured_ctx: list = []
 
     def _capture(ctx):
@@ -184,9 +185,47 @@ def test_guard_context_uses_notional_not_coin_size(strategy, monkeypatch):
         "guards.pipeline.create_default_pipeline",
         return_value=fake_pipeline,
     ):
-        _call_confirm(strategy, amount=0.02, rate=60000.0)
+        # 0.02 BTC @ $60k @ 5x leverage = $1200 notional, $240 stake
+        _call_confirm(strategy, amount=0.02, rate=60000.0, leverage=5.0)
     assert len(captured_ctx) == 1
-    # 0.02 BTC @ $60k = $1200 notional, NOT 0.02
-    assert captured_ctx[0].amount == pytest.approx(1200.0)
-    assert captured_ctx[0].symbol == "BTC/USDT:USDT"
-    assert captured_ctx[0].side == "long"
+    ctx = captured_ctx[0]
+    # stake = notional / leverage = 1200 / 5 = 240
+    assert ctx.amount == pytest.approx(240.0)
+    assert ctx.leverage == pytest.approx(5.0)
+    # The guard's internal position_value = ctx.amount * ctx.leverage
+    # would now correctly recover the $1200 notional.
+    assert ctx.amount * ctx.leverage == pytest.approx(1200.0)
+    assert ctx.symbol == "BTC/USDT:USDT"
+    assert ctx.side == "long"
+
+
+def test_guard_context_at_1x_leverage_unchanged_semantics(strategy, monkeypatch):
+    """At 1x leverage, stake == notional, so behaviour matches pre-R103."""
+    monkeypatch.delenv("SUPERTREND_GUARDS_ENABLED", raising=False)
+    fake_pipeline = MagicMock()
+    captured_ctx: list = []
+    fake_pipeline.run.side_effect = lambda c: (captured_ctx.append(c), None)[1]
+    with patch(
+        "guards.pipeline.create_default_pipeline",
+        return_value=fake_pipeline,
+    ):
+        _call_confirm(strategy, amount=0.01, rate=50000.0, leverage=1.0)
+    # 0.01 * 50000 / 1 = 500 stake; position_value = 500 * 1 = 500
+    assert captured_ctx[0].amount == pytest.approx(500.0)
+    assert captured_ctx[0].amount * captured_ctx[0].leverage == pytest.approx(500.0)
+
+
+def test_guard_context_handles_zero_leverage_gracefully(strategy, monkeypatch):
+    """If leverage somehow comes through as 0 (edge case), don't divide-by-zero."""
+    monkeypatch.delenv("SUPERTREND_GUARDS_ENABLED", raising=False)
+    fake_pipeline = MagicMock()
+    captured_ctx: list = []
+    fake_pipeline.run.side_effect = lambda c: (captured_ctx.append(c), None)[1]
+    with patch(
+        "guards.pipeline.create_default_pipeline",
+        return_value=fake_pipeline,
+    ):
+        # leverage=0 should not crash; fall back to notional
+        _call_confirm(strategy, amount=0.01, rate=50000.0, leverage=0.0)
+    # Should fall back to notional (= 500) instead of crashing
+    assert captured_ctx[0].amount == pytest.approx(500.0)
