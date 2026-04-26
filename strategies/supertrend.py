@@ -1855,12 +1855,17 @@ class SupertrendStrategy(IStrategy):
         # by R97 would never trip — they were checking a state nothing
         # ever wrote to. Mirrors the bb_squeeze pattern. Wrapped so that
         # a guards module failure can never block a successful exit.
+        # R100: also call DrawdownGuard.update_equity so peak equity
+        # advances with profits — otherwise peak is frozen at first
+        # observed balance, and a 10% drawdown from a later peak would
+        # never trigger the guard.
         if os.environ.get("SUPERTREND_GUARDS_ENABLED", "1") == "1":
             try:
                 from guards.guards import (
                     ConsecutiveLossGuard,
                     CooldownGuard,
                     DailyLossGuard,
+                    DrawdownGuard,
                 )
                 from guards.pipeline import get_guard, save_state
                 cd = get_guard(CooldownGuard)
@@ -1873,6 +1878,18 @@ class SupertrendStrategy(IStrategy):
                     dl = get_guard(DailyLossGuard)
                     if dl:
                         dl.record_loss(abs(pnl_usd))
+                # R100: bump peak equity if account has grown
+                dd = get_guard(DrawdownGuard)
+                if dd:
+                    try:
+                        balance = (
+                            self.wallets.get_total("USDT")
+                            if getattr(self, "wallets", None) else None
+                        )
+                    except Exception:
+                        balance = None
+                    if balance is not None and balance > 0:
+                        dd.update_equity(float(balance))
                 save_state()
             except Exception as e:
                 logger.warning("guard state record on exit failed: %s", e)

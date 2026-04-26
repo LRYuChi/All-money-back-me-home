@@ -115,20 +115,27 @@ def _make_trade(pnl_usd: float):
     return t
 
 
-def _call_exit(strategy, pnl_usd: float):
+def _call_exit(strategy, pnl_usd: float, balance: float | None = None):
     from datetime import datetime, timezone
     trade = _make_trade(pnl_usd)
     captured_calls: list = []
     fake_cooldown = MagicMock()
     fake_consec = MagicMock()
     fake_daily = MagicMock()
+    fake_drawdown = MagicMock()
+    if balance is not None:
+        strategy.wallets = MagicMock()
+        strategy.wallets.get_total.return_value = balance
 
     def _get_guard(cls):
-        from guards.guards import ConsecutiveLossGuard, CooldownGuard, DailyLossGuard
+        from guards.guards import (
+            ConsecutiveLossGuard, CooldownGuard, DailyLossGuard, DrawdownGuard,
+        )
         return {
             CooldownGuard: fake_cooldown,
             ConsecutiveLossGuard: fake_consec,
             DailyLossGuard: fake_daily,
+            DrawdownGuard: fake_drawdown,
         }.get(cls)
 
     with patch(
@@ -150,12 +157,12 @@ def _call_exit(strategy, pnl_usd: float):
             exit_reason="trailing_stop",
             current_time=datetime.now(timezone.utc),
         )
-    return result, fake_cooldown, fake_consec, fake_daily, captured_calls
+    return result, fake_cooldown, fake_consec, fake_daily, fake_drawdown, captured_calls
 
 
 def test_exit_records_cooldown_and_consec_for_winning_trade(monkeypatch):
     s = _stub_strategy(monkeypatch)
-    result, cd, cl, dl, calls = _call_exit(s, pnl_usd=10.0)
+    result, cd, cl, dl, _dd, calls = _call_exit(s, pnl_usd=10.0)
     assert result is True
     cd.record_trade.assert_called_once_with("BTC/USDT:USDT")
     cl.record_result.assert_called_once_with(is_win=True)
@@ -165,7 +172,7 @@ def test_exit_records_cooldown_and_consec_for_winning_trade(monkeypatch):
 
 def test_exit_records_daily_loss_for_losing_trade(monkeypatch):
     s = _stub_strategy(monkeypatch)
-    result, cd, cl, dl, calls = _call_exit(s, pnl_usd=-7.5)
+    result, cd, cl, dl, _dd, calls = _call_exit(s, pnl_usd=-7.5)
     assert result is True
     cd.record_trade.assert_called_once_with("BTC/USDT:USDT")
     cl.record_result.assert_called_once_with(is_win=False)
@@ -178,11 +185,39 @@ def test_exit_skips_guard_recording_when_env_disabled(monkeypatch):
     s.timeframe = "15m"
     s.dp = MagicMock()
     s.dp.get_analyzed_dataframe.return_value = (pd.DataFrame(), None)
-    result, cd, cl, dl, _calls = _call_exit(s, pnl_usd=-7.5)
+    result, cd, cl, dl, _dd, _calls = _call_exit(s, pnl_usd=-7.5)
     assert result is True
     cd.record_trade.assert_not_called()
     cl.record_result.assert_not_called()
     dl.record_loss.assert_not_called()
+
+
+# =================================================================== #
+# R100: DrawdownGuard.update_equity called on each exit
+# =================================================================== #
+def test_exit_updates_drawdown_peak_with_current_balance(monkeypatch):
+    """R100: DrawdownGuard.update_equity must be called so peak advances
+    with profits. Without this, peak is frozen at first observed balance."""
+    s = _stub_strategy(monkeypatch)
+    _r, _cd, _cl, _dl, dd, _ = _call_exit(s, pnl_usd=10.0, balance=1100.0)
+    dd.update_equity.assert_called_once_with(1100.0)
+
+
+def test_exit_skips_drawdown_update_when_balance_unavailable(monkeypatch):
+    """R100: if wallets.get_total raises or returns None, do NOT call
+    update_equity with garbage data."""
+    s = _stub_strategy(monkeypatch)
+    s.wallets = MagicMock()
+    s.wallets.get_total.side_effect = RuntimeError("wallet unreachable")
+    _r, _cd, _cl, _dl, dd, _ = _call_exit(s, pnl_usd=5.0)
+    dd.update_equity.assert_not_called()
+
+
+def test_exit_skips_drawdown_update_when_balance_zero(monkeypatch):
+    """R100: balance=0 is treated as no-data; update_equity NOT called."""
+    s = _stub_strategy(monkeypatch)
+    _r, _cd, _cl, _dl, dd, _ = _call_exit(s, pnl_usd=5.0, balance=0.0)
+    dd.update_equity.assert_not_called()
 
 
 def test_exit_does_not_fail_when_guards_module_broken(monkeypatch):
