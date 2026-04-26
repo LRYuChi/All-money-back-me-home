@@ -96,6 +96,24 @@ else
     fail "guards import FAILED — R104 silent-failure pattern: $guards_check"
 fi
 
+# ─── Check 2b: R115 backtest detection NOT mis-firing in prod ──────────
+# R115 module-level _IS_BACKTEST detects backtest mode at module load
+# from sys.argv. Risk: if freqtrade ever launches with backtest-like
+# argv (future version, diagnostic flag, etc), prod trade mode would
+# be mis-detected as backtest → journal writes ALL silently skipped →
+# operator sees "0 trades" thinking strategy stuck when actually it's
+# trading but not recording. Guard against this with explicit verify.
+echo
+echo "[2b/6] R115 backtest detection NOT mis-firing in prod"
+r115_check=$(run "docker exec ambmh-freqtrade-1 sh -c 'cd /freqtrade/user_data/strategies && python3 -c \"from supertrend import _IS_BACKTEST; print(_IS_BACKTEST)\" 2>&1'" 2>/dev/null || echo "EXEC_FAILED")
+if [ "$r115_check" = "False" ]; then
+    ok "_IS_BACKTEST=False (prod trade mode, journal writes ENABLED)"
+elif [ "$r115_check" = "True" ]; then
+    fail "_IS_BACKTEST=True in prod freqtrade container — journal writes DISABLED, will look like 0 trades. Check freqtrade entrypoint sys.argv."
+else
+    fail "could not read _IS_BACKTEST: $r115_check"
+fi
+
 # ─── Check 3: env consistency between api and freqtrade (R94 caveat) ────
 echo
 echo "[3/6] env consistency: api vs freqtrade SUPERTREND_*"
