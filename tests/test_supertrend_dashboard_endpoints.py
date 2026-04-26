@@ -1160,6 +1160,140 @@ def test_operations_silent_pairs_empty_when_whitelist_unreachable(monkeypatch, t
     assert perf["active_pair_count"] == 1
 
 
+def test_operations_includes_guard_state_block(monkeypatch, tmp_path):
+    """R98: /operations.guards must surface guard state so operator can
+    see daily_loss, consecutive_losses, paused_until without VPS shell."""
+    from unittest.mock import patch
+    monkeypatch.setenv("SUPERTREND_JOURNAL_DIR", str(tmp_path))
+    fake_state = {
+        "daily_loss": 12.5,
+        "daily_loss_limit_pct": 5.0,
+        "consecutive_losses": 2,
+        "max_streak": 5,
+        "paused_until": 0,
+        "cooldown_symbols": 1,
+        "drawdown_peak_equity": 1100.0,
+        "drawdown_max_pct": 10.0,
+    }
+    mod = _import_router()
+    with patch(
+        "src.routers.supertrend._ft_get",
+        side_effect=RuntimeError("not relevant"),
+    ), patch(
+        "guards.pipeline.get_state_summary",
+        return_value=fake_state,
+    ):
+        out = mod["operations"](eval_window_days=1, perf_window_days=7)
+    g = out["guards"]
+    assert g["available"] is True
+    assert g["daily_loss"] == 12.5
+    assert g["consecutive_losses"] == 2
+    assert g["max_streak"] == 5
+    # paused_until=0 → no GUARD_PAUSED alert
+    assert not any("GUARD_PAUSED" in a for a in out["alerts"])
+
+
+def test_operations_guards_unavailable_when_module_missing(monkeypatch, tmp_path):
+    """R98: guards.available=False when the module can't be imported.
+    The /operations call must NOT crash — fail-soft per safety convention."""
+    import sys
+    from unittest.mock import patch
+    monkeypatch.setenv("SUPERTREND_JOURNAL_DIR", str(tmp_path))
+    real_mod = sys.modules.get("guards.pipeline")
+    sys.modules["guards.pipeline"] = None
+    try:
+        mod = _import_router()
+        with patch(
+            "src.routers.supertrend._ft_get",
+            side_effect=RuntimeError("not relevant"),
+        ):
+            out = mod["operations"](eval_window_days=1, perf_window_days=7)
+    finally:
+        if real_mod is not None:
+            sys.modules["guards.pipeline"] = real_mod
+        else:
+            sys.modules.pop("guards.pipeline", None)
+    assert out["guards"]["available"] is False
+    assert "error" in out["guards"]
+
+
+def test_operations_alerts_guard_paused_when_streak_tripped(monkeypatch, tmp_path):
+    """R98: GUARD_PAUSED alert fires when paused_until > now."""
+    import time
+    from unittest.mock import patch
+    monkeypatch.setenv("SUPERTREND_JOURNAL_DIR", str(tmp_path))
+    fake_state = {
+        "daily_loss": 0,
+        "daily_loss_limit_pct": 5.0,
+        "consecutive_losses": 5,
+        "max_streak": 5,
+        "paused_until": time.time() + 7200,   # paused for 2 more hours
+        "drawdown_peak_equity": 1000.0,
+    }
+    mod = _import_router()
+    with patch(
+        "src.routers.supertrend._ft_get",
+        side_effect=RuntimeError("not relevant"),
+    ), patch(
+        "guards.pipeline.get_state_summary",
+        return_value=fake_state,
+    ):
+        out = mod["operations"](eval_window_days=1, perf_window_days=7)
+    paused_alerts = [a for a in out["alerts"] if "GUARD_PAUSED" in a]
+    assert len(paused_alerts) == 1
+    assert "5 consecutive losses" in paused_alerts[0]
+
+
+def test_operations_alerts_guard_near_daily_limit(monkeypatch, tmp_path):
+    """R98: GUARD_NEAR_DAILY_LIMIT fires when daily loss > 80% of cap."""
+    from unittest.mock import patch
+    monkeypatch.setenv("SUPERTREND_JOURNAL_DIR", str(tmp_path))
+    # peak=$1000, cap=5% = $50, daily_loss=$45 → 90% of cap
+    fake_state = {
+        "daily_loss": 45.0,
+        "daily_loss_limit_pct": 5.0,
+        "consecutive_losses": 0,
+        "paused_until": 0,
+        "drawdown_peak_equity": 1000.0,
+    }
+    mod = _import_router()
+    with patch(
+        "src.routers.supertrend._ft_get",
+        side_effect=RuntimeError("not relevant"),
+    ), patch(
+        "guards.pipeline.get_state_summary",
+        return_value=fake_state,
+    ):
+        out = mod["operations"](eval_window_days=1, perf_window_days=7)
+    near_limit = [a for a in out["alerts"] if "GUARD_NEAR_DAILY_LIMIT" in a]
+    assert len(near_limit) == 1
+    assert "90%" in near_limit[0]
+
+
+def test_operations_no_guard_alerts_when_state_clean(monkeypatch, tmp_path):
+    """R98: when no guards are tripped or near limit, no GUARD_* alerts."""
+    from unittest.mock import patch
+    monkeypatch.setenv("SUPERTREND_JOURNAL_DIR", str(tmp_path))
+    fake_state = {
+        "daily_loss": 5.0,                   # 10% of $50 cap → far from 80%
+        "daily_loss_limit_pct": 5.0,
+        "consecutive_losses": 1,
+        "paused_until": 0,
+        "drawdown_peak_equity": 1000.0,
+    }
+    mod = _import_router()
+    with patch(
+        "src.routers.supertrend._ft_get",
+        side_effect=RuntimeError("not relevant"),
+    ), patch(
+        "guards.pipeline.get_state_summary",
+        return_value=fake_state,
+    ):
+        out = mod["operations"](eval_window_days=1, perf_window_days=7)
+    assert not any("GUARD_PAUSED" in a for a in out["alerts"])
+    assert not any("GUARD_NEAR_DAILY_LIMIT" in a for a in out["alerts"])
+
+
 def test_operations_switchboard_entry_gate_defaults(monkeypatch, tmp_path):
     """R94: when no env override is set, switchboard reports the safe defaults."""
     from unittest.mock import patch

@@ -914,6 +914,19 @@ def supertrend_operations(
         except Exception as e:
             out["errors"]["performance"] = str(e)
 
+    # ---- guard state (R98) ---- #
+    # R97 wired the guard pipeline into supertrend.confirm_trade_entry.
+    # Without surfacing the state, an operator wouldn't know if guards
+    # had paused trading (consecutive losses), or were about to pause
+    # (near daily-loss ceiling). Read-only snapshot via get_state_summary.
+    guards_block: dict[str, Any] = {"available": False}
+    try:
+        from guards.pipeline import get_state_summary as _guard_state_summary
+        guards_block = {"available": True, **_guard_state_summary()}
+    except Exception as e:
+        guards_block = {"available": False, "error": str(e)}
+    out["guards"] = guards_block
+
     # ---- composed actionable alerts ---- #
     out["alerts"] = _build_ops_alerts(
         bot_state=bot_state,
@@ -924,9 +937,49 @@ def supertrend_operations(
         journal_ok=journal_ok,
         observed_span_hours=eval_summary.get("observed_span_hours", 0.0),
     )
+    # R98: append guard-state alerts
+    out["alerts"].extend(_build_guard_alerts(guards_block))
     out["alert_count"] = len(out["alerts"])
     out["status"] = "ok" if not out["alerts"] else "degraded"
     return out
+
+
+def _build_guard_alerts(guards: dict) -> list[str]:
+    """R98: actionable alerts from guard state snapshot.
+
+    GUARD_PAUSED — ConsecutiveLossGuard tripped, trading paused until X.
+                   Operator must investigate the loss streak before unpausing.
+    GUARD_NEAR_DAILY_LIMIT — DailyLossGuard at >80% of cap. Next loss may pause.
+    """
+    if not guards or not guards.get("available"):
+        return []
+    alerts: list[str] = []
+    paused_until = guards.get("paused_until") or 0
+    import time as _t
+    now = _t.time()
+    if paused_until > now:
+        remaining_h = (paused_until - now) / 3600
+        alerts.append(
+            f"GUARD_PAUSED — trading paused for {remaining_h:.1f}h after "
+            f"{guards.get('consecutive_losses', '?')} consecutive losses. "
+            "Review recent exits before manually unpausing."
+        )
+    daily_loss = guards.get("daily_loss") or 0
+    daily_cap_pct = guards.get("daily_loss_limit_pct") or 0
+    if daily_loss > 0 and daily_cap_pct > 0:
+        # Need account balance to compute %; use peak_equity as proxy
+        # (DrawdownGuard tracks it). Fall back to "we know it's nonzero".
+        peak = guards.get("drawdown_peak_equity") or 0
+        if peak > 0:
+            cap_usd = peak * (daily_cap_pct / 100)
+            if cap_usd > 0 and daily_loss / cap_usd > 0.8:
+                pct_of_cap = (daily_loss / cap_usd) * 100
+                alerts.append(
+                    f"GUARD_NEAR_DAILY_LIMIT — daily loss ${daily_loss:.2f} "
+                    f"is {pct_of_cap:.0f}% of {daily_cap_pct:.0f}% cap "
+                    f"(${cap_usd:.2f}). Next material loss likely pauses trading."
+                )
+    return alerts
 
 
 # =================================================================== #
