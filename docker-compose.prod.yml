@@ -233,6 +233,11 @@ services:
       - FT_USER=${FT_USER:-freqtrade}
       - FT_PASS=${FT_PASS:-freqtrade}
       - DATA_DIR=/app/data
+      # TG Refactor Phase 1 (2026-04-26): 預設只顯示跟 SUPERTREND/Polymarket
+      # 相關的按鈕。設為 1 才把 confidence_engine / tw_predictor / ML 等
+      # deprecated 子系統的按鈕重新露出（為了暫時相容或除錯）。
+      # 詳見 docs/refactor/tg_phase1.md。
+      - TELEGRAM_LEGACY_MENU=${TELEGRAM_LEGACY_MENU:-0}
     restart: unless-stopped
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('https://api.telegram.org', timeout=5)"]

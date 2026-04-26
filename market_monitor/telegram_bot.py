@@ -37,47 +37,97 @@ AI_COOLDOWN = 30
 
 # =============================================
 # 固定底部選單 (ReplyKeyboardMarkup)
+#
+# TG Refactor Phase 1 (2026-04-26):
+#   - ACTIVE_BUTTONS: 跟 SUPERTREND + Polymarket + 通用 AI 互動相關，
+#     對應目前實際運作的系統。
+#   - LEGACY_BUTTONS: 對應 CLAUDE.md 標記為 deprecated 的子系統
+#     (confidence_engine / tw_predictor / market_monitor.ml)。預設隱藏。
+#     env TELEGRAM_LEGACY_MENU=1 才會顯示。
+#   - 點到 LEGACY 按鈕但 env 未開：回應「此功能已停用」並指向新系統。
+#
+# 完整重構決策見 docs/refactor/tg_phase1.md。
 # =============================================
 
-PERSISTENT_MENU = {
-    "keyboard": [
-        ["📊 全覽", "📋 持倉", "📋 分析"],
-        ["🎯 信心", "🔗 加密環境", "📈 機制"],
-        ["💰 交易", "📊 統計", "📓 日誌"],
-        ["🛡 風控", "🌍 宏觀", "🧠 決策"],
-        ["🤖 AI回顧", "🔮 AI預測", "⚠️ AI風控"],
-        ["🇹🇼 台股預測", "🏦 台股籌碼", "📉 台股技術"],
-        ["🧠 台股ML", "🧠 BTC ML"],
-        ["📰 投顧報告"],
-    ],
-    "resize_keyboard": True,
-    "is_persistent": True,
-}
+LEGACY_MENU_ENABLED = os.environ.get("TELEGRAM_LEGACY_MENU", "0") == "1"
 
-# 按鈕文字 → handler 映射
-BUTTON_MAP: dict[str, str] = {
+# Phase 1 後固定保留的按鈕（跟 SUPERTREND/Polymarket/Smart Money 真的相關）
+ACTIVE_BUTTONS: dict[str, str] = {
+    # 交易執行（SUPERTREND 主路徑）
     "📊 全覽": "overview",
     "📋 持倉": "positions",
     "📋 分析": "analysis",
-    "🎯 信心": "confidence",
-    "🔗 加密環境": "crypto",
-    "📈 機制": "regime",
     "💰 交易": "trades",
     "📊 統計": "trade_stats",
     "📓 日誌": "journal",
     "🛡 風控": "guards",
-    "🌍 宏觀": "macro",
-    "🧠 決策": "decisions",
+    # AI 互動（通用，可吃當前系統資料）
     "🤖 AI回顧": "ai_review",
     "🔮 AI預測": "ai_forecast",
     "⚠️ AI風控": "ai_risk",
     "📰 投顧報告": "advisor_report",
-    "🇹🇼 台股預測": "tw_predict",
-    "🏦 台股籌碼": "tw_chips",
-    "📉 台股技術": "tw_tech",
-    "🧠 台股ML": "tw_ml",
-    "🧠 BTC ML": "btc_ml",
 }
+
+# Deprecated 按鈕 — 對應 CLAUDE.md 標記為 deprecated 的子系統
+# 留著定義方便 (a) 操作員意外打舊指令時給明確回應 (b) 開 env 復活
+LEGACY_BUTTONS: dict[str, str] = {
+    "🎯 信心": "confidence",            # confidence_engine
+    "🔗 加密環境": "crypto",            # crypto_environment
+    "📈 機制": "regime",                # market_regime
+    "🌍 宏觀": "macro",                 # market_monitor.macro
+    "🧠 決策": "decisions",             # decisions log
+    "🇹🇼 台股預測": "tw_predict",       # tw_predictor
+    "🏦 台股籌碼": "tw_chips",          # tw_predictor
+    "📉 台股技術": "tw_tech",           # tw_predictor
+    "🧠 台股ML": "tw_ml",               # market_monitor.ml
+    "🧠 BTC ML": "btc_ml",              # market_monitor.ml
+}
+
+LEGACY_COMMANDS: frozenset[str] = frozenset(LEGACY_BUTTONS.values())
+
+# 合併 button map — 不論 LEGACY env 開關，舊指令文字都映射得到
+# (handler 內部會在 env 關閉時回退「已停用」訊息)
+BUTTON_MAP: dict[str, str] = {**ACTIVE_BUTTONS, **LEGACY_BUTTONS}
+
+
+def _build_persistent_menu() -> dict:
+    """依 LEGACY_MENU_ENABLED 動態組裝鍵盤。"""
+    keyboard: list[list[str]] = [
+        ["📊 全覽", "📋 持倉", "📋 分析"],
+        ["💰 交易", "📊 統計", "📓 日誌"],
+        ["🛡 風控"],
+        ["🤖 AI回顧", "🔮 AI預測", "⚠️ AI風控"],
+        ["📰 投顧報告"],
+    ]
+    if LEGACY_MENU_ENABLED:
+        keyboard.extend([
+            ["🎯 信心", "🔗 加密環境", "📈 機制"],
+            ["🌍 宏觀", "🧠 決策"],
+            ["🇹🇼 台股預測", "🏦 台股籌碼", "📉 台股技術"],
+            ["🧠 台股ML", "🧠 BTC ML"],
+        ])
+    return {
+        "keyboard": keyboard,
+        "resize_keyboard": True,
+        "is_persistent": True,
+    }
+
+
+PERSISTENT_MENU = _build_persistent_menu()
+
+
+def _legacy_disabled_response(cmd: str) -> str:
+    """deprecated 子指令的統一回應。Phase 3 真的刪掉前，操作員打到還能看見原因。"""
+    return (
+        f"⚠️ 此功能（`{cmd}`）已停用\n\n"
+        "對應的 confidence_engine / tw_predictor / market_monitor.ml 屬於 "
+        "Smart Money 跟單系統遷移前的舊架構，已標記 deprecated。\n\n"
+        "若臨時需要復活：在 VPS .env 加上\n"
+        "`TELEGRAM_LEGACY_MENU=1`\n"
+        "並 `docker compose up -d --force-recreate telegram-bot`。\n\n"
+        "目前實際在運作的系統用：\n"
+        "📊 全覽 / 💰 交易 / 🛡 風控 / 🤖 AI回顧"
+    )
 
 # =============================================
 # 視覺化工具
@@ -1288,22 +1338,29 @@ def send_reply(chat_id: int, text: str, with_menu: bool = True) -> None:
 
 
 def setup_bot_commands() -> None:
-    """設置 Telegram 底部命令選單 (輸入 / 時顯示)。"""
+    """設置 Telegram 底部命令選單 (輸入 / 時顯示).
+
+    Phase 1: 預設只註冊 ACTIVE 指令；TELEGRAM_LEGACY_MENU=1 才會把
+    confidence / tw_* / *_ml 等 deprecated 指令也露出在 / 自動完成清單。
+    """
     commands = [
         {"command": "overview", "description": "一鍵全覽"},
         {"command": "positions", "description": "當前持倉詳情"},
         {"command": "trades", "description": "交易紀錄 (20筆)"},
         {"command": "trade_stats", "description": "統計 (勝率/PF)"},
         {"command": "analysis", "description": "完整分析儀表板"},
-        {"command": "confidence", "description": "信心引擎分數"},
-        {"command": "crypto", "description": "加密環境 (6幣種)"},
-        {"command": "regime", "description": "市場機制 + 建議"},
-        {"command": "macro", "description": "宏觀指標"},
-        {"command": "guards", "description": "風控狀態"},
+        {"command": "guards", "description": "風控狀態 (R97-R104)"},
         {"command": "ai_review", "description": "AI 交易回顧"},
         {"command": "ai_forecast", "description": "AI 市場預測"},
         {"command": "ai_risk", "description": "AI 風險評估"},
     ]
+    if LEGACY_MENU_ENABLED:
+        commands.extend([
+            {"command": "confidence", "description": "[legacy] 信心引擎分數"},
+            {"command": "crypto", "description": "[legacy] 加密環境 (6幣種)"},
+            {"command": "regime", "description": "[legacy] 市場機制 + 建議"},
+            {"command": "macro", "description": "[legacy] 宏觀指標"},
+        ])
     try:
         url = f"https://api.telegram.org/bot{BOT_TOKEN}/setMyCommands"
         data = json.dumps({"commands": commands}).encode()
@@ -1320,6 +1377,9 @@ def process_message(chat_id: int, text: str) -> str:
     # 按鈕文字匹配
     if text in BUTTON_MAP:
         cmd = BUTTON_MAP[text]
+        # Phase 1: legacy 按鈕在 env 關閉時走 deprecation stub
+        if cmd in LEGACY_COMMANDS and not LEGACY_MENU_ENABLED:
+            return _legacy_disabled_response(cmd)
         handler = COMMANDS.get(cmd)
         if handler:
             try:
@@ -1330,6 +1390,9 @@ def process_message(chat_id: int, text: str) -> str:
     # /指令
     if text.startswith("/"):
         cmd = text.split()[0].lstrip("/").split("@")[0].lower()
+        # Phase 1: 同樣對 /tw_predict, /confidence 等 legacy 指令走 stub
+        if cmd in LEGACY_COMMANDS and not LEGACY_MENU_ENABLED:
+            return _legacy_disabled_response(cmd)
         handler = COMMANDS.get(cmd)
         if handler:
             try:
