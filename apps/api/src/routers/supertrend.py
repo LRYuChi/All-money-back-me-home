@@ -505,10 +505,22 @@ def _closest_to_fire(eval_event: dict | None) -> dict[str, Any] | None:
       fire_distance   — len(remaining); 0 means tier just fired
       already_fired   — bool: was that tier's _fired flag True?
 
+    R110: skip tiers whose ONLY failure is a "*_disabled_*" sentinel.
+    Pre-R110, R87 confirmed_disabled tier always reported fire_distance=1
+    even though it can never actually fire — masking the REAL closest
+    tier (scout / pre_scout) and misleading the operator into "just one
+    condition away" when the truth is "this tier is permanently dead".
+
     None when input is None (no recent evaluation for this pair).
     """
     if not eval_event:
         return None
+
+    def _tier_is_disabled(fails: list[str]) -> bool:
+        """A tier is treated as never-firing when its sole remaining
+        failure is the R87/R93 sentinel `*_disabled_R*`."""
+        return len(fails) == 1 and "_disabled_" in (fails[0] or "")
+
     candidates = []
     for tier in ("confirmed", "scout", "pre_scout"):
         if eval_event.get(f"{tier}_fired") is True:
@@ -517,9 +529,17 @@ def _closest_to_fire(eval_event: dict | None) -> dict[str, Any] | None:
                 "fire_distance": 0, "already_fired": True,
             }
         fails = eval_event.get(f"{tier}_failures") or []
+        if _tier_is_disabled(fails):
+            continue   # R110: don't surface a dead tier as "closest"
         candidates.append((tier, len(fails), list(fails)))
     if not candidates:
-        return None
+        # All tiers either fired or are permanently disabled. Surface
+        # this state explicitly so the operator can see "all live tiers
+        # exhausted" rather than getting None which looks like missing data.
+        return {
+            "tier": None, "remaining": ["all_tiers_disabled_or_fired"],
+            "fire_distance": 999, "already_fired": False,
+        }
     # Closest = tier with fewest failures
     candidates.sort(key=lambda c: c[1])
     tier, n, fails = candidates[0]
@@ -693,6 +713,39 @@ def _build_ops_alerts(
             alerts.append(
                 f"NO_FIRES_24H — {n_evals} evaluations, dominant blocker: "
                 f"{top[0]} ({top[1]} hits). {advice}"
+            )
+
+        # R110: STRONG_TREND_NO_FIRES — detect the R87 stuck pattern.
+        # When confirmed_disabled_R87 is among the top failures AND
+        # multi-tf alignment failures (all_bullish/all_bearish=False,
+        # *_just_formed=False) are NOT dominant, the strategy is
+        # observing strong trends but unable to enter because:
+        #   - confirmed tier disabled by R87
+        #   - scout/pre_scout require "just_formed" edge — alignment
+        #     long ago = no edge to fire on
+        # → operator may want to temporarily SUPERTREND_DISABLE_CONFIRMED=0
+        #   (accept R85 confirmed-tier P&L profile to avoid being stuck)
+        #   or wait for chop regime to give scout a fresh edge.
+        failures = eval_summary.get("failures_top") or {}
+        confirmed_disabled_hits = failures.get("confirmed_disabled_R87", 0)
+        # Threshold: confirmed_disabled appears more than the dominant
+        # alignment-not-yet-formed failure → we're in strong trend
+        not_formed_hits = max(
+            failures.get("bull_just_formed=False", 0),
+            failures.get("bear_just_formed=False", 0),
+            failures.get("pair_bullish_2tf_just_formed=False", 0),
+            failures.get("pair_bearish_2tf_just_formed=False", 0),
+        )
+        if confirmed_disabled_hits >= 50 and confirmed_disabled_hits > not_formed_hits * 0.3:
+            alerts.append(
+                f"STRONG_TREND_NO_FIRES — {confirmed_disabled_hits} evaluations "
+                f"reached confirmed-tier alignment but were blocked by R87 "
+                f"disable_confirmed. scout/pre_scout require edge-trigger "
+                f"(*_just_formed) which doesn't fire in mid-trend. Options: "
+                f"(a) temporarily SUPERTREND_DISABLE_CONFIRMED=0 — accepts R85 "
+                f"confirmed -0.84%/48% WR but lets bot trade strong trends, "
+                f"(b) wait for chop regime, (c) implement regime-aware R87 toggle. "
+                f"See /api/supertrend/scanner for which pairs are stuck."
             )
 
     if recent_trades == 0 and n_evals == 0:
