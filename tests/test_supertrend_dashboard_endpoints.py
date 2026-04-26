@@ -1160,6 +1160,106 @@ def test_operations_silent_pairs_empty_when_whitelist_unreachable(monkeypatch, t
     assert perf["active_pair_count"] == 1
 
 
+def test_operations_breaks_down_guard_rejections(monkeypatch, tmp_path):
+    """R101: pipeline.guard_rejections_top groups skipped events by [GuardName]."""
+    from datetime import datetime, timezone
+    from unittest.mock import patch
+    from strategies.journal import TradeJournal
+
+    monkeypatch.setenv("SUPERTREND_JOURNAL_DIR", str(tmp_path))
+    j = TradeJournal(tmp_path)
+    now = datetime.now(timezone.utc).isoformat()
+    # 6 MaxPositionGuard rejections + 2 DailyLossGuard + 1 R57 (non-guard)
+    for _ in range(6):
+        j.write({
+            "event_type": "skipped", "timestamp": now,
+            "pair": "BTC/USDT:USDT", "side": "long",
+            "reason": "R97 guard: [L:strategy] [MaxPositionGuard] over 30%",
+        })
+    for _ in range(2):
+        j.write({
+            "event_type": "skipped", "timestamp": now,
+            "pair": "BTC/USDT:USDT", "side": "long",
+            "reason": "R97 guard: [L:account] [DailyLossGuard] over 5%",
+        })
+    j.write({
+        "event_type": "skipped", "timestamp": now,
+        "pair": "BTC/USDT:USDT", "side": "long",
+        "reason": "R57 pre-entry filter: orderbook microstructure adverse",
+    })
+
+    mod = _import_router()
+    with patch(
+        "src.routers.supertrend._ft_get",
+        side_effect=RuntimeError("not relevant"),
+    ):
+        out = mod["operations"](eval_window_days=1, perf_window_days=7)
+    pipe = out["pipeline"]
+    assert pipe["recent_skipped"] == 9
+    assert pipe["guard_rejections_top"] == {
+        "MaxPositionGuard": 6,
+        "DailyLossGuard": 2,
+    }
+    # GUARD_REJECTING_HEAVILY fires for MaxPositionGuard (6 >= 5) but not DailyLoss (2 < 5)
+    heavy_alerts = [a for a in out["alerts"] if "GUARD_REJECTING_HEAVILY" in a]
+    assert len(heavy_alerts) == 1
+    assert "MaxPositionGuard blocked 6" in heavy_alerts[0]
+
+
+def test_operations_no_guard_rejection_alert_below_threshold(monkeypatch, tmp_path):
+    """R101: alert quiet when each guard rejects <5 in window."""
+    from datetime import datetime, timezone
+    from unittest.mock import patch
+    from strategies.journal import TradeJournal
+
+    monkeypatch.setenv("SUPERTREND_JOURNAL_DIR", str(tmp_path))
+    j = TradeJournal(tmp_path)
+    now = datetime.now(timezone.utc).isoformat()
+    for _ in range(3):
+        j.write({
+            "event_type": "skipped", "timestamp": now,
+            "pair": "BTC/USDT:USDT", "side": "long",
+            "reason": "R97 guard: [L:trade] [CooldownGuard] 30s remaining",
+        })
+    mod = _import_router()
+    with patch(
+        "src.routers.supertrend._ft_get",
+        side_effect=RuntimeError("not relevant"),
+    ):
+        out = mod["operations"](eval_window_days=1, perf_window_days=7)
+    assert not any("GUARD_REJECTING_HEAVILY" in a for a in out["alerts"])
+
+
+def test_operations_skip_reasons_top_works_for_non_guard_skips(monkeypatch, tmp_path):
+    """R101: skip_reasons_top groups all skipped events, not just guard ones."""
+    from datetime import datetime, timezone
+    from unittest.mock import patch
+    from strategies.journal import TradeJournal
+
+    monkeypatch.setenv("SUPERTREND_JOURNAL_DIR", str(tmp_path))
+    j = TradeJournal(tmp_path)
+    now = datetime.now(timezone.utc).isoformat()
+    for _ in range(4):
+        j.write({
+            "event_type": "skipped", "timestamp": now,
+            "reason": "R57 pre-entry filter: funding contra-signal",
+        })
+    j.write({
+        "event_type": "skipped", "timestamp": now,
+        "reason": "R97 guard: [L:strategy] [MaxLeverageGuard] too high",
+    })
+    mod = _import_router()
+    with patch(
+        "src.routers.supertrend._ft_get",
+        side_effect=RuntimeError("not relevant"),
+    ):
+        out = mod["operations"](eval_window_days=1, perf_window_days=7)
+    top = out["pipeline"]["skip_reasons_top"]
+    # Tag from " — " split — both reasons get truncated to 60 chars
+    assert any("R57 pre-entry filter: funding contra-signal" in k for k in top.keys())
+    assert any("R97 guard: [L:strategy] [MaxLeverageGuard] too high" in k for k in top.keys())
+
+
 def test_operations_includes_guard_state_block(monkeypatch, tmp_path):
     """R98: /operations.guards must surface guard state so operator can
     see daily_loss, consecutive_losses, paused_until without VPS shell."""

@@ -818,6 +818,28 @@ def supertrend_operations(
                 1 for r in rows
                 if r.get("event_type") in ("skipped", "circuit_breaker")
             )
+            # R101: break down skipped reasons by category. R97 entries
+            # write reason="R97 guard: [L:layer] [GuardName] ...". Knowing
+            # WHICH guard is rejecting tells the operator whether to lower
+            # leverage, narrow whitelist, etc. Without this they'd only
+            # see an integer count and have to dig in the journal.
+            skip_reasons_breakdown: dict[str, int] = {}
+            guard_rejections_breakdown: dict[str, int] = {}
+            for r in rows:
+                if r.get("event_type") not in ("skipped", "circuit_breaker"):
+                    continue
+                reason = str(r.get("reason") or "unknown")
+                # Top-level bucket — first 40 chars or up to first ' — '
+                tag = reason.split(" — ", 1)[0].strip()[:60]
+                skip_reasons_breakdown[tag] = skip_reasons_breakdown.get(tag, 0) + 1
+                # R97 guard sub-breakdown via [GuardName] pattern
+                if "R97 guard:" in reason:
+                    import re as _re
+                    m = _re.search(r"\[(\w+Guard)\]", reason)
+                    gname = m.group(1) if m else "Unknown"
+                    guard_rejections_breakdown[gname] = (
+                        guard_rejections_breakdown.get(gname, 0) + 1
+                    )
             if rows:
                 last_event_ts = max(r.get("timestamp", "") for r in rows)
                 first_event_ts = min(r.get("timestamp", "") for r in rows)
@@ -855,6 +877,19 @@ def supertrend_operations(
         "evaluations": eval_summary,
         "recent_trades": n_recent_trades,
         "recent_skipped": n_recent_skipped,
+        # R101 breakdowns (default to {} when journal empty / unread)
+        "skip_reasons_top": dict(
+            sorted(
+                (skip_reasons_breakdown if 'skip_reasons_breakdown' in locals() else {}).items(),
+                key=lambda kv: kv[1], reverse=True,
+            )[:5]
+        ),
+        "guard_rejections_top": dict(
+            sorted(
+                (guard_rejections_breakdown if 'guard_rejections_breakdown' in locals() else {}).items(),
+                key=lambda kv: kv[1], reverse=True,
+            )[:5]
+        ),
     }
 
     # ---- performance snapshot (delegate via journal) ---- #
@@ -939,9 +974,39 @@ def supertrend_operations(
     )
     # R98: append guard-state alerts
     out["alerts"].extend(_build_guard_alerts(guards_block))
+    # R101: append per-guard rejection-rate alerts
+    out["alerts"].extend(_build_guard_rejection_alerts(
+        out["pipeline"].get("guard_rejections_top") or {},
+        eval_window_days,
+    ))
     out["alert_count"] = len(out["alerts"])
     out["status"] = "ok" if not out["alerts"] else "degraded"
     return out
+
+
+def _build_guard_rejection_alerts(
+    guard_rejections_top: dict[str, int], window_days: int,
+) -> list[str]:
+    """R101: alert when a single guard is rejecting >=5 entries in window.
+
+    Catches the R99-leverage / R97-MaxPosition interaction: now that
+    leverage() returns 1.5–5x, MaxPositionGuard might silently start
+    rejecting entries that would have passed under the broken 1x default.
+    Operator needs visible signal to consider lowering leverage clamp
+    or raising MaxPositionGuard cap.
+    """
+    alerts: list[str] = []
+    for gname, n in guard_rejections_top.items():
+        if n >= 5:
+            alerts.append(
+                f"GUARD_REJECTING_HEAVILY — {gname} blocked {n} entries in "
+                f"the last {window_days}d. Either tighten upstream "
+                f"(strategy proposing too-aggressive size/leverage) or loosen "
+                f"the guard (raise its limit if the rejections are correct "
+                f"but still want the trades). Inspect /api/supertrend/skipped "
+                f"for the per-event detail."
+            )
+    return alerts
 
 
 def _build_guard_alerts(guards: dict) -> list[str]:
