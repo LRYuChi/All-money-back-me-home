@@ -41,6 +41,14 @@ REQUIRED_MOUNTS = [
     ("supertrend-cron", "/app/trading_log"),          # R56 daily/weekly read source
     ("api",             "/app/strategies"),           # R55 router imports strategies.journal
     ("supertrend-cron", "/app/strategies"),           # R56 cron CLIs use strategies.*
+    # R127: guards/ mounts — R104 root cause was freqtrade container 沒法
+    # import guards.base (silent fall-through to None → 完全不擋單). 即使
+    # 程式碼層加了 sys.path.insert (R104 fix)，若 compose 哪天誤刪 mount 整個
+    # guards layer 還是會 silent disable. 把 4 個關鍵 mount 加入硬性檢查。
+    ("freqtrade",       "/freqtrade/user_data/strategies/guards"),  # R104 root mount
+    ("api",             "/app/guards"),                              # /operations endpoint
+    ("telegram-bot",    "/app/guards"),                              # bot imports guards
+    ("supertrend-cron", "/app/guards"),                              # cron tools use guards
 ]
 
 # Env vars referenced via ${VAR} in compose that operators are expected to
