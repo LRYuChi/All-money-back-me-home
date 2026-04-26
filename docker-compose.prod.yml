@@ -176,6 +176,17 @@ services:
       #       /api/supertrend/evaluations for "why no trades?" debugging
       #   0 = skip (saves ~1.6k journal writes/day with 17 pairs × 4 candles/h)
       - SUPERTREND_EVAL_JOURNAL=${SUPERTREND_EVAL_JOURNAL:-1}
+      # R87: disable confirmed tier (4-tf aligned, R85 found this is the
+      # losing tier — 86% of trades, -0.84% avg, 48% WR in 6-month backtest).
+      #   1 = pre_scout + scout only (R88+R90 walk-forward 8/8 wins)
+      #   0 = include confirmed (R84 baseline — known unprofitable)
+      - SUPERTREND_DISABLE_CONFIRMED=${SUPERTREND_DISABLE_CONFIRMED:-0}
+      # R89: vol gate multiplier. R66 telemetry showed vol<=1.2*MA20 was the
+      # #1 entry blocker. Lowering to 1.0 unlocks 60% more winning trades.
+      #   1.2 = default (strict — original)
+      #   1.0 = R89 verified (any vol > MA20 passes)
+      #   0.8 = very permissive (no additional alpha vs 1.0 in test data)
+      - SUPERTREND_VOL_MULT=${SUPERTREND_VOL_MULT:-1.2}
       # Journal location — kept on host volume so dashboard/cron sidecar can read it
       - SUPERTREND_JOURNAL_DIR=${SUPERTREND_JOURNAL_DIR:-/freqtrade/trading_log/journal}
       - SUPABASE_URL=${SUPABASE_URL}
