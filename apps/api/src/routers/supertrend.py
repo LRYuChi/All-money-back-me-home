@@ -984,6 +984,23 @@ def supertrend_operations(
     return out
 
 
+# R102: guards whose heavy-rejection is ALREADY covered by a more
+# specific alert. Suppressing them here avoids double-alerting the
+# operator about the same condition under a different name.
+_GUARD_REJECTION_SUPPRESS = frozenset({
+    # ConsecutiveLossGuard rejections during pause are by-design — every
+    # entry attempt during the pause window will reject, which would
+    # spam GUARD_REJECTING_HEAVILY when GUARD_PAUSED (R98) already says
+    # exactly what's wrong + when it'll lift.
+    "ConsecutiveLossGuard",
+    # DailyLossGuard rejections during cap-hit are by-design — same logic.
+    # GUARD_NEAR_DAILY_LIMIT (R98) already warns at 80%; once the cap is
+    # hit, the same guard will reject every entry until tomorrow, which
+    # is correct but doesn't need a second alert.
+    "DailyLossGuard",
+})
+
+
 def _build_guard_rejection_alerts(
     guard_rejections_top: dict[str, int], window_days: int,
 ) -> list[str]:
@@ -994,9 +1011,15 @@ def _build_guard_rejection_alerts(
     rejecting entries that would have passed under the broken 1x default.
     Operator needs visible signal to consider lowering leverage clamp
     or raising MaxPositionGuard cap.
+
+    R102: skip guards already covered by R98 state alerts (otherwise
+    the operator gets the same condition reported twice with conflicting
+    "what to do" guidance).
     """
     alerts: list[str] = []
     for gname, n in guard_rejections_top.items():
+        if gname in _GUARD_REJECTION_SUPPRESS:
+            continue
         if n >= 5:
             alerts.append(
                 f"GUARD_REJECTING_HEAVILY — {gname} blocked {n} entries in "

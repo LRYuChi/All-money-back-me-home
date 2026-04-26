@@ -1206,6 +1206,67 @@ def test_operations_breaks_down_guard_rejections(monkeypatch, tmp_path):
     assert "MaxPositionGuard blocked 6" in heavy_alerts[0]
 
 
+def test_operations_suppresses_consec_loss_rejection_spam(monkeypatch, tmp_path):
+    """R102: ConsecutiveLossGuard heavy rejections are by-design during
+    pause — already covered by GUARD_PAUSED (R98). Don't double-alert."""
+    from datetime import datetime, timezone
+    from unittest.mock import patch
+    from strategies.journal import TradeJournal
+
+    monkeypatch.setenv("SUPERTREND_JOURNAL_DIR", str(tmp_path))
+    j = TradeJournal(tmp_path)
+    now = datetime.now(timezone.utc).isoformat()
+    # 12 ConsecutiveLossGuard rejections (way over 5 threshold) — but
+    # because pause spams every check, this is expected, not actionable.
+    for _ in range(12):
+        j.write({
+            "event_type": "skipped", "timestamp": now,
+            "pair": "BTC/USDT:USDT", "side": "long",
+            "reason": "R97 guard: [L:account] [ConsecutiveLossGuard] paused 23h",
+        })
+
+    mod = _import_router()
+    with patch(
+        "src.routers.supertrend._ft_get",
+        side_effect=RuntimeError("not relevant"),
+    ):
+        out = mod["operations"](eval_window_days=1, perf_window_days=7)
+    # Counter is still populated for visibility
+    assert out["pipeline"]["guard_rejections_top"]["ConsecutiveLossGuard"] == 12
+    # But no GUARD_REJECTING_HEAVILY for it (covered by GUARD_PAUSED)
+    assert not any(
+        "GUARD_REJECTING_HEAVILY" in a and "ConsecutiveLossGuard" in a
+        for a in out["alerts"]
+    )
+
+
+def test_operations_suppresses_daily_loss_rejection_spam(monkeypatch, tmp_path):
+    """R102: DailyLossGuard heavy rejections — covered by GUARD_NEAR_DAILY_LIMIT."""
+    from datetime import datetime, timezone
+    from unittest.mock import patch
+    from strategies.journal import TradeJournal
+
+    monkeypatch.setenv("SUPERTREND_JOURNAL_DIR", str(tmp_path))
+    j = TradeJournal(tmp_path)
+    now = datetime.now(timezone.utc).isoformat()
+    for _ in range(8):
+        j.write({
+            "event_type": "skipped", "timestamp": now,
+            "reason": "R97 guard: [L:account] [DailyLossGuard] cap reached",
+        })
+    mod = _import_router()
+    with patch(
+        "src.routers.supertrend._ft_get",
+        side_effect=RuntimeError("not relevant"),
+    ):
+        out = mod["operations"](eval_window_days=1, perf_window_days=7)
+    assert out["pipeline"]["guard_rejections_top"]["DailyLossGuard"] == 8
+    assert not any(
+        "GUARD_REJECTING_HEAVILY" in a and "DailyLossGuard" in a
+        for a in out["alerts"]
+    )
+
+
 def test_operations_no_guard_rejection_alert_below_threshold(monkeypatch, tmp_path):
     """R101: alert quiet when each guard rejects <5 in window."""
     from datetime import datetime, timezone
