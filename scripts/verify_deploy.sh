@@ -62,6 +62,32 @@ else
     ok "(strategies/supertrend.py not on this host)"
 fi
 
+# ─── Check 0b: strategy file mtime vs freqtrade container start ────────
+# R118: R113 (md5 lie detector) catches "git pulled but working tree
+# stale". This catches the OTHER half: working tree is current but
+# the container hasn't restarted to pick up the new code. strategy.py
+# is mounted into freqtrade container — file changes are visible on
+# filesystem but Python module already imported won't reload until
+# container restart. Symptom would be identical to R104 (deploy looks
+# done, prod runs old code).
+echo
+echo "[0b/6] strategies/supertrend.py mtime ≤ freqtrade container start (R118)"
+file_mtime_iso=$(run "stat -c %y /opt/ambmh/strategies/supertrend.py 2>/dev/null | cut -d. -f1" 2>/dev/null || echo "")
+container_start_iso=$(run "docker inspect -f '{{.State.StartedAt}}' ambmh-freqtrade-1 2>/dev/null" 2>/dev/null | cut -d. -f1)
+if [ -z "$file_mtime_iso" ] || [ -z "$container_start_iso" ]; then
+    yellow "  could not read mtime (file=$file_mtime_iso) or container start (=$container_start_iso) — skipping"
+else
+    file_epoch=$(date -d "$file_mtime_iso" +%s 2>/dev/null || echo 0)
+    container_epoch=$(date -d "${container_start_iso/T/ }" +%s 2>/dev/null || echo 0)
+    if [ "$file_epoch" -le "$container_epoch" ]; then
+        ok "strategy mtime ($file_mtime_iso) ≤ container start ($container_start_iso)"
+    else
+        diff_min=$(( (file_epoch - container_epoch) / 60 ))
+        fail "strategy.py modified ${diff_min}min AFTER freqtrade container start — container running OLD code"
+        echo "    Fix: cd /opt/ambmh && docker compose -f docker-compose.prod.yml up -d --force-recreate freqtrade"
+    fi
+fi
+
 # ─── Check 1: container health ──────────────────────────────────────────
 echo
 echo "[1/6] Container health"
