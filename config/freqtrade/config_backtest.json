@@ -1,0 +1,19 @@
+{
+    "_comment_R84": "Backtest-only overrides for SUPERTREND validation. Layered AFTER config_dry.json via `freqtrade backtesting -c config_dry.json -c config_backtest.json`. Replaces the dynamic VolumePairList (R63 — works in trade mode but unsupported in backtest) with a frozen StaticPairList of 5 majors. Use this only for backtesting; live trading reads config_dry.json's dynamic pairlist for fresh top-30 selection.",
+
+    "exchange": {
+        "pair_whitelist": [
+            "BTC/USDT:USDT",
+            "ETH/USDT:USDT",
+            "SOL/USDT:USDT",
+            "XRP/USDT:USDT",
+            "ADA/USDT:USDT"
+        ]
+    },
+
+    "pairlists": [
+        {
+            "method": "StaticPairList"
+        }
+    ]
+}
