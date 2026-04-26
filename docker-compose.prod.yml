@@ -68,6 +68,28 @@ services:
       # R70: manual end-to-end smoke-test endpoint. ONLY enable in
       # dry-run mode; endpoint refuses if dry_run=False. Default OFF.
       - SUPERTREND_FORCE_ENTRY_ENABLED=${SUPERTREND_FORCE_ENTRY_ENABLED:-0}
+      # R106: forward strategy switchboard envs to api so /operations
+      # switchboard reflects ACTUAL freqtrade values (not API container's
+      # defaults). Was the R104 incident root cause #2: switchboard
+      # showed vol_mult=1.2 while freqtrade was using 1.0, masking the
+      # real R89 deploy state. CRITICAL: any new SUPERTREND_* env added
+      # to the freqtrade service block below MUST also be forwarded
+      # here, otherwise switchboard becomes "visibility theater" again.
+      - SUPERTREND_DISABLE_CONFIRMED=${SUPERTREND_DISABLE_CONFIRMED:-0}
+      - SUPERTREND_KELLY_MODE=${SUPERTREND_KELLY_MODE:-three_stage}
+      - SUPERTREND_VOL_MULT=${SUPERTREND_VOL_MULT:-1.2}
+      - SUPERTREND_QUALITY_MIN=${SUPERTREND_QUALITY_MIN:-0.5}
+      - SUPERTREND_ADX_MIN=${SUPERTREND_ADX_MIN:-default}
+      - SUPERTREND_REQUIRE_ATR_RISING=${SUPERTREND_REQUIRE_ATR_RISING:-1}
+      - SUPERTREND_GUARDS_ENABLED=${SUPERTREND_GUARDS_ENABLED:-1}
+      - SUPERTREND_GUARDS_REQUIRE_LOAD=${SUPERTREND_GUARDS_REQUIRE_LOAD:-0}
+      - SUPERTREND_REGIME_FILTER=${SUPERTREND_REGIME_FILTER:-1}
+      - SUPERTREND_EXIT_MODE=${SUPERTREND_EXIT_MODE:-weighted}
+      - SUPERTREND_FR_ALPHA=${SUPERTREND_FR_ALPHA:-0}
+      - SUPERTREND_ORDERBOOK_CONFIRM=${SUPERTREND_ORDERBOOK_CONFIRM:-0}
+      - SUPERTREND_CORRELATION_FILTER=${SUPERTREND_CORRELATION_FILTER:-0}
+      - SUPERTREND_EVAL_JOURNAL=${SUPERTREND_EVAL_JOURNAL:-1}
+      - SUPERTREND_LIVE=${SUPERTREND_LIVE:-0}
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health', timeout=3)"]
       interval: 30s
