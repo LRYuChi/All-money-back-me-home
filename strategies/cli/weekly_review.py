@@ -223,10 +223,45 @@ def _fmt_pf(pf: float) -> str:
 
 
 def _send_to_telegram(text: str) -> bool:
+    """Send text to Telegram via direct Bot API call.
+
+    R120: 不再 import strategies.supertrend (cron container 沒裝 talib,
+    那邊 top-level import talib 會 ImportError → silent fail).
+    用 inline urllib POST 完全 self-contained, 跟 R119 cron_sidecar 修復
+    同模式. 環境變數未設或 send 失敗時印到 stdout, 永不 crash cron.
+    """
+    import os
+    import json as _json
+    import urllib.error
+    import urllib.request
+
+    token = os.environ.get("TELEGRAM_TOKEN", "").strip()
+    chat_id = os.environ.get("TELEGRAM_CHAT_ID", "").strip()
+    if not token or not chat_id:
+        logger.warning("TELEGRAM_TOKEN/CHAT_ID 未設定 — 印到 stdout instead")
+        print(text)
+        return False
     try:
-        from strategies.supertrend import _send_to_all_bots
-        _send_to_all_bots(text)
-        return True
+        url = f"https://api.telegram.org/bot{token}/sendMessage"
+        for parse_mode in ("Markdown", None):
+            payload = {"chat_id": chat_id, "text": text}
+            if parse_mode:
+                payload["parse_mode"] = parse_mode
+            data = _json.dumps(payload).encode()
+            req = urllib.request.Request(
+                url, data=data, headers={"Content-Type": "application/json"},
+            )
+            try:
+                resp = urllib.request.urlopen(req, timeout=10)
+                if resp.status == 200:
+                    return True
+            except urllib.error.HTTPError as e:
+                if e.code == 400 and parse_mode is not None:
+                    continue   # markdown escape issue → retry plain
+                raise
+        logger.warning("telegram all attempts failed — printing instead")
+        print(text)
+        return False
     except Exception as e:
         logger.warning("send to telegram failed (%s) — printing instead", e)
         print(text)
