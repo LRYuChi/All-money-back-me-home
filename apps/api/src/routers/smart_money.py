@@ -278,6 +278,22 @@ def _build_shadow_alerts(
             "avoid size-stacking bugs — P5 will handle live position adjusts."
         )
 
+    # R96: unknown_symbol dominance — actionable cold-start (operator
+    # needs to add HL symbols to config/smart_money/symbol_map.yaml).
+    # Distinct from the by-design alerts above: unknown_symbol IS a
+    # backlog item, not a permanent shadow limitation. Drill-down via
+    # GET /api/smart-money/skip-breakdown?reason=unknown_symbol .
+    unk = skipped_reasons.get("unknown_symbol", 0)
+    if total_24h_skips >= 20 and unk / max(total_24h_skips, 1) > 0.3:
+        alerts.append(
+            f"UNKNOWN_SYMBOL_BACKLOG — {unk}/{total_24h_skips} skips "
+            "are unknown_symbol; whales are trading HL coins missing from "
+            "config/smart_money/symbol_map.yaml. Drill into "
+            "/api/smart-money/skip-breakdown?reason=unknown_symbol to see "
+            "which symbols + how many skips each, then add the high-volume "
+            "ones to the map (R80 added HYPE this way)."
+        )
+
     # All-skip-no-paper anomaly (1h window)
     d1h = density.get("1h") or {}
     skips_1h = d1h.get("skipped", 0)

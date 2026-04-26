@@ -283,6 +283,68 @@ def test_all_three_by_design_alerts_can_coexist():
 
 
 # =================================================================== #
+# R96 — UNKNOWN_SYMBOL_BACKLOG (actionable cold-start, not by-design)
+# =================================================================== #
+def test_unknown_symbol_backlog_alert_fires():
+    """When >30% of skips are unknown_symbol, fire actionable alert."""
+    alerts = _build_shadow_alerts(
+        **_healthy_inputs(
+            skipped_reasons={
+                "unknown_symbol": 50,
+                "scale_not_simulated_in_shadow": 30,
+            },
+        ),
+    )
+    assert any(
+        "UNKNOWN_SYMBOL_BACKLOG" in a and "50/80" in a for a in alerts
+    )
+    unk_alert = next(a for a in alerts if "UNKNOWN_SYMBOL_BACKLOG" in a)
+    # Alert must point to the diagnostic endpoint so operator knows where to look
+    assert "/api/smart-money/skip-breakdown" in unk_alert
+    assert "symbol_map.yaml" in unk_alert
+
+
+def test_unknown_symbol_backlog_silent_below_threshold():
+    """Below 30% share → not dominant, no alert."""
+    alerts = _build_shadow_alerts(
+        **_healthy_inputs(
+            skipped_reasons={
+                "unknown_symbol": 5,
+                "close_without_open": 50,
+            },
+        ),
+    )
+    assert not any("UNKNOWN_SYMBOL_BACKLOG" in a for a in alerts)
+
+
+def test_unknown_symbol_backlog_silent_at_low_total_volume():
+    """Total < 20 skips → too small to declare a backlog."""
+    alerts = _build_shadow_alerts(
+        **_healthy_inputs(
+            skipped_reasons={
+                "unknown_symbol": 10,   # 10/15 = 67% but total < 20
+                "close_without_open": 5,
+            },
+        ),
+    )
+    assert not any("UNKNOWN_SYMBOL_BACKLOG" in a for a in alerts)
+
+
+def test_unknown_symbol_backlog_independent_of_other_alerts():
+    """Coexists with SCALE_NOT_SIMULATED_DOMINANT — both fire when each clears bar."""
+    alerts = _build_shadow_alerts(
+        **_healthy_inputs(
+            skipped_reasons={
+                "unknown_symbol": 50,
+                "scale_not_simulated_in_shadow": 50,   # 50/100 = 50% > 30%
+            },
+        ),
+    )
+    assert any("UNKNOWN_SYMBOL_BACKLOG" in a for a in alerts)
+    assert any("SCALE_NOT_SIMULATED_DOMINANT" in a for a in alerts)
+
+
+# =================================================================== #
 # ALL_SKIPPED_NO_PAPER
 # =================================================================== #
 def test_all_skipped_no_paper_alert_fires():
