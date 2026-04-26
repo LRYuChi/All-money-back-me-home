@@ -405,11 +405,27 @@ class SupertrendStrategy(IStrategy):
             vol_mult = float(os.environ.get("SUPERTREND_VOL_MULT", "1.2"))
         except (ValueError, TypeError):
             vol_mult = 1.2
+        # R91 candidates — env overrides for the 3 next-biggest blockers
+        # per R66 telemetry (after vol_mult): quality<=0.5 (174 hits),
+        # atr_not_rising (162), adx<=25 (141). Defaults preserve R89
+        # behavior; A/B backtest each before deploying to prod.
+        try:
+            quality_min = float(os.environ.get("SUPERTREND_QUALITY_MIN", "0.5"))
+        except (ValueError, TypeError):
+            quality_min = 0.5
+        try:
+            adx_min = float(os.environ.get("SUPERTREND_ADX_MIN", str(self.adx_threshold)))
+        except (ValueError, TypeError):
+            adx_min = float(self.adx_threshold)
+        require_atr_rising = (
+            os.environ.get("SUPERTREND_REQUIRE_ATR_RISING", "1") != "0"
+        )
+        atr_gate = dataframe["atr_rising"] if require_atr_rising else (dataframe["close"] == dataframe["close"])
         quality = (
-            (dataframe["adx"] > self.adx_threshold)
+            (dataframe["adx"] > adx_min)
             & (dataframe["volume"] > dataframe["volume_ma_20"] * vol_mult)
-            & dataframe["atr_rising"]
-            & (dataframe["trend_quality"] > 0.5)
+            & atr_gate
+            & (dataframe["trend_quality"] > quality_min)
         )
 
         # === Phase 2 (confirmed): 4-layer aligned + 15m flip ===

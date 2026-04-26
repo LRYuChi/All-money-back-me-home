@@ -12,8 +12,8 @@
 # Env overrides:
 #   USE_DOCKER=1|0                 run inside docker (default 1)
 #   DOCKER_SERVICE=telegram-bot    compose service with polymarket mounted
-#   POLY_MARKETS_LIMIT=20          markets per run
-#   POLY_WALLETS_CAP=30            max wallets recomputed per run
+#   POLY_MARKETS_LIMIT=60          markets per run (1.5c.4: 20→60 to match pipeline.py defaults)
+#   POLY_WALLETS_CAP=60            max wallets recomputed per run (1.5c.4: 30→60)
 #   POLY_EXTRA_ARGS=""             passthrough extra CLI args
 #   PROJECT_ROOT=/opt/ambmh
 #   LOG_DIR=/var/log/ambmh
@@ -33,8 +33,8 @@ ALERT_STATE_FILE="/tmp/polymarket_pipeline_alert.state"
 USE_DOCKER="${USE_DOCKER:-1}"
 DOCKER_SERVICE="${DOCKER_SERVICE:-telegram-bot}"
 COMPOSE_FILE="${COMPOSE_FILE:-${PROJECT_ROOT}/docker-compose.prod.yml}"
-POLY_MARKETS_LIMIT="${POLY_MARKETS_LIMIT:-20}"
-POLY_WALLETS_CAP="${POLY_WALLETS_CAP:-30}"
+POLY_MARKETS_LIMIT="${POLY_MARKETS_LIMIT:-60}"
+POLY_WALLETS_CAP="${POLY_WALLETS_CAP:-60}"
 POLY_EXTRA_ARGS="${POLY_EXTRA_ARGS:-}"
 
 mkdir -p "$LOG_DIR" "$(dirname "$STATUS_FILE")"
