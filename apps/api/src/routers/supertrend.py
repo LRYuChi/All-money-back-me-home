@@ -755,7 +755,13 @@ def supertrend_operations(
         out["errors"]["whitelist"] = "freqtrade /whitelist unreachable"
 
     # ---- env switchboard (read-only view of what's enabled) ---- #
+    # NOTE: these reads come from the API container's process env. For
+    # this to faithfully reflect what's in effect inside the freqtrade
+    # container, the same env vars must be exported to BOTH services in
+    # docker-compose.prod.yml. R94 added entry-gate vars (R87/R89/R91)
+    # to make "did my deploy actually take effect?" verifiable from /ops.
     out["switchboard"] = {
+        # Risk / sizing
         "regime_filter": os.environ.get("SUPERTREND_REGIME_FILTER", "1"),
         "kelly_mode": os.environ.get("SUPERTREND_KELLY_MODE", "three_stage"),
         "exit_mode": os.environ.get("SUPERTREND_EXIT_MODE", "weighted"),
@@ -764,6 +770,12 @@ def supertrend_operations(
         "correlation_filter": os.environ.get("SUPERTREND_CORRELATION_FILTER", "0"),
         "eval_journal": os.environ.get("SUPERTREND_EVAL_JOURNAL", "1"),
         "live_mode": os.environ.get("SUPERTREND_LIVE", "0"),
+        # Entry gates — R87/R89/R91 (R94: surfaced for deploy verification)
+        "disable_confirmed": os.environ.get("SUPERTREND_DISABLE_CONFIRMED", "0"),
+        "vol_mult": os.environ.get("SUPERTREND_VOL_MULT", "1.2"),
+        "quality_min": os.environ.get("SUPERTREND_QUALITY_MIN", "0.5"),
+        "adx_min": os.environ.get("SUPERTREND_ADX_MIN", "default"),
+        "require_atr_rising": os.environ.get("SUPERTREND_REQUIRE_ATR_RISING", "1"),
     }
 
     # ---- pipeline activity from journal ---- #

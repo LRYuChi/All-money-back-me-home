@@ -1054,6 +1054,57 @@ def test_operations_includes_switchboard_view(monkeypatch, tmp_path):
     assert sw["regime_filter"] == "1"
 
 
+def test_operations_switchboard_exposes_entry_gate_envs(monkeypatch, tmp_path):
+    """R94: deploy verification — operator must see the actual entry-gate
+    env vars (R87 disable_confirmed / R89 vol_mult / R91 trio) in /operations,
+    not just the risk/sizing block."""
+    from unittest.mock import patch
+    monkeypatch.setenv("SUPERTREND_JOURNAL_DIR", str(tmp_path))
+    monkeypatch.setenv("SUPERTREND_DISABLE_CONFIRMED", "1")
+    monkeypatch.setenv("SUPERTREND_VOL_MULT", "1.0")
+    monkeypatch.setenv("SUPERTREND_QUALITY_MIN", "0.4")
+    monkeypatch.setenv("SUPERTREND_ADX_MIN", "20")
+    monkeypatch.setenv("SUPERTREND_REQUIRE_ATR_RISING", "0")
+    mod = _import_router()
+    with patch(
+        "src.routers.supertrend._ft_get",
+        side_effect=RuntimeError("not relevant"),
+    ):
+        out = mod["operations"](eval_window_days=1, perf_window_days=7)
+    sw = out["switchboard"]
+    assert sw["disable_confirmed"] == "1"
+    assert sw["vol_mult"] == "1.0"
+    assert sw["quality_min"] == "0.4"
+    assert sw["adx_min"] == "20"
+    assert sw["require_atr_rising"] == "0"
+
+
+def test_operations_switchboard_entry_gate_defaults(monkeypatch, tmp_path):
+    """R94: when no env override is set, switchboard reports the safe defaults."""
+    from unittest.mock import patch
+    monkeypatch.setenv("SUPERTREND_JOURNAL_DIR", str(tmp_path))
+    for k in (
+        "SUPERTREND_DISABLE_CONFIRMED",
+        "SUPERTREND_VOL_MULT",
+        "SUPERTREND_QUALITY_MIN",
+        "SUPERTREND_ADX_MIN",
+        "SUPERTREND_REQUIRE_ATR_RISING",
+    ):
+        monkeypatch.delenv(k, raising=False)
+    mod = _import_router()
+    with patch(
+        "src.routers.supertrend._ft_get",
+        side_effect=RuntimeError("not relevant"),
+    ):
+        out = mod["operations"](eval_window_days=1, perf_window_days=7)
+    sw = out["switchboard"]
+    assert sw["disable_confirmed"] == "0"
+    assert sw["vol_mult"] == "1.2"
+    assert sw["quality_min"] == "0.5"
+    assert sw["adx_min"] == "default"   # sentinel — strategy uses self.adx_threshold
+    assert sw["require_atr_rising"] == "1"
+
+
 # =================================================================== #
 # /force_entry — R70
 # =================================================================== #
