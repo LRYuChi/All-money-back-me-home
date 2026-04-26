@@ -1849,17 +1849,44 @@ class SupertrendStrategy(IStrategy):
             f"出場時 1D `{_arrow(state.st_1d)}` 1H `{_arrow(state.st_1h)}` "
             f"15m `{_arrow(state.st_15m)}`"
         )
+
+        # R99: record exit into guard pipeline state. Without this the
+        # ConsecutiveLossGuard / DailyLossGuard / CooldownGuard installed
+        # by R97 would never trip — they were checking a state nothing
+        # ever wrote to. Mirrors the bb_squeeze pattern. Wrapped so that
+        # a guards module failure can never block a successful exit.
+        if os.environ.get("SUPERTREND_GUARDS_ENABLED", "1") == "1":
+            try:
+                from guards.guards import (
+                    ConsecutiveLossGuard,
+                    CooldownGuard,
+                    DailyLossGuard,
+                )
+                from guards.pipeline import get_guard, save_state
+                cd = get_guard(CooldownGuard)
+                if cd:
+                    cd.record_trade(pair)
+                cl = get_guard(ConsecutiveLossGuard)
+                if cl:
+                    cl.record_result(is_win=(pnl_usd > 0))
+                if pnl_usd < 0:
+                    dl = get_guard(DailyLossGuard)
+                    if dl:
+                        dl.record_loss(abs(pnl_usd))
+                save_state()
+            except Exception as e:
+                logger.warning("guard state record on exit failed: %s", e)
+
         return True
 
-
-def _arrow(st: int) -> str:
-    """Tiny formatter: +1 → ▲, -1 → ▼, else →"""
-    if st > 0:
-        return "▲"
-    if st < 0:
-        return "▼"
-    return "→"
-
+    # R99: leverage() must be a class method on the strategy. Was previously
+    # mis-indented inside the module-level `_arrow` helper after the class
+    # body, so Freqtrade never called it and live trading silently fell back
+    # to whatever the config / default specified instead of the
+    # quality-weighted 1.5–5× range. Backtests were likely unaffected
+    # (Freqtrade may pull leverage from config in backtest mode), which is
+    # why P&L numbers in r84-r90 reports could still validate the strategy
+    # while live behaviour diverged.
     def leverage(self, pair: str, current_time: datetime, current_rate: float,
                  proposed_leverage: float, max_leverage: float,
                  entry_tag: str | None, side: str, **kwargs) -> float:
@@ -1877,3 +1904,12 @@ def _arrow(st: int) -> str:
         lev += max(adx - 30, 0) * 0.05
 
         return min(max(lev, 1.5), 5.0)
+
+
+def _arrow(st: int) -> str:
+    """Tiny formatter: +1 → ▲, -1 → ▼, else →"""
+    if st > 0:
+        return "▲"
+    if st < 0:
+        return "▼"
+    return "→"
