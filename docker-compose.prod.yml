@@ -209,6 +209,15 @@ services:
       #   1.0 = R89 verified (any vol > MA20 passes)
       #   0.8 = very permissive (no additional alpha vs 1.0 in test data)
       - SUPERTREND_VOL_MULT=${SUPERTREND_VOL_MULT:-1.2}
+      # R91 entry-gate knobs (next-biggest blockers after vol_mult per R66)
+      - SUPERTREND_QUALITY_MIN=${SUPERTREND_QUALITY_MIN:-0.5}
+      - SUPERTREND_ADX_MIN=${SUPERTREND_ADX_MIN:-default}
+      - SUPERTREND_REQUIRE_ATR_RISING=${SUPERTREND_REQUIRE_ATR_RISING:-1}
+      # R97/R105 guards safety toggles
+      # GUARDS_ENABLED=1 (default): guards check every entry
+      # GUARDS_REQUIRE_LOAD=1: import failure → fail-CLOSED (LIVE-mode required)
+      - SUPERTREND_GUARDS_ENABLED=${SUPERTREND_GUARDS_ENABLED:-1}
+      - SUPERTREND_GUARDS_REQUIRE_LOAD=${SUPERTREND_GUARDS_REQUIRE_LOAD:-0}
       # Journal location — kept on host volume so dashboard/cron sidecar can read it
       - SUPERTREND_JOURNAL_DIR=${SUPERTREND_JOURNAL_DIR:-/freqtrade/trading_log/journal}
       - SUPABASE_URL=${SUPABASE_URL}
