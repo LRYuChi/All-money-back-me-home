@@ -177,3 +177,78 @@ class TestLeaderboard:
         data = resp.json()
         # 沒 fallback 去查 latest，因為明確指定了日期
         assert data["snapshot_date"] == "2026-04-01"
+
+
+# ─────────────────────────────────────────────────────────────────────
+# R92 — Skip breakdown endpoint
+# ─────────────────────────────────────────────────────────────────────
+
+class TestSkipBreakdown:
+    def test_returns_unavailable_when_supabase_none(self, client):
+        with patch("src.routers.smart_money.get_supabase", return_value=None):
+            resp = client.get("/api/smart-money/skip-breakdown")
+        assert resp.status_code == 200
+        assert resp.json()["configured"] is False
+
+    def test_aggregates_by_symbol_and_wallet(self, client):
+        sb = MagicMock()
+        rows_mock = MagicMock()
+        rows_mock.data = [
+            {"symbol_hl": "PEPE", "wallet_id": "w1", "reason": "unknown_symbol"},
+            {"symbol_hl": "PEPE", "wallet_id": "w2", "reason": "unknown_symbol"},
+            {"symbol_hl": "WIF",  "wallet_id": "w1", "reason": "unknown_symbol"},
+            {"symbol_hl": "BTC",  "wallet_id": "w3", "reason": "below_min_size"},
+        ]
+        # query without reason filter goes through select().gte().execute()
+        sb.table.return_value.select.return_value.gte.return_value.execute.return_value = rows_mock
+
+        with patch("src.routers.smart_money.get_supabase", return_value=sb):
+            resp = client.get("/api/smart-money/skip-breakdown?hours=24&top=5")
+
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["configured"] is True
+        assert data["total"] == 4
+        assert data["reason_filter"] is None
+        assert data["window_hours"] == 24
+        # PEPE has highest count (2)
+        assert data["top_symbols"][0] == {"symbol_hl": "PEPE", "count": 2}
+        # w1 has 2, others have 1 each
+        assert data["top_wallets"][0] == {"wallet_id": "w1", "count": 2}
+
+    def test_filter_by_reason_chains_eq(self, client):
+        sb = MagicMock()
+        rows_mock = MagicMock()
+        rows_mock.data = [
+            {"symbol_hl": "FARTCOIN", "wallet_id": "w9", "reason": "unknown_symbol"},
+        ]
+        # When reason filter is provided, .eq() is chained after .gte()
+        chain = sb.table.return_value.select.return_value.gte.return_value
+        chain.eq.return_value.execute.return_value = rows_mock
+
+        with patch("src.routers.smart_money.get_supabase", return_value=sb):
+            resp = client.get("/api/smart-money/skip-breakdown?reason=unknown_symbol")
+
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["reason_filter"] == "unknown_symbol"
+        assert data["total"] == 1
+        assert data["top_symbols"][0]["symbol_hl"] == "FARTCOIN"
+        # Verify .eq was called with the right reason
+        chain.eq.assert_called_once_with("reason", "unknown_symbol")
+
+    def test_handles_null_symbol_or_wallet(self, client):
+        sb = MagicMock()
+        rows_mock = MagicMock()
+        rows_mock.data = [
+            {"symbol_hl": None, "wallet_id": None, "reason": "unknown_symbol"},
+        ]
+        sb.table.return_value.select.return_value.gte.return_value.execute.return_value = rows_mock
+
+        with patch("src.routers.smart_money.get_supabase", return_value=sb):
+            resp = client.get("/api/smart-money/skip-breakdown")
+
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["top_symbols"][0]["symbol_hl"] == "(null)"
+        assert data["top_wallets"][0]["wallet_id"] == "(null)"

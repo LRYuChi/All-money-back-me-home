@@ -466,3 +466,81 @@ def get_signal_health() -> dict:
 
     _cache_set("signal-health", result, ttl=30.0)
     return result
+
+
+# ─────────────────────────────────────────────────────────────────────
+# GET /api/smart-money/skip-breakdown?reason=unknown_symbol&hours=24&top=20
+#
+# R92: surface per-symbol breakdown of skipped signals so operator can see
+# which HL symbols need to be added to config/smart_money/symbol_map.yaml
+# (or which wallets are dominating the skip count). Without this, the only
+# visible signal was "ALL_SKIPPED_NO_PAPER" + a top-3 reasons list — which
+# does not tell you which symbol/wallet to fix next.
+# ─────────────────────────────────────────────────────────────────────
+@router.get("/skip-breakdown")
+def get_skip_breakdown(
+    reason: str | None = Query(
+        default=None,
+        description="Filter by reason (e.g. 'unknown_symbol'). None = all reasons.",
+    ),
+    hours: int = Query(default=24, ge=1, le=720),
+    top: int = Query(default=20, ge=1, le=200),
+) -> dict:
+    """Per-symbol + per-wallet skip counts in the last N hours, top K rows.
+
+    Output:
+        {
+          configured: true,
+          window_hours: 24,
+          reason_filter: "unknown_symbol" | null,
+          top_symbols:  [{symbol_hl, count}, ...],
+          top_wallets:  [{wallet_id, count}, ...],
+          total: <int>
+        }
+    """
+    cache_key = f"skip-breakdown:{reason or 'all'}:{hours}:{top}"
+    if cached := _cache_get(cache_key):
+        return cached
+
+    sb = get_supabase()
+    if sb is None:
+        return _unavailable_payload()
+
+    try:
+        since_iso = (datetime.now(timezone.utc) - timedelta(hours=hours)).isoformat()
+        q = (
+            sb.table("sm_skipped_signals")
+            .select("symbol_hl,wallet_id,reason")
+            .gte("created_at", since_iso)
+        )
+        if reason:
+            q = q.eq("reason", reason)
+        rows = (q.execute().data) or []
+
+        sym_counts: dict[str, int] = {}
+        wallet_counts: dict[str, int] = {}
+        for r in rows:
+            s = r.get("symbol_hl") or "(null)"
+            w = r.get("wallet_id") or "(null)"
+            sym_counts[s] = sym_counts.get(s, 0) + 1
+            wallet_counts[w] = wallet_counts.get(w, 0) + 1
+
+        top_symbols = sorted(sym_counts.items(), key=lambda kv: kv[1], reverse=True)[:top]
+        top_wallets = sorted(wallet_counts.items(), key=lambda kv: kv[1], reverse=True)[:top]
+
+        result = {
+            "configured": True,
+            "window_hours": hours,
+            "reason_filter": reason,
+            "total": len(rows),
+            "top_symbols": [{"symbol_hl": s, "count": c} for s, c in top_symbols],
+            "top_wallets": [{"wallet_id": w, "count": c} for w, c in top_wallets],
+        }
+    except Exception as exc:
+        logger.exception("skip-breakdown query failed: %s", exc)
+        raise HTTPException(
+            status_code=502, detail=f"supabase query failed: {exc}"
+        ) from exc
+
+    _cache_set(cache_key, result, ttl=60.0)
+    return result
