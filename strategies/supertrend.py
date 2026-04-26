@@ -1109,6 +1109,16 @@ class SupertrendStrategy(IStrategy):
                       rate: float, **kwargs) -> str | None:
         """Run the singleton guard pipeline. Returns rejection reason or None.
 
+        R104: defensively inject this strategy file's directory into
+        sys.path BEFORE importing guards. In the freqtrade docker
+        container, strategies are mounted at
+        /freqtrade/user_data/strategies/ but that path is NOT in
+        PYTHONPATH — so `from guards.base import ...` would silently
+        fail. Pre-R104 the module-not-found triggered fail-open (return
+        None) and guards never ran for any entry, despite R97-R103
+        looking deployed in code. We now ensure the import succeeds in
+        the deployed container exactly as it does in unit tests.
+
         Wrapped in try/except: a guard pipeline crash must NOT silently
         permit unsafe entries (fail-safe → block) but also must not
         prevent the strategy from running at all if guards module is
@@ -1117,6 +1127,11 @@ class SupertrendStrategy(IStrategy):
           - guard.check() exception → fail-closed (treat as rejection)
         """
         try:
+            import sys as _sys
+            import os as _os
+            _strat_dir = _os.path.dirname(_os.path.abspath(__file__))
+            if _strat_dir not in _sys.path:
+                _sys.path.insert(0, _strat_dir)
             from guards.base import GuardContext
             from guards.pipeline import create_default_pipeline
         except Exception as e:
@@ -1872,6 +1887,11 @@ class SupertrendStrategy(IStrategy):
         # never trigger the guard.
         if os.environ.get("SUPERTREND_GUARDS_ENABLED", "1") == "1":
             try:
+                # R104: ensure strategy dir is on sys.path before guards import
+                # (mirrors _check_guards — see R104 comment there)
+                _strat_dir = os.path.dirname(os.path.abspath(__file__))
+                if _strat_dir not in sys.path:
+                    sys.path.insert(0, _strat_dir)
                 from guards.guards import (
                     ConsecutiveLossGuard,
                     CooldownGuard,
