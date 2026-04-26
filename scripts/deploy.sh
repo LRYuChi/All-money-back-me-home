@@ -12,7 +12,7 @@ echo "=== AMBMH Deploy ==="
 echo "Directory: $PROJECT_DIR"
 
 # 1. Pull latest code
-echo "[1/6] Pulling latest code..."
+echo "[1/7] Pulling latest code..."
 git pull origin main
 
 # 2. Check .env
@@ -25,14 +25,14 @@ fi
 # spending 5 minutes on a build that lands in a half-broken state.
 # Detects duplicate environment blocks, missing required mounts,
 # .env.example drift, cross-service env inconsistency. Fail-fast.
-echo "[2/6] Running preflight checks..."
+echo "[2/7] Running preflight checks..."
 if ! python3 scripts/preflight_check.py; then
     echo "ERROR: preflight check failed — fix issues above before deploying."
     exit 1
 fi
 
 # 3. Build images
-echo "[3/6] Building Docker images..."
+echo "[3/7] Building Docker images..."
 docker compose -f docker-compose.prod.yml build
 
 # 4. Run database migrations.
@@ -47,10 +47,10 @@ docker compose -f docker-compose.prod.yml build
 # (create table if not exists / add column if not exists); they are replayed
 # on every deploy without harm.
 if command -v supabase &> /dev/null; then
-    echo "[4/6] Running database migrations via supabase CLI..."
+    echo "[4/7] Running database migrations via supabase CLI..."
     supabase db push || echo "  Migration skipped (check Supabase config)"
 elif docker compose -f docker-compose.prod.yml ps smart-money 2>/dev/null | grep -q " Up "; then
-    echo "[4/6] Running database migrations via smart-money container..."
+    echo "[4/7] Running database migrations via smart-money container..."
     migration_count=0
     migration_failed=0
     for f in supabase/migrations/*.sql; do
@@ -73,7 +73,7 @@ with psycopg.connect(url, autocommit=True) as c, c.cursor() as cur:
     done
     echo "  migrations: $migration_count attempted, $migration_failed failed"
 else
-    echo "[4/6] No supabase CLI and smart-money container not running —"
+    echo "[4/7] No supabase CLI and smart-money container not running —"
     echo "      skipping migrations. Next deploy will pick them up once"
     echo "      smart-money comes online."
 fi
@@ -86,7 +86,7 @@ fi
 # Why this matters: Supertrend (freqtrade container) is signal-rare — every
 # full restart wipes its in-memory signal history. We used to `down && up -d`
 # which disturbed freqtrade on every unrelated deploy and cost trades.
-echo "[5/6] Applying changes (reconcile, only recreate what changed)..."
+echo "[5/7] Applying changes (reconcile, only recreate what changed)..."
 # --wait blocks until all services reach their healthy state (or timeout).
 # This guarantees nginx reload below sees the *final* upstream IPs.
 docker compose -f docker-compose.prod.yml up -d --build --remove-orphans --wait --wait-timeout 120
@@ -99,7 +99,7 @@ docker compose -f docker-compose.prod.yml exec -T nginx nginx -s reload 2>/dev/n
     docker compose -f docker-compose.prod.yml restart nginx
 
 # 6. Health check
-echo "[6/6] Waiting for services..."
+echo "[6/7] Waiting for services..."
 sleep 5
 
 if curl -sf http://localhost/health > /dev/null 2>&1; then
@@ -166,6 +166,61 @@ case "$ft_state" in
         echo "  freqtrade bot: state=$ft_state — not querying (likely still booting)"
         ;;
 esac
+
+# R125: Post-deploy verification (R109 同模式 — 但 main deploy 路徑之前漏裝)
+#
+# Background: redeploy_service.sh (R109/R116) 早已整合 verify_deploy + retry +
+# Telegram alert，但這個 deploy.sh（GitHub Actions auto-deploy 走的路徑）卻
+# 從未呼叫 verify_deploy。後果：每次 push to main → Actions 自動 deploy →
+# 但 R104-class silent failure (guards 沒 import / env 沒對齊 / +x 缺) 完全
+# 不會被偵測，必須等下次 operator 手動跑 verify_deploy 才知道。R125 補齊。
+#
+# Skip via DEPLOY_SKIP_VERIFY=1 if absolutely needed (default: always run).
+echo ""
+echo "[7/7] Post-deploy verification (R125)..."
+if [ "${DEPLOY_SKIP_VERIFY:-0}" = "1" ]; then
+    echo "  DEPLOY_SKIP_VERIFY=1 — skipping verify_deploy.sh"
+elif [ -x scripts/verify_deploy.sh ]; then
+    set +e
+    bash scripts/verify_deploy.sh > /tmp/verify_deploy.log 2>&1
+    verify_rc=$?
+    set -e
+    # R116 同模式: 第一次 fail 可能是 container 還在 starting，retry 一次
+    if [ "$verify_rc" -ne 0 ]; then
+        echo "  ⏳ verify_deploy first-pass failed — waiting 30s and retrying..."
+        sleep 30
+        set +e
+        bash scripts/verify_deploy.sh > /tmp/verify_deploy.log 2>&1
+        verify_rc=$?
+        set -e
+    fi
+    if [ "$verify_rc" -eq 0 ]; then
+        echo "  ✓ verify_deploy passed"
+    else
+        echo ""
+        echo "  ✗ verify_deploy FAILED — output:"
+        cat /tmp/verify_deploy.log | sed 's/^/    /'
+        # Telegram alert (best-effort)
+        if [ -f .env ]; then
+            TG_TOKEN=$(grep -E '^TELEGRAM_TOKEN=' .env | cut -d= -f2- || true)
+            TG_CHAT=$(grep -E '^TELEGRAM_CHAT_ID=' .env | cut -d= -f2- || true)
+            if [ -n "${TG_TOKEN:-}" ] && [ -n "${TG_CHAT:-}" ]; then
+                MSG="🚨 R125: GitHub Actions auto-deploy succeeded BUT verify_deploy FAILED. Possible R104-class silent failure. Check /tmp/verify_deploy.log on VPS."
+                curl -sS -m 10 \
+                    "https://api.telegram.org/bot${TG_TOKEN}/sendMessage" \
+                    -d "chat_id=${TG_CHAT}" --data-urlencode "text=${MSG}" \
+                    > /dev/null 2>&1 || echo "    (telegram alert send failed)"
+            fi
+        fi
+        echo ""
+        echo "  ⚠️  Deploy succeeded but verification flagged issues."
+        echo "     Manual review required (see /tmp/verify_deploy.log)."
+        # Non-zero exit so GitHub Actions UI shows red
+        exit 3
+    fi
+else
+    echo "  scripts/verify_deploy.sh not executable — skipping (run chmod +x)"
+fi
 
 echo ""
 echo "=== Deploy complete! ==="
