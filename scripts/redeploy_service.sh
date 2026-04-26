@@ -113,6 +113,32 @@ elif [ -x scripts/verify_deploy.sh ]; then
     bash scripts/verify_deploy.sh > /tmp/verify_deploy.log 2>&1
     verify_rc=$?
     set -e
+    # R116: redeploy 偶爾留 docker orphan 容器 (這 session 至少 3 次), 或
+    # dependent service 還在 starting → verify 第一次 fail 是常見的瞬間
+    # 狀態而非真實 silent failure. 自動補齊缺漏服務後 retry 一次再決定
+    # 是否 alert. 真的有問題第二次也會 fail.
+    if [ "$verify_rc" -ne 0 ]; then
+        echo "  ⏳ verify_deploy first-pass failed — auto-recovering (R116):"
+        # 找出哪些 service 沒在跑
+        missing_svcs=""
+        for svc in api freqtrade telegram-bot supertrend-cron smart-money smart-money-shadow; do
+            if ! docker ps --format '{{.Names}}' | grep -q "^ambmh-${svc}-1$"; then
+                missing_svcs="$missing_svcs $svc"
+            fi
+        done
+        if [ -n "$missing_svcs" ]; then
+            echo "    缺漏 service:$missing_svcs — 補啟動..."
+            # shellcheck disable=SC2086
+            docker compose -f docker-compose.prod.yml up -d $missing_svcs 2>&1 | tail -5
+        fi
+        echo "    等待 30s 讓容器健康..."
+        sleep 30
+        echo "    重跑 verify_deploy:"
+        set +e
+        bash scripts/verify_deploy.sh > /tmp/verify_deploy.log 2>&1
+        verify_rc=$?
+        set -e
+    fi
     if [ "$verify_rc" -eq 0 ]; then
         echo "  ✓ verify_deploy passed"
     else
