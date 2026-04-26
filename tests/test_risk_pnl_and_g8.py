@@ -47,35 +47,44 @@ def test_noop_returns_zero():
 # InMemoryPnLAggregator
 # ================================================================== #
 def test_inmemory_sums_today_only():
-    n = datetime(2026, 4, 25, 14, 0, tzinfo=timezone.utc)
+    today = datetime.now(timezone.utc).replace(
+        hour=14, minute=0, second=0, microsecond=0,
+    )
+    yesterday = today - timedelta(days=1)
     agg = InMemoryPnLAggregator([
         # Today: 10 + (-5) + 20 = 25
-        (datetime(2026, 4, 25, 1, 0, tzinfo=timezone.utc), 10.0),
-        (datetime(2026, 4, 25, 7, 0, tzinfo=timezone.utc), -5.0),
-        (datetime(2026, 4, 25, 13, 0, tzinfo=timezone.utc), 20.0),
-        # Yesterday: should NOT count
-        (datetime(2026, 4, 24, 22, 0, tzinfo=timezone.utc), 100.0),
+        (today.replace(hour=1, minute=0), 10.0),
+        (today.replace(hour=7, minute=0), -5.0),
+        (today.replace(hour=13, minute=0), 20.0),
+        # Yesterday late evening: should NOT count
+        (yesterday.replace(hour=22, minute=0), 100.0),
     ])
-    assert agg.realised_today_usd(now=n) == 25.0
+    assert agg.realised_today_usd(now=today) == 25.0
 
 
 def test_inmemory_window_hours():
-    n = datetime(2026, 4, 25, 14, 0, tzinfo=timezone.utc)
+    today = datetime.now(timezone.utc).replace(
+        hour=14, minute=0, second=0, microsecond=0,
+    )
     agg = InMemoryPnLAggregator([
-        # 1h window from `n` includes only the 13:00 trade
-        (datetime(2026, 4, 25, 13, 0, tzinfo=timezone.utc), 20.0),
-        (datetime(2026, 4, 25, 12, 0, tzinfo=timezone.utc), 50.0),
+        # 1h window from `today` includes only the 13:00 trade
+        (today.replace(hour=13, minute=0), 20.0),
+        (today.replace(hour=12, minute=0), 50.0),
     ])
-    assert agg.realised_window_usd(hours=1, now=n) == 20.0
-    assert agg.realised_window_usd(hours=3, now=n) == 70.0
+    assert agg.realised_window_usd(hours=1, now=today) == 20.0
+    assert agg.realised_window_usd(hours=3, now=today) == 70.0
 
 
 def test_inmemory_naive_ts_treated_as_utc():
     """Naive datetimes added are coerced to UTC for arithmetic safety."""
-    n = datetime(2026, 4, 25, 14, 0, tzinfo=timezone.utc)
+    today = datetime.now(timezone.utc).replace(
+        hour=14, minute=0, second=0, microsecond=0,
+    )
     agg = InMemoryPnLAggregator()
-    agg.add(datetime(2026, 4, 25, 1, 0), 42.0)   # naive
-    assert agg.realised_today_usd(now=n) == 42.0
+    # Naive datetime at start of today
+    naive_today_morning = datetime(today.year, today.month, today.day, 1, 0)
+    agg.add(naive_today_morning, 42.0)
+    assert agg.realised_today_usd(now=today) == 42.0
 
 
 # ================================================================== #
@@ -107,7 +116,9 @@ def test_g8_allows_when_no_loss():
 
 def test_g8_allows_when_loss_under_threshold():
     """Loss = 4% of capital, threshold = 5% → allow."""
-    n = datetime(2026, 4, 25, 14, 0, tzinfo=timezone.utc)
+    # Use today (UTC) as anchor — hardcoded date ages out at midnight UTC,
+    # causing PnL to be filed under "yesterday" and tests to fail.
+    n = datetime.now(timezone.utc).replace(hour=14, minute=0, second=0, microsecond=0)
     # Capital 10000, threshold 5% = -500. Loss -400 = under threshold.
     agg = InMemoryPnLAggregator([
         (n - timedelta(hours=2), -400.0),
@@ -120,7 +131,9 @@ def test_g8_allows_when_loss_under_threshold():
 
 def test_g8_denies_when_loss_at_threshold():
     """Loss exactly equals threshold → DENY (rule is `<=`)."""
-    n = datetime(2026, 4, 25, 14, 0, tzinfo=timezone.utc)
+    # Use today (UTC) as anchor — hardcoded date ages out at midnight UTC,
+    # causing PnL to be filed under "yesterday" and tests to fail.
+    n = datetime.now(timezone.utc).replace(hour=14, minute=0, second=0, microsecond=0)
     agg = InMemoryPnLAggregator([
         (n - timedelta(hours=2), -500.0),  # exactly -5% of 10k
     ])
@@ -132,7 +145,9 @@ def test_g8_denies_when_loss_at_threshold():
 
 
 def test_g8_denies_when_loss_exceeds_threshold():
-    n = datetime(2026, 4, 25, 14, 0, tzinfo=timezone.utc)
+    # Use today (UTC) as anchor — hardcoded date ages out at midnight UTC,
+    # causing PnL to be filed under "yesterday" and tests to fail.
+    n = datetime.now(timezone.utc).replace(hour=14, minute=0, second=0, microsecond=0)
     agg = InMemoryPnLAggregator([
         (n - timedelta(hours=2), -800.0),  # -8% of 10k
     ])
@@ -157,7 +172,9 @@ def test_g8_aggregator_failure_is_fail_open():
 
 def test_g8_does_not_scale():
     """G8 is binary: stop trading or don't. No SCALE."""
-    n = datetime(2026, 4, 25, 14, 0, tzinfo=timezone.utc)
+    # Use today (UTC) as anchor — hardcoded date ages out at midnight UTC,
+    # causing PnL to be filed under "yesterday" and tests to fail.
+    n = datetime.now(timezone.utc).replace(hour=14, minute=0, second=0, microsecond=0)
     agg = InMemoryPnLAggregator([
         (n - timedelta(hours=2), -1000.0),
     ])
@@ -174,7 +191,9 @@ def test_g8_integrates_with_pipeline_first():
     """G8 first in pipeline: tripped → no other guards run."""
     from risk import LatencyBudgetGuard
 
-    n = datetime(2026, 4, 25, 14, 0, tzinfo=timezone.utc)
+    # Use today (UTC) as anchor — hardcoded date ages out at midnight UTC,
+    # causing PnL to be filed under "yesterday" and tests to fail.
+    n = datetime.now(timezone.utc).replace(hour=14, minute=0, second=0, microsecond=0)
     agg = InMemoryPnLAggregator([
         (n - timedelta(hours=2), -1000.0),  # heavy loss
     ])

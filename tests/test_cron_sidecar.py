@@ -631,3 +631,124 @@ def test_state_save_load_preserves_both_alert_streams(tmp_path):
     loaded = CronState.load(f)
     assert loaded.last_alerts_seen == ["sup-1"]
     assert loaded.last_shadow_alerts_seen == ["sh-1", "sh-2"]
+
+
+# =================================================================== #
+# R83: tag-based dedup (spam fix)
+# =================================================================== #
+from strategies.cli.cron_sidecar import _alert_tag
+
+
+def test_alert_tag_extracts_prefix_before_em_dash():
+    """Real-world alert format: 'TAG — body with counters'."""
+    s = "NO_FIRES_24H — 612 evaluations, dominant blocker: vol<=1.2*ma"
+    assert _alert_tag(s) == "NO_FIRES_24H"
+
+
+def test_alert_tag_handles_no_em_dash():
+    """Some alerts (like ZERO_TRADEABLE_WALLETS) have no body."""
+    assert _alert_tag("RED_PIPELINE") == "RED_PIPELINE"
+
+
+def test_alert_tag_strips_whitespace():
+    assert _alert_tag("  COLD_START_DRIFT_DOMINANT  — body") == "COLD_START_DRIFT_DOMINANT"
+
+
+def test_alert_tag_handles_empty_input():
+    assert _alert_tag("") == ""
+
+
+def test_alert_tag_handles_short_dash_not_match():
+    """Plain '-' (hyphen) shouldn't trigger; only ' — ' (em-dash w/ spaces)."""
+    assert _alert_tag("BOT_STATE=stopped — issue POST") == "BOT_STATE=stopped"
+    # plain hyphen NOT recognized as separator
+    assert _alert_tag("FOO-BAR") == "FOO-BAR"
+
+
+def test_no_spam_when_only_counter_changes():
+    """R83 core fix: same tag with different counts = no broadcast."""
+    state = CronState(last_alerts_seen=["NO_FIRES_24H"])
+    now = datetime(2026, 4, 26, 12, 0, tzinfo=timezone.utc)
+    # Body has different counters but tag is same
+    new_msg = "NO_FIRES_24H — 1500 evaluations, dominant blocker: vol<=1.2*ma (3000 hits)"
+    with _stub_alerts([new_msg]):
+        with patch("strategies.cli.cron_sidecar._send_telegram") as send:
+            check_operations_alerts(state, dry_run=False, now_utc=now)
+    assert send.call_count == 0   # no spam!
+    # State unchanged because no new tags
+    assert state.last_alerts_seen == ["NO_FIRES_24H"]
+
+
+def test_no_spam_for_shadow_when_only_counter_changes():
+    state = CronState(last_shadow_alerts_seen=["CLOSE_WITHOUT_OPEN_DOMINANT"])
+    now = datetime(2026, 4, 26, 12, 0, tzinfo=timezone.utc)
+    new_msg = "CLOSE_WITHOUT_OPEN_DOMINANT — 500/1000 skips are close_without_open"
+    with _stub_shadow_alerts([new_msg]):
+        with patch("strategies.cli.cron_sidecar._send_telegram") as send:
+            check_shadow_alerts(state, dry_run=False, now_utc=now)
+    assert send.call_count == 0
+
+
+def test_state_stores_tags_not_full_messages():
+    """After R83, state should store tags only (smaller, stable)."""
+    state = CronState(last_alerts_seen=[])
+    now = datetime(2026, 4, 26, 12, 0, tzinfo=timezone.utc)
+    new_msg = "NO_FIRES_24H — 612 evaluations, vol<=1.2*ma"
+    with _stub_alerts([new_msg]):
+        with patch("strategies.cli.cron_sidecar._send_telegram"):
+            check_operations_alerts(state, dry_run=False, now_utc=now)
+    # State should contain the TAG only
+    assert state.last_alerts_seen == ["NO_FIRES_24H"]
+
+
+def test_resolved_alert_uses_tag_in_message():
+    """When alert resolves, broadcast uses just the tag (we don't have
+    the previous full message text since state stores tags only)."""
+    state = CronState(last_alerts_seen=["NO_FIRES_24H"])
+    now = datetime(2026, 4, 26, 12, 0, tzinfo=timezone.utc)
+    with _stub_alerts([]):   # alert resolved
+        with patch("strategies.cli.cron_sidecar._send_telegram") as send:
+            check_operations_alerts(state, dry_run=False, now_utc=now)
+    assert send.call_count == 1
+    msg = send.call_args.args[0]
+    assert "RESOLVED" in msg
+    assert "NO_FIRES_24H" in msg
+
+
+def test_legacy_full_message_state_triggers_one_time_renew():
+    """R69-era state file may have full messages. After R83 deploy, they
+    won't match new tag-based set → broadcast as NEW once. That's acceptable
+    one-time noise vs persistent 5-min spam."""
+    legacy_state = CronState(
+        last_alerts_seen=["NO_FIRES_24H — 100 evaluations, blocker: x"],
+    )
+    now = datetime(2026, 4, 26, 12, 0, tzinfo=timezone.utc)
+    new_msg = "NO_FIRES_24H — 200 evaluations, blocker: y"
+    with _stub_alerts([new_msg]):
+        with patch("strategies.cli.cron_sidecar._send_telegram") as send:
+            check_operations_alerts(state=legacy_state, dry_run=False, now_utc=now)
+    # First post-R83 run: legacy full-message in state ≠ new tag → 1 NEW + 1 RESOLVED
+    # This is the unavoidable one-time migration noise
+    assert send.call_count >= 1
+    # After this, state stores tags
+    assert legacy_state.last_alerts_seen == ["NO_FIRES_24H"]
+
+
+def test_three_alerts_with_overlapping_tags_no_spam():
+    """Realistic scenario: 3 SHADOW alerts present, counts change, no broadcast."""
+    state = CronState(last_shadow_alerts_seen=[
+        "CLOSE_WITHOUT_OPEN_DOMINANT",
+        "SCALE_NOT_SIMULATED_DOMINANT",
+        "ALL_SKIPPED_NO_PAPER",
+    ])
+    now = datetime(2026, 4, 26, 12, 0, tzinfo=timezone.utc)
+    # Same 3 tags, different numbers
+    new_alerts = [
+        "CLOSE_WITHOUT_OPEN_DOMINANT — 350/1100 skips ...",
+        "SCALE_NOT_SIMULATED_DOMINANT — 380/1100 ...",
+        "ALL_SKIPPED_NO_PAPER — 240 skips / 0 paper_trades",
+    ]
+    with _stub_shadow_alerts(new_alerts):
+        with patch("strategies.cli.cron_sidecar._send_telegram") as send:
+            check_shadow_alerts(state, dry_run=False, now_utc=now)
+    assert send.call_count == 0   # all 3 dedup correctly

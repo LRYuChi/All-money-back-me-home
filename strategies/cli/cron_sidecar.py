@@ -251,12 +251,38 @@ def _fetch_operations_alerts() -> list[str] | None:
         return None
 
 
+# R83: Alert tag extraction for stable dedup. Alert messages include
+# dynamic counters (e.g., "297/989 skips") that change every poll;
+# diffing full strings caused spurious NEW + RESOLVED spam every 5min
+# for the same logical alert family. Dedup by tag (text before " — ")
+# instead — the tag is the alert RULE (CLOSE_WITHOUT_OPEN_DOMINANT,
+# NO_FIRES_24H, RED_PIPELINE etc) which is stable across polls.
+def _alert_tag(alert: str) -> str:
+    """Extract stable tag from alert message.
+
+    Examples:
+      "NO_FIRES_24H — 612 evaluations, dominant blocker: vol<=1.2*ma..."
+        → "NO_FIRES_24H"
+      "ZERO_TRADEABLE_WALLETS"   (no body)
+        → "ZERO_TRADEABLE_WALLETS"
+      "BOT_STATE=stopped — issue POST..."
+        → "BOT_STATE=stopped"   (state change is itself the identity)
+    """
+    if not alert:
+        return ""
+    # First " — " (em-dash) separates tag from descriptive body
+    return alert.split(" — ", 1)[0].strip()
+
+
 def check_operations_alerts(state: CronState, *, dry_run: bool,
                              now_utc: datetime) -> bool:
     """Diff current /operations alerts against last-seen, broadcast deltas.
 
     Default poll cadence: every 5 min. Caller (tick) gates by minute mark.
     Returns True if state changed.
+
+    R83: dedup by stable tag (not full message) so changing counter
+    numbers in the message body don't spam Telegram every 5min.
     """
     if os.environ.get("SUPERTREND_ALERT_BROADCAST", "1") != "1":
         return False
@@ -264,38 +290,44 @@ def check_operations_alerts(state: CronState, *, dry_run: bool,
     if current is None:
         return False   # probe failure — leave state unchanged
 
-    # Use sets for diff but preserve readability for broadcast
-    last_set = set(state.last_alerts_seen or [])
-    cur_set = set(current)
+    # R83: tag → most-recent full message (for broadcast detail)
+    current_by_tag: dict[str, str] = {}
+    for a in current:
+        tag = _alert_tag(a)
+        if tag:
+            current_by_tag[tag] = a
 
-    new_alerts = [a for a in current if a not in last_set]
-    resolved = [a for a in (state.last_alerts_seen or []) if a not in cur_set]
+    last_tags = set(state.last_alerts_seen or [])
+    cur_tags = set(current_by_tag.keys())
 
-    if not new_alerts and not resolved:
-        # Update check timestamp anyway for observability
+    new_tags = cur_tags - last_tags
+    resolved_tags = last_tags - cur_tags
+
+    if not new_tags and not resolved_tags:
         state.last_alerts_check_iso = now_utc.isoformat()
         return True
 
-    for alert in new_alerts:
+    for tag in new_tags:
         msg = (
             f"⚠️ *Supertrend Alert (NEW)*\n"
-            f"`{alert}`\n"
+            f"`{current_by_tag[tag]}`\n"
             f"_{now_utc.strftime('%Y-%m-%d %H:%M UTC')}_\n"
             f"_See /api/supertrend/operations for full snapshot_"
         )
         _send_telegram(msg, dry_run=dry_run)
-        logger.info("posted NEW alert to telegram: %s", alert[:80])
+        logger.info("posted NEW alert to telegram: %s", tag)
 
-    for alert in resolved:
+    for tag in resolved_tags:
         msg = (
             f"✅ *Supertrend Alert (RESOLVED)*\n"
-            f"`{alert}`\n"
+            f"`{tag}`\n"
             f"_{now_utc.strftime('%Y-%m-%d %H:%M UTC')}_"
         )
         _send_telegram(msg, dry_run=dry_run)
-        logger.info("posted RESOLVED alert to telegram: %s", alert[:80])
+        logger.info("posted RESOLVED alert to telegram: %s", tag)
 
-    state.last_alerts_seen = current
+    # Store TAGS, not full messages (smaller state, stable dedup)
+    state.last_alerts_seen = sorted(cur_tags)
     state.last_alerts_check_iso = now_utc.isoformat()
     return True
 
@@ -337,7 +369,8 @@ def check_shadow_alerts(state: CronState, *, dry_run: bool,
     """Diff current SHADOW alerts against last-seen, broadcast deltas.
 
     Same pattern as check_operations_alerts but for SHADOW pipeline.
-    Default poll cadence: every 5 min (gated by tick).
+    R83: tag-based dedup (not full message) to avoid spam from
+    changing counter numbers between polls.
     """
     if os.environ.get("SHADOW_ALERT_BROADCAST", "1") != "1":
         return False
@@ -345,35 +378,42 @@ def check_shadow_alerts(state: CronState, *, dry_run: bool,
     if current is None:
         return False
 
-    last_set = set(state.last_shadow_alerts_seen or [])
-    cur_set = set(current)
-    new_alerts = [a for a in current if a not in last_set]
-    resolved = [a for a in (state.last_shadow_alerts_seen or []) if a not in cur_set]
+    current_by_tag: dict[str, str] = {}
+    for a in current:
+        tag = _alert_tag(a)
+        if tag:
+            current_by_tag[tag] = a
 
-    if not new_alerts and not resolved:
+    last_tags = set(state.last_shadow_alerts_seen or [])
+    cur_tags = set(current_by_tag.keys())
+
+    new_tags = cur_tags - last_tags
+    resolved_tags = last_tags - cur_tags
+
+    if not new_tags and not resolved_tags:
         state.last_shadow_alerts_check_iso = now_utc.isoformat()
         return True
 
-    for alert in new_alerts:
+    for tag in new_tags:
         msg = (
             f"⚠️ *Shadow Alert (NEW)*\n"
-            f"`{alert}`\n"
+            f"`{current_by_tag[tag]}`\n"
             f"_{now_utc.strftime('%Y-%m-%d %H:%M UTC')}_\n"
             f"_See /api/smart-money/signal-health for full snapshot_"
         )
         _send_telegram(msg, dry_run=dry_run)
-        logger.info("posted NEW shadow alert to telegram: %s", alert[:80])
+        logger.info("posted NEW shadow alert to telegram: %s", tag)
 
-    for alert in resolved:
+    for tag in resolved_tags:
         msg = (
             f"✅ *Shadow Alert (RESOLVED)*\n"
-            f"`{alert}`\n"
+            f"`{tag}`\n"
             f"_{now_utc.strftime('%Y-%m-%d %H:%M UTC')}_"
         )
         _send_telegram(msg, dry_run=dry_run)
-        logger.info("posted RESOLVED shadow alert: %s", alert[:80])
+        logger.info("posted RESOLVED shadow alert: %s", tag)
 
-    state.last_shadow_alerts_seen = current
+    state.last_shadow_alerts_seen = sorted(cur_tags)
     state.last_shadow_alerts_check_iso = now_utc.isoformat()
     return True
 
