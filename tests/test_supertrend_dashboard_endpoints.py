@@ -1079,6 +1079,87 @@ def test_operations_switchboard_exposes_entry_gate_envs(monkeypatch, tmp_path):
     assert sw["require_atr_rising"] == "0"
 
 
+def test_operations_exposes_per_pair_productivity(monkeypatch, tmp_path):
+    """R95: /operations.performance must expose per-pair counts so operator
+    can identify dead-weight pairs (R90 found BTC=6/8 wins, others=0)."""
+    from datetime import datetime, timezone
+    from unittest.mock import patch
+    from strategies.journal import TradeJournal
+
+    monkeypatch.setenv("SUPERTREND_JOURNAL_DIR", str(tmp_path))
+    j = TradeJournal(tmp_path)
+    now = datetime.now(timezone.utc).isoformat()
+    # 3 BTC trades (2W 1L), 1 ADA win, 0 ETH/SOL trades
+    for pnl in (1.5, 0.8, -0.3):
+        j.write({
+            "event_type": "exit", "timestamp": now,
+            "pair": "BTC/USDT:USDT", "entry_tag": "scout",
+            "pnl_pct": pnl, "pnl_usd": pnl * 10, "duration_hours": 4,
+            "exit_reason": "trailing_stop",
+        })
+    j.write({
+        "event_type": "exit", "timestamp": now,
+        "pair": "ADA/USDT:USDT", "entry_tag": "pre_scout",
+        "pnl_pct": 0.31, "pnl_usd": 3.1, "duration_hours": 6,
+        "exit_reason": "trailing_stop",
+    })
+    mod = _import_router()
+    fake = {
+        "/api/v1/show_config": {"state": "running", "dry_run": True},
+        "/api/v1/whitelist": {
+            "whitelist": [
+                "BTC/USDT:USDT", "ADA/USDT:USDT",
+                "ETH/USDT:USDT", "SOL/USDT:USDT", "XRP/USDT:USDT",
+            ],
+        },
+    }
+    with patch(
+        "src.routers.supertrend._ft_get",
+        side_effect=lambda p, **kw: fake.get(p, {}),
+    ):
+        out = mod["operations"](eval_window_days=1, perf_window_days=7)
+
+    perf = out["performance"]
+    assert perf["active_pair_count"] == 2
+    assert perf["silent_pair_count"] == 3
+    assert set(perf["silent_pairs"]) == {
+        "ETH/USDT:USDT", "SOL/USDT:USDT", "XRP/USDT:USDT",
+    }
+    # top_pairs sorted by n desc — BTC first (3), ADA second (1)
+    assert perf["top_pairs"][0]["pair"] == "BTC/USDT:USDT"
+    assert perf["top_pairs"][0]["n_trades"] == 3
+    assert perf["top_pairs"][0]["wins"] == 2
+    assert perf["top_pairs"][0]["losses"] == 1
+    assert perf["top_pairs"][1]["pair"] == "ADA/USDT:USDT"
+    assert perf["top_pairs"][1]["wins"] == 1
+
+
+def test_operations_silent_pairs_empty_when_whitelist_unreachable(monkeypatch, tmp_path):
+    """R95: when freqtrade /whitelist fails, silent_pairs falls back to []
+    (don't infer false 'silent' from missing data)."""
+    from datetime import datetime, timezone
+    from unittest.mock import patch
+    from strategies.journal import TradeJournal
+
+    monkeypatch.setenv("SUPERTREND_JOURNAL_DIR", str(tmp_path))
+    j = TradeJournal(tmp_path)
+    j.write({
+        "event_type": "exit", "timestamp": datetime.now(timezone.utc).isoformat(),
+        "pair": "BTC/USDT:USDT", "pnl_pct": 1.0, "pnl_usd": 10.0,
+        "duration_hours": 1, "entry_tag": "scout", "exit_reason": "tp",
+    })
+    mod = _import_router()
+    with patch(
+        "src.routers.supertrend._ft_get",
+        side_effect=RuntimeError("freqtrade unreachable"),
+    ):
+        out = mod["operations"](eval_window_days=1, perf_window_days=7)
+    perf = out["performance"]
+    assert perf["silent_pairs"] == []
+    assert perf["silent_pair_count"] == 0
+    assert perf["active_pair_count"] == 1
+
+
 def test_operations_switchboard_entry_gate_defaults(monkeypatch, tmp_path):
     """R94: when no env override is set, switchboard reports the safe defaults."""
     from unittest.mock import patch

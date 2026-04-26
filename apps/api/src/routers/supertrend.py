@@ -869,12 +869,47 @@ def supertrend_operations(
                 from_date=now - timedelta(days=perf_window_days),
                 to_date=now,
             )
+            # R95: per-pair productivity. R90 walk-forward found BTC=6/8
+            # wins, ADA=2/8, ETH/SOL/XRP=0/0 — yet operator had no visible
+            # signal that 14 of 17 prod pairs are dead weight. Surface top
+            # pairs (sorted by n trades desc) so deny-list / curated
+            # whitelist decisions are evidence-based.
+            top_pairs = []
+            for pair, gs in sorted(
+                snap.by_pair.items(),
+                key=lambda kv: kv[1].n,
+                reverse=True,
+            )[:20]:
+                top_pairs.append({
+                    "pair": pair,
+                    "n_trades": gs.n,
+                    "wins": gs.wins,
+                    "losses": gs.losses,
+                    "win_rate": round(gs.win_rate, 4),
+                    "avg_pnl_pct": round(gs.avg_pnl_pct, 4),
+                    "sum_pnl_usd": round(gs.sum_pnl_usd, 4),
+                })
+            # Pairs in the whitelist that produced ZERO trades in window —
+            # the most actionable signal: candidates for removal.
+            try:
+                wl_resp = _ft_get("/api/v1/whitelist", timeout=3.0)
+                wl_pairs = set((wl_resp or {}).get("whitelist", []) or [])
+            except Exception:
+                wl_pairs = set()
+            traded = set(snap.by_pair.keys())
+            silent_pairs = sorted(wl_pairs - traded)
+
             out["performance"] = {
                 "window_days": perf_window_days,
                 "n_trades": snap.n_trades,
                 "win_rate": snap.win_rate,
                 "sum_pnl_usd": snap.sum_pnl_usd,
                 "max_drawdown_pct": snap.max_drawdown_pct,
+                # R95
+                "top_pairs": top_pairs,
+                "silent_pairs": silent_pairs,
+                "silent_pair_count": len(silent_pairs),
+                "active_pair_count": len(traded),
             }
         except Exception as e:
             out["errors"]["performance"] = str(e)
