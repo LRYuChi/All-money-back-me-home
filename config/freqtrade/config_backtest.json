@@ -15,5 +15,8 @@
         {
             "method": "StaticPairList"
         }
-    ]
+    ],
+
+    "_R85_note": "Stoploss override via config takes precedence over strategy class attr. Set to -0.03 for R85 Option A testing (vs R84 baseline -0.05). Comment out / remove when not testing.",
+    "stoploss": -0.03
 }
