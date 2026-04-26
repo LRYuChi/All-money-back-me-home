@@ -98,10 +98,18 @@ fi
 # ─── Check 4: account balance ≥ floor ────────────────────────────────────
 echo
 echo "[4/8] account balance ≥ \$${REQUIRED_BALANCE_USDC}"
+# freqtrade REST 需要 basic auth (FT_USER / FT_PASS) — 從 api container env 拿
 balance_json=$(docker exec ambmh-api-1 python3 -c "
-import urllib.request, json
+import urllib.request, json, os, base64
+ft_user = os.environ.get('FT_USER', 'freqtrade')
+ft_pass = os.environ.get('FT_PASS', 'freqtrade')
+auth = base64.b64encode(f'{ft_user}:{ft_pass}'.encode()).decode()
 try:
-    r = urllib.request.urlopen('http://freqtrade:8080/api/v1/balance', timeout=5)
+    req = urllib.request.Request(
+        'http://freqtrade:8080/api/v1/balance',
+        headers={'Authorization': f'Basic {auth}'},
+    )
+    r = urllib.request.urlopen(req, timeout=5)
     print(r.read().decode())
 except Exception as e:
     print(json.dumps({'error': str(e)}))
@@ -171,9 +179,16 @@ fi
 echo
 echo "[8/8] freqtrade /show_config dry_run reflects SUPERTREND_LIVE"
 dry=$(docker exec ambmh-api-1 python3 -c "
-import urllib.request, json
+import urllib.request, json, os, base64
+ft_user = os.environ.get('FT_USER', 'freqtrade')
+ft_pass = os.environ.get('FT_PASS', 'freqtrade')
+auth = base64.b64encode(f'{ft_user}:{ft_pass}'.encode()).decode()
 try:
-    r = urllib.request.urlopen('http://freqtrade:8080/api/v1/show_config', timeout=5)
+    req = urllib.request.Request(
+        'http://freqtrade:8080/api/v1/show_config',
+        headers={'Authorization': f'Basic {auth}'},
+    )
+    r = urllib.request.urlopen(req, timeout=5)
     d = json.loads(r.read())
     print('dry_run' if d.get('dry_run') else 'live')
 except Exception as e:
