@@ -1104,6 +1104,45 @@ class SupertrendStrategy(IStrategy):
             return reason
         return None
 
+    # ----- R97: guard pipeline (account/strategy/trade layers) ----- #
+    def _check_guards(self, pair: str, side: str, amount: float,
+                      rate: float, **kwargs) -> str | None:
+        """Run the singleton guard pipeline. Returns rejection reason or None.
+
+        Wrapped in try/except: a guard pipeline crash must NOT silently
+        permit unsafe entries (fail-safe → block) but also must not
+        prevent the strategy from running at all if guards module is
+        broken (fail-open during loading errors). The dual behaviour is:
+          - import / construction error → fail-open (log warning, allow)
+          - guard.check() exception → fail-closed (treat as rejection)
+        """
+        try:
+            from guards.base import GuardContext
+            from guards.pipeline import create_default_pipeline
+        except Exception as e:
+            logger.warning("guards module unavailable, skipping checks: %s", e)
+            return None
+        try:
+            balance = (
+                self.wallets.get_total("USDT") if getattr(self, "wallets", None)
+                else 1000.0
+            )
+        except Exception:
+            balance = 1000.0
+        leverage = float(kwargs.get("leverage") or 1.0)
+        ctx = GuardContext(
+            symbol=pair,
+            side=("short" if side == "short" else "long"),
+            amount=amount * rate,                   # notional, not coin size
+            leverage=leverage,
+            account_balance=balance,
+        )
+        try:
+            return create_default_pipeline().run(ctx)
+        except Exception as e:
+            logger.error("guard pipeline crashed, blocking entry: %s", e)
+            return f"guard_pipeline_error:{e}"
+
     # ----- R58: correlation / rotation stake sizing --------------- #
     # Applied INSIDE custom_stake_amount AFTER regime/concentration/CB
     # checks. Default OFF (SUPERTREND_CORRELATION_FILTER=1 to enable).
@@ -1590,10 +1629,42 @@ class SupertrendStrategy(IStrategy):
         microstructure) run BEFORE journal write. Both default OFF —
         SUPERTREND_FR_ALPHA=1 / SUPERTREND_ORDERBOOK_CONFIRM=1 to enable.
         Blocked entries get a SkippedEvent + Telegram and return False.
+
+        R97: GUARD PIPELINE runs FIRST (before R57). Per CLAUDE.md "every
+        order must pass all guards" — the legacy strategies (smc_scalp /
+        bb_squeeze) wired this in but supertrend never did. Guards default
+        ON; opt out via SUPERTREND_GUARDS_ENABLED=0 for synthetic tests.
+        Account-layer rejection (DailyLoss / Drawdown / ConsecutiveLoss)
+        is critical — must fire before any other entry logic.
         """
         dataframe, _ = self.dp.get_analyzed_dataframe(pair, self.timeframe)
         last_row = dataframe.iloc[-1] if len(dataframe) > 0 else None
         state = _snapshot_state(last_row)
+
+        # R97: guard pipeline (sync, default ON)
+        if os.environ.get("SUPERTREND_GUARDS_ENABLED", "1") == "1":
+            guard_reason = self._check_guards(pair, side, amount, rate, **kwargs)
+            if guard_reason:
+                logger.warning(
+                    "entry blocked by guards: %s %s — %s", pair, side, guard_reason,
+                )
+                try:
+                    _safe_journal_write(SkippedEvent(
+                        timestamp=now_iso(),
+                        pair=pair, side=side,
+                        reason=f"R97 guard: {guard_reason}",
+                        state=state,
+                    ))
+                except Exception:
+                    pass
+                try:
+                    _send_to_all_bots(
+                        f"🛡️ *Guard 攔截* `{pair}` {side.upper()}\n"
+                        f"原因: {guard_reason}"
+                    )
+                except Exception:
+                    pass
+                return False
 
         # R57: pre-entry alpha filters (no-op when env vars unset)
         block_reason = self._pre_entry_filter_block(pair, side, state)
