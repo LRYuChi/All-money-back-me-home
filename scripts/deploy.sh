@@ -12,7 +12,30 @@ echo "=== AMBMH Deploy ==="
 echo "Directory: $PROJECT_DIR"
 
 # 1. Pull latest code
+#
+# R126: 在 git pull 前偵測 working tree 是否 dirty。R122-followup 的
+# GitHub Actions deploy 失敗就是這個 pattern：VPS 端有 uncommitted local
+# changes (operator 在 R122 incident 中手動 chmod +x scripts/polymarket
+# _pipeline.sh 修問題)，當 R122-followup 提交追蹤同檔案的 mode 變更後，
+# git pull 因 'local changes would be overwritten' 中止 → deploy 在 step 1
+# 死掉，後面所有 R125 verify_deploy 防護鏈都跑不到。
+#
+# 處理：dirty tree → 自動 git stash (帶 timestamp 標籤好回追) + 繼續 pull。
+# 任何 stash 內容會留在 stash list 給 operator 後續決定 (drop/pop/diff)。
 echo "[1/7] Pulling latest code..."
+# 只檢查 tracked files 的 modifications (含 staged + unstaged)；untracked
+# files (cron 寫的 journal/state/lock) 不會 block git pull，不需 stash。
+if ! git diff --quiet HEAD 2>/dev/null; then
+    stash_label="auto-deploy-stash-$(date -u '+%Y%m%dT%H%M%SZ')"
+    echo "  ⚠️  R126: tracked files modified locally — auto-stashing as '$stash_label'"
+    git diff --stat HEAD | sed 's/^/    /'
+    git stash push -m "$stash_label" || {
+        echo "  ✗ git stash failed — manual intervention required"
+        echo "    Recover: cd /opt/ambmh && git status, then commit or git checkout -- <files>"
+        exit 1
+    }
+    echo "  ✓ stashed; list via: git stash list | grep $stash_label"
+fi
 git pull origin main
 
 # 2. Check .env
