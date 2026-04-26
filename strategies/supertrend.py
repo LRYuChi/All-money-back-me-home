@@ -123,8 +123,41 @@ except Exception:
 logger = logging.getLogger(__name__)
 
 
+# R115: detect freqtrade backtest mode at module load. Backtest writes
+# 1000s of historical-replay events into the same journal that prod
+# dry-run uses → recent_trades / dashboards show numbers that look like
+# real trading activity but are actually backtest replay. We block ALL
+# journal writes in backtest mode (operator can opt back in via
+# SUPERTREND_BACKTEST_WRITE_JOURNAL=1 if they explicitly want backtest
+# events archived).
+def _is_backtest_mode() -> bool:
+    """Detect freqtrade backtest / hyperopt invocation via sys.argv."""
+    import sys
+    cmd = " ".join(sys.argv).lower()
+    return any(x in cmd for x in ("backtesting", "backtest", "hyperopt"))
+
+
+_IS_BACKTEST = _is_backtest_mode()
+_BACKTEST_WRITE_JOURNAL = os.environ.get("SUPERTREND_BACKTEST_WRITE_JOURNAL", "0") == "1"
+
+if _IS_BACKTEST and not _BACKTEST_WRITE_JOURNAL:
+    logger.info(
+        "R115: backtest mode detected — journal writes DISABLED to avoid "
+        "polluting production dashboards. Set SUPERTREND_BACKTEST_WRITE_JOURNAL=1 "
+        "to archive backtest events."
+    )
+
+
 def _safe_journal_write(event) -> None:
-    """Wrapper: journal failures NEVER block trading."""
+    """Wrapper: journal failures NEVER block trading.
+
+    R115: in backtest mode, skip ALL writes to avoid polluting production
+    dashboards (recent_trades / NO_FIRES_24H / etc all read from the same
+    journal — backtest's 1000s of historical events would mask real
+    dry-run activity).
+    """
+    if _IS_BACKTEST and not _BACKTEST_WRITE_JOURNAL:
+        return
     if _journal is None:
         return
     try:
