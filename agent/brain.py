@@ -388,7 +388,10 @@ Agent Tier: {self.tier}
                 max_tokens=max_output,
                 messages=[{"role": "user", "content": prompt}],
             )
-            raw_text = response.content[0].text
+            # R121: filter to TextBlock (extended thinking 防呆 — content[0]
+            # 可能是 ThinkingBlock 沒 .text attribute)
+            _text_blocks = [b for b in (response.content or []) if hasattr(b, "text")]
+            raw_text = _text_blocks[0].text if _text_blocks else ""
             input_tokens = response.usage.input_tokens
             output_tokens = response.usage.output_tokens
         except Exception as e:

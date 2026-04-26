@@ -1112,7 +1112,10 @@ def _ai_call(system_prompt: str, user_content: str, max_tokens: int = 1000) -> s
             system=system_prompt,
             messages=[{"role": "user", "content": user_content}],
         )
-        text = response.content[0].text if response.content else "無法生成回答"
+        # R121: filter to TextBlock — Anthropic extended thinking 模式下
+        # content[0] 可能是 ThinkingBlock (沒 .text), 直接 [0].text 會 crash.
+        _text_blocks = [b for b in (response.content or []) if hasattr(b, "text")]
+        text = _text_blocks[0].text if _text_blocks else "無法生成回答"
         tokens = f"({response.usage.input_tokens}in/{response.usage.output_tokens}out)"
         return f"🤖 AI 分析\n━━━━━━━━━━━━━━━━\n{text}\n\n{tokens}"
     except Exception as e:
@@ -1308,7 +1311,10 @@ def handle_ai_query(question: str) -> str:
             system="你是加密貨幣合約交易AI助手。策略是 Supertrend 4 層 MTF（1D→4H→1H→15m 方向一致+ADX>25+成交量確認）。用繁體中文簡潔回答，300字以內。基於數據客觀分析。",
             messages=[{"role": "user", "content": f"{data_warning}市場數據:\n{summary}\n\n問題: {question}"}],
         )
-        text = response.content[0].text if response.content else "無法生成回答"
+        # R121: filter to TextBlock — Anthropic extended thinking 模式下
+        # content[0] 可能是 ThinkingBlock (沒 .text), 直接 [0].text 會 crash.
+        _text_blocks = [b for b in (response.content or []) if hasattr(b, "text")]
+        text = _text_blocks[0].text if _text_blocks else "無法生成回答"
         tokens = f"({response.usage.input_tokens}in/{response.usage.output_tokens}out)"
         return f"🤖 AI 分析\n━━━━━━━━━━━━━━━━\n{text}\n\n{tokens}"
     except Exception as e:
@@ -1588,7 +1594,9 @@ def _ai_synthesize(title: str, system_extra: str, data: str) -> str:
             ),
             messages=[{"role": "user", "content": f"市場數據：\n\n{data[:3500]}"}],
         )
-        text = response.content[0].text if response.content else "無法生成"
+        # R121: filter to TextBlock — extended thinking 下 content[0] 可能是 ThinkingBlock
+        _text_blocks = [b for b in (response.content or []) if hasattr(b, "text")]
+        text = _text_blocks[0].text if _text_blocks else "無法生成"
         tokens = f"({response.usage.input_tokens}in/{response.usage.output_tokens}out)"
         return f"{text}\n\n{tokens}"
     except Exception as e:

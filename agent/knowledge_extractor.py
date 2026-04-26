@@ -91,7 +91,9 @@ class KnowledgeExtractor:
                 max_tokens=1500,
                 messages=[{"role": "user", "content": prompt}],
             )
-            text = response.content[0].text.strip()
+            # R121: filter to TextBlock (extended thinking 防呆)
+            _text_blocks = [b for b in (response.content or []) if hasattr(b, "text")]
+            text = (_text_blocks[0].text if _text_blocks else "").strip()
             # 從回應中擷取 JSON
             if "{" in text:
                 start = text.index("{")
