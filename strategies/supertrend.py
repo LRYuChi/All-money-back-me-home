@@ -404,13 +404,25 @@ class SupertrendStrategy(IStrategy):
         )
 
         # === Phase 2 (confirmed): 4-layer aligned + 15m flip ===
-        mask_confirmed_long = dataframe["st_buy"] & dataframe["all_bullish"] & quality & dataframe["fr_ok_long"]
-        dataframe.loc[mask_confirmed_long, "enter_long"] = 1
-        dataframe.loc[mask_confirmed_long, "enter_tag"] = "confirmed"
+        # R87: SUPERTREND_DISABLE_CONFIRMED=1 entirely skips this tier.
+        # R85 backtest finding: confirmed accounts for 86% of trades but
+        # produces all the loss (-0.84% avg, 48% WR). Disable + re-test.
+        confirmed_disabled = (
+            os.environ.get("SUPERTREND_DISABLE_CONFIRMED", "0") == "1"
+        )
+        if not confirmed_disabled:
+            mask_confirmed_long = dataframe["st_buy"] & dataframe["all_bullish"] & quality & dataframe["fr_ok_long"]
+            dataframe.loc[mask_confirmed_long, "enter_long"] = 1
+            dataframe.loc[mask_confirmed_long, "enter_tag"] = "confirmed"
 
-        mask_confirmed_short = dataframe["st_sell"] & dataframe["all_bearish"] & quality & dataframe["fr_ok_short"]
-        dataframe.loc[mask_confirmed_short, "enter_short"] = 1
-        dataframe.loc[mask_confirmed_short, "enter_tag"] = "confirmed"
+            mask_confirmed_short = dataframe["st_sell"] & dataframe["all_bearish"] & quality & dataframe["fr_ok_short"]
+            dataframe.loc[mask_confirmed_short, "enter_short"] = 1
+            dataframe.loc[mask_confirmed_short, "enter_tag"] = "confirmed"
+        else:
+            # Disabled: scout/pre_scout downstream masks still need a False
+            # series for ~mask_confirmed_long subtraction. Build empty masks.
+            mask_confirmed_long = dataframe["close"] != dataframe["close"]   # all-False
+            mask_confirmed_short = dataframe["close"] != dataframe["close"]
 
         # === Phase 1 (scout): 3-layer aligned + quality, 15m NOT yet flipped ===
         # P0-3 (2026-04-23): Edge-trigger only — scout fires on the candle the
