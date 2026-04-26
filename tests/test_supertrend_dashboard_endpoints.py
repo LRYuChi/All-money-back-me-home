@@ -47,13 +47,15 @@ def _import_router():
 # =================================================================== #
 # Router structure
 # =================================================================== #
-def test_router_has_9_endpoints():
+def test_router_has_10_endpoints():
+    """R114 added /entries — total now 10."""
     mod = _import_router()
     paths = {r.path for r in mod["router"].routes}
     assert paths == {
         "/api/supertrend/snapshot",
         "/api/supertrend/regime",
         "/api/supertrend/trades",
+        "/api/supertrend/entries",       # R114
         "/api/supertrend/skipped",
         "/api/supertrend/scanner",
         "/api/supertrend/evaluations",

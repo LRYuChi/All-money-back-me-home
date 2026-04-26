@@ -1104,6 +1104,161 @@ class SupertrendStrategy(IStrategy):
             return reason
         return None
 
+    # ----- R114: 繁中翻譯 + 進場邏輯 summary ----- #
+    @staticmethod
+    def _translate_guard_reason(reason: str) -> str:
+        """把 guards/guards.py 內的英文 rejection 訊息翻成繁中。
+
+        guards 模組的 check() 回傳格式: "[L:layer] [GuardName] {message}"
+        我們在 supertrend.py 裡 wrap 一層，給 TG / journal 顯示繁中。
+        guards 模組本身保留英文（共用 module，不亂改）。
+        """
+        if not reason:
+            return reason
+        # 抓 [L:layer] [GuardName] tail 結構
+        import re
+        m = re.match(r"\[L:(\w+)\]\s*\[(\w+Guard)\]\s*(.*)", reason)
+        layer, guard_name, tail = (m.groups() if m else ("", "", reason))
+
+        guard_zh = {
+            "DrawdownGuard": "📉 帳戶回撤",
+            "DailyLossGuard": "💸 單日虧損",
+            "ConsecutiveLossGuard": "🚨 連敗暫停",
+            "TotalExposureGuard": "📊 總曝險",
+            "DirectionalExposureGuard": "🧭 同向集中",
+            "MaxLeverageGuard": "⚡ 槓桿上限",
+            "MaxPositionGuard": "💰 單筆倉位",
+            "LiquidationGuard": "⚠️ 強平距離",
+            "CooldownGuard": "⏱️ 冷卻中",
+        }.get(guard_name, guard_name)
+
+        layer_zh = {
+            "account": "帳戶層",
+            "strategy": "策略層",
+            "trade": "交易層",
+        }.get(layer, layer)
+
+        # 翻譯常見 tail patterns
+        tail_zh = tail
+        # "BTC/USDT:USDT cooldown: 3599s remaining" → "BTC/USDT 冷卻剩 60 分"
+        cd_match = re.match(r"(\S+)\s+cooldown:\s+(\d+)s remaining", tail)
+        if cd_match:
+            sym, secs = cd_match.group(1), int(cd_match.group(2))
+            mins = secs // 60
+            secs_rem = secs % 60
+            sym_short = sym.replace("/USDT:USDT", "")
+            tail_zh = f"`{sym_short}` 還需冷卻 `{mins}分{secs_rem}秒`"
+        # "Daily loss 12.50 reached 5% limit (50.00)" → "今日虧損已達 $12.50 / 5% 上限 $50"
+        elif "Daily loss" in tail:
+            dm = re.match(r"Daily loss\s+([\d.]+)\s+reached\s+([\d.]+)% limit \(([\d.]+)\)", tail)
+            if dm:
+                cur, pct, cap = dm.groups()
+                tail_zh = f"今日虧損 `${cur}` 已達 `{pct}%` 上限 (`${cap}`)"
+        # "Trading paused for 23.5h after 5 consecutive losses"
+        elif "Trading paused" in tail:
+            pm = re.match(r"Trading paused for ([\d.]+)h after (\d+) consecutive losses", tail)
+            if pm:
+                hrs, n = pm.groups()
+                tail_zh = f"連續 `{n}` 次虧損 → 暫停 `{hrs}` 小時"
+        # "Position value 1200.00 exceeds 30% of account (300.00)"
+        elif "Position value" in tail:
+            pm = re.match(r"Position value\s+([\d.]+)\s+exceeds\s+([\d.]+)% of account \(([\d.]+)\)", tail)
+            if pm:
+                pos, pct, cap = pm.groups()
+                tail_zh = f"倉位 `${pos}` 超過帳戶 `{pct}%` 上限 (`${cap}`)"
+        # "Leverage 5.0x exceeds 2.5x for $300 account"
+        elif "Leverage" in tail and "exceeds" in tail:
+            lm = re.match(r"Leverage\s+([\d.]+)x\s+exceeds\s+([\d.]+)x for \$([\d.]+) account", tail)
+            if lm:
+                req, cap, acct = lm.groups()
+                tail_zh = f"槓桿 `{req}x` 超過 `${acct}` 帳戶上限 `{cap}x`"
+        # "Portfolio drawdown 12.3% exceeds 10% limit (peak: 1100, current: 965)"
+        elif "Portfolio drawdown" in tail:
+            dm = re.match(r"Portfolio drawdown\s+([\d.]+)%\s+exceeds\s+([\d.]+)% limit", tail)
+            if dm:
+                dd, lim = dm.groups()
+                tail_zh = f"帳戶回撤 `{dd}%` 超過上限 `{lim}%`"
+
+        return f"[{layer_zh}] {guard_zh} — {tail_zh}"
+
+    @staticmethod
+    def _build_entry_logic_summary(side: str, entry_tag: str | None,
+                                    last_row, prev_row, env_vol_mult: float,
+                                    env_quality_min: float, env_adx_min: float,
+                                    require_atr_rising: bool) -> str:
+        """組成「為什麼這 candle 觸發了這個 tier」的繁中說明。
+
+        對應 strategies/supertrend.py populate_entry_trend 的條件結構：
+          confirmed: st_buy/sell + all_bullish/bearish + quality + fr
+          scout:     bull/bear_just_formed + st_trend 未 flip + quality + fr
+          pre_scout: pair_bullish/bearish_2tf_just_formed + st_1h 未對齊 + quality + fr
+
+        Quality gate (4 條): adx > X, vol > Y*MA, atr_rising, trend_quality > Z
+
+        回傳 multi-line markdown 字串，給 TG + EntryEvent 用。
+        """
+        if last_row is None:
+            return f"({entry_tag or 'unknown'}) 進場條件 — 無資料"
+
+        is_long = side == "long"
+        adx = float(last_row.get("adx", 0) or 0)
+        vol = float(last_row.get("volume", 0) or 0)
+        vol_ma = float(last_row.get("volume_ma_20", 1) or 1)
+        vol_ratio = vol / vol_ma if vol_ma > 0 else 0
+        atr_rising = bool(last_row.get("atr_rising", False))
+        quality = float(last_row.get("trend_quality", 0) or 0)
+        st_trend = int(last_row.get("st_trend", 0) or 0)
+        st_1h = int(last_row.get("st_1h", 0) or 0)
+
+        # tier-specific 觸發條件
+        tier_lines: list[str] = []
+        if entry_tag == "confirmed":
+            st_signal = bool(last_row.get("st_buy" if is_long else "st_sell", False))
+            all_aligned = bool(last_row.get("all_bullish" if is_long else "all_bearish", False))
+            tier_lines = [
+                f"`confirmed` — 4 時框完全對齊 + 15m supertrend 翻轉",
+                f"   • st_{'buy' if is_long else 'sell'}: {'✓' if st_signal else '✗'}",
+                f"   • all_{'bullish' if is_long else 'bearish'} (1d+4h+1h+15m): {'✓' if all_aligned else '✗'}",
+            ]
+        elif entry_tag == "scout":
+            now_ali = bool(last_row.get("all_bullish" if is_long else "all_bearish", False))
+            prev_ali = bool(prev_row.get("all_bullish" if is_long else "all_bearish", False)) if prev_row is not None else False
+            just_formed = now_ali and not prev_ali
+            need_st = -1 if is_long else 1
+            tier_lines = [
+                f"`scout` — 3 時框對齊「剛剛形成」+ 15m supertrend 尚未翻轉",
+                f"   • {'多頭' if is_long else '空頭'}對齊剛形成 (上根 candle 還沒對齊): {'✓' if just_formed else '✗'}",
+                f"   • st_trend = {st_trend} (期望 {need_st} = 還未翻{'多' if is_long else '空'}): {'✓' if st_trend == need_st else '✗'}",
+            ]
+        elif entry_tag == "pre_scout":
+            now_2tf = bool(last_row.get("pair_bullish_2tf" if is_long else "pair_bearish_2tf", False))
+            prev_2tf = bool(prev_row.get("pair_bullish_2tf" if is_long else "pair_bearish_2tf", False)) if prev_row is not None else False
+            just_2tf = now_2tf and not prev_2tf
+            avoid_1h = -1 if is_long else 1
+            tier_lines = [
+                f"`pre_scout` — 2 時框對齊剛形成 + 1H supertrend 尚未對齊（最早期試單）",
+                f"   • 2-tf {'多' if is_long else '空'}對齊剛形成: {'✓' if just_2tf else '✗'}",
+                f"   • st_1h = {st_1h} (期望 {avoid_1h} = 1H 還沒對齊本方向): {'✓' if st_1h == avoid_1h else '✗'}",
+            ]
+        else:
+            tier_lines = [f"`{entry_tag}` — 未知 tier"]
+
+        # 共通 quality gate (R66 4 條)
+        quality_lines = [
+            "📋 *品質 gate (4 項全通過才放行)*",
+            f"   • ADX: `{adx:.1f}` > `{env_adx_min:g}` → {'✓' if adx > env_adx_min else '✗'}",
+            f"   • vol: `{vol_ratio:.2f}× MA20` > `{env_vol_mult:g}×` → {'✓' if vol > vol_ma * env_vol_mult else '✗'}",
+        ]
+        if require_atr_rising:
+            quality_lines.append(f"   • ATR 上升: {'✓' if atr_rising else '✗'}")
+        else:
+            quality_lines.append("   • ATR 上升: (R91 SUPERTREND_REQUIRE_ATR_RISING=0 已停用)")
+        quality_lines.append(
+            f"   • trend_quality: `{quality:.2f}` > `{env_quality_min:g}` → {'✓' if quality > env_quality_min else '✗'}"
+        )
+
+        return "\n".join(tier_lines + [""] + quality_lines)
+
     # ----- R97: guard pipeline (account/strategy/trade layers) ----- #
     def _check_guards(self, pair: str, side: str, amount: float,
                       rate: float, **kwargs) -> str | None:
@@ -1688,6 +1843,7 @@ class SupertrendStrategy(IStrategy):
                 logger.warning(
                     "entry blocked by guards: %s %s — %s", pair, side, guard_reason,
                 )
+                # R114: journal 保留英文（log/grep 用），但 TG 顯示繁中
                 try:
                     _safe_journal_write(SkippedEvent(
                         timestamp=now_iso(),
@@ -1698,9 +1854,12 @@ class SupertrendStrategy(IStrategy):
                 except Exception:
                     pass
                 try:
+                    pair_short = pair.replace("/USDT:USDT", "")
+                    side_zh = "做多" if side == "long" else "做空"
+                    reason_zh = self._translate_guard_reason(guard_reason)
                     _send_to_all_bots(
-                        f"🛡️ *Guard 攔截* `{pair}` {side.upper()}\n"
-                        f"原因: {guard_reason}"
+                        f"🛡️ *Guard 攔截* `{pair_short}` {side_zh}\n"
+                        f"{reason_zh}"
                     )
                 except Exception:
                     pass
@@ -1748,6 +1907,28 @@ class SupertrendStrategy(IStrategy):
             else "unknown"
         )
 
+        # R114: build entry-logic summary 給 TG + journal 用
+        try:
+            _vol_mult = float(os.environ.get("SUPERTREND_VOL_MULT", "1.2"))
+        except (ValueError, TypeError):
+            _vol_mult = 1.2
+        try:
+            _quality_min = float(os.environ.get("SUPERTREND_QUALITY_MIN", "0.5"))
+        except (ValueError, TypeError):
+            _quality_min = 0.5
+        try:
+            _adx_min = float(os.environ.get("SUPERTREND_ADX_MIN", str(self.adx_threshold)))
+        except (ValueError, TypeError):
+            _adx_min = float(self.adx_threshold)
+        _require_atr = os.environ.get("SUPERTREND_REQUIRE_ATR_RISING", "1") != "0"
+        prev_row = dataframe.iloc[-2] if len(dataframe) >= 2 else None
+        entry_logic_summary = self._build_entry_logic_summary(
+            side=side, entry_tag=entry_tag,
+            last_row=last_row, prev_row=prev_row,
+            env_vol_mult=_vol_mult, env_quality_min=_quality_min,
+            env_adx_min=_adx_min, require_atr_rising=_require_atr,
+        )
+
         # Persist the entry event (journal failures silently ignored)
         try:
             _safe_journal_write(EntryEvent(
@@ -1768,6 +1949,7 @@ class SupertrendStrategy(IStrategy):
                 quality_scale=quality_scale,
                 cb_active=False,   # if cb_active we wouldn't be here
                 note=f"Entry {entry_tag} {side} @ {rate:.4f} | regime={regime_str}",
+                entry_logic_summary=entry_logic_summary,   # R114
             ))
         except Exception as e:
             logger.warning("entry journal write failed: %s", e)
@@ -1802,6 +1984,9 @@ class SupertrendStrategy(IStrategy):
             f"   `{tp_plan.partial_1_at_profit_pct:.0f}%` 獲利 + `1H` 反轉 → 出 `{tp_plan.partial_1_off_pct:.0f}%`\n"
             f"   `{tp_plan.partial_2_at_profit_pct:.0f}%` 獲利 + `15m` 反轉 → 再出 `{tp_plan.partial_2_off_pct:.0f}%`\n"
             f"   `1D` 反轉 → 全平 (尾單放飛)\n"
+            f"\n"
+            f"🎯 *進場邏輯*\n"
+            f"{entry_logic_summary}\n"
             f"\n"
             f"📊 *多時框狀態*\n"
             f"   1D: `{_arrow(state.st_1d)}` ({state.st_1d_duration:.0f}日) | "

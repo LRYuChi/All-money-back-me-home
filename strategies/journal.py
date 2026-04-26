@@ -120,6 +120,11 @@ class EntryEvent:
     quality_scale: float           # additional notional multiplier from quality
     cb_active: bool                # was circuit breaker tripped (skipped)?
     note: str = ""                 # human-readable summary line
+    # R114: structured entry-logic summary for dashboard/TG transparency.
+    # Lists the conditions that triggered THIS tier's entry, e.g.
+    #   "scout: 3-tf 對齊剛形成 ✓ | quality 0.62 > 0.50 ✓ | ADX 23.6 ..."
+    # Empty for events written before R114; new events always populated.
+    entry_logic_summary: str = ""
     event_type: EventType = "entry"
 
 

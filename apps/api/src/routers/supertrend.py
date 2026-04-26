@@ -171,8 +171,42 @@ def supertrend_trades(
             from_date=now - timedelta(days=days),
             to_date=now,
         )
-        # Just exits, newest first
-        exits = [r for r in rows if r.get("event_type") == "exit"]
+        # R114: 把對應的 EntryEvent.entry_logic_summary 附加到每筆 exit
+        # — 讓網頁 history tab 能顯示「為什麼當初進這筆」。
+        # 配對策略: 同 pair 的最近一筆 EntryEvent timestamp ≤ exit timestamp.
+        entries_by_pair: dict[str, list[dict]] = {}
+        for r in rows:
+            if r.get("event_type") == "entry":
+                pair_k = r.get("pair", "")
+                entries_by_pair.setdefault(pair_k, []).append(r)
+        # newest entry first per pair → 找 ≤ exit_ts 的第一筆
+        for pair_k in entries_by_pair:
+            entries_by_pair[pair_k].sort(
+                key=lambda e: e.get("timestamp", ""), reverse=True,
+            )
+
+        def _find_matching_entry(exit_row: dict) -> dict | None:
+            ex_ts = exit_row.get("timestamp", "")
+            ex_pair = exit_row.get("pair", "")
+            for ent in entries_by_pair.get(ex_pair, []):
+                if ent.get("timestamp", "") <= ex_ts:
+                    return ent
+            return None
+
+        # Just exits, newest first; enrich with entry_logic_summary
+        exits = []
+        for r in rows:
+            if r.get("event_type") != "exit":
+                continue
+            enriched = dict(r)
+            ent = _find_matching_entry(r)
+            if ent:
+                enriched["entry_logic_summary"] = ent.get("entry_logic_summary", "")
+                enriched["entry_event_ts"] = ent.get("timestamp", "")
+            else:
+                enriched["entry_logic_summary"] = ""
+                enriched["entry_event_ts"] = None
+            exits.append(enriched)
         exits.sort(key=lambda r: r.get("timestamp", ""), reverse=True)
         return {
             "trades": exits[:limit],
@@ -182,6 +216,49 @@ def supertrend_trades(
     except Exception as e:
         logger.exception("supertrend_trades failed")
         return {"error": str(e), "trades": []}
+
+
+# =================================================================== #
+# /entries — R114 — entry events with entry_logic_summary
+# =================================================================== #
+@router.get("/entries")
+def supertrend_entries(
+    limit: int = Query(50, ge=1, le=500),
+    days: int = Query(7, ge=1, le=365),
+) -> dict[str, Any]:
+    """Recent entry events with entry_logic_summary (R114).
+
+    For each EntryEvent in the window, returns the structured logic
+    summary that explains "why this tier fired this candle" — operator
+    can use this to audit strategy decisions WITHOUT digging through
+    R66 EvaluationEvent breakdown.
+    """
+    try:
+        from strategies.journal import TradeJournal
+    except ImportError as e:
+        return {"error": str(e), "entries": []}
+
+    journal_dir = _resolve_journal_dir()
+    if not journal_dir.exists():
+        return {"entries": [], "error": f"journal missing: {journal_dir}"}
+
+    try:
+        journal = TradeJournal(journal_dir)
+        now = datetime.now(timezone.utc)
+        rows = journal.read_range(
+            from_date=now - timedelta(days=days),
+            to_date=now,
+        )
+        entries = [r for r in rows if r.get("event_type") == "entry"]
+        entries.sort(key=lambda r: r.get("timestamp", ""), reverse=True)
+        return {
+            "entries": entries[:limit],
+            "n_total_in_window": len(entries),
+            "window_days": days,
+        }
+    except Exception as e:
+        logger.exception("supertrend_entries failed")
+        return {"error": str(e), "entries": []}
 
 
 # =================================================================== #
