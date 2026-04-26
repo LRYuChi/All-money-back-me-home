@@ -776,6 +776,9 @@ def supertrend_operations(
         "quality_min": os.environ.get("SUPERTREND_QUALITY_MIN", "0.5"),
         "adx_min": os.environ.get("SUPERTREND_ADX_MIN", "default"),
         "require_atr_rising": os.environ.get("SUPERTREND_REQUIRE_ATR_RISING", "1"),
+        # R105: guards safety toggles
+        "guards_enabled": os.environ.get("SUPERTREND_GUARDS_ENABLED", "1"),
+        "guards_require_load": os.environ.get("SUPERTREND_GUARDS_REQUIRE_LOAD", "0"),
     }
 
     # ---- pipeline activity from journal ---- #
@@ -979,6 +982,12 @@ def supertrend_operations(
         out["pipeline"].get("guard_rejections_top") or {},
         eval_window_days,
     ))
+    # R105: GUARDS_NEVER_FIRED — silent failure detector (lesson from R104)
+    out["alerts"].extend(_build_guards_never_fired_alert(
+        out["pipeline"].get("recent_skipped") or 0,
+        out["pipeline"].get("guard_rejections_top") or {},
+        eval_window_days,
+    ))
     out["alert_count"] = len(out["alerts"])
     out["status"] = "ok" if not out["alerts"] else "degraded"
     return out
@@ -1030,6 +1039,52 @@ def _build_guard_rejection_alerts(
                 f"for the per-event detail."
             )
     return alerts
+
+
+def _build_guards_never_fired_alert(
+    recent_skipped: int,
+    guard_rejections_top: dict[str, int],
+    window_days: int,
+    *,
+    min_skips_for_signal: int = 10,
+) -> list[str]:
+    """R105: detect the R104-class silent failure pattern.
+
+    Symptom: many SkippedEvents in the window (so the pipeline IS rejecting
+    things) BUT zero of them came from R97 guards. R104 was exactly this —
+    `from guards.base import` failed in the freqtrade container, R97's
+    fail-open path returned None, every entry attempt slipped through the
+    guard layer silently for over a week.
+
+    Heuristic:
+      * recent_skipped >= min_skips_for_signal — pipeline is alive enough
+        to skip things, so absence of guard skips is meaningful
+      * guard_rejections_top is empty — NO guard-attributed skip in window
+
+    False-positive scenarios (operator should still investigate):
+      * 100% of skips were R57 / regime / direction-concentration —
+        no guard was even invoked. Possible but unlikely over many skips.
+      * SUPERTREND_GUARDS_ENABLED=0 — guards intentionally off. Caller
+        could add that check, but env-mismatch between API and freqtrade
+        container makes this hard to be sure of (per R104 root cause).
+
+    Conservative: emit alert + tell operator to verify with `docker exec`.
+    """
+    if recent_skipped < min_skips_for_signal:
+        return []
+    if guard_rejections_top:
+        return []   # guards are firing, pipeline OK
+    return [
+        f"GUARDS_NEVER_FIRED — {recent_skipped} skipped events in last "
+        f"{window_days}d but ZERO attributed to R97 guards. This is the "
+        f"R104 silent-failure pattern (guards.* import fails in freqtrade "
+        f"container → fail-open returns None → no protection). VERIFY: "
+        f"`docker exec ambmh-freqtrade-1 sh -c 'cd /freqtrade/user_data/"
+        f"strategies && python3 -c \"from guards.pipeline import "
+        f"create_default_pipeline; print(len(create_default_pipeline()."
+        f"guards))\"'` should print a positive integer (e.g. 9). If it "
+        f"errors, set SUPERTREND_GUARDS_REQUIRE_LOAD=1 + redeploy."
+    ]
 
 
 def _build_guard_alerts(guards: dict) -> list[str]:

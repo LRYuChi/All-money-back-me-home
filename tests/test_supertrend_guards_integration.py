@@ -229,3 +229,74 @@ def test_guard_context_handles_zero_leverage_gracefully(strategy, monkeypatch):
         _call_confirm(strategy, amount=0.01, rate=50000.0, leverage=0.0)
     # Should fall back to notional (= 500) instead of crashing
     assert captured_ctx[0].amount == pytest.approx(500.0)
+
+
+# =================================================================== #
+# R105: SUPERTREND_GUARDS_REQUIRE_LOAD fail-closed semantics
+# =================================================================== #
+
+def test_require_load_off_keeps_fail_open_on_import_error(strategy, monkeypatch):
+    """Default behaviour: import error → permit entry (so packaging glitch
+    doesn't kill the bot)."""
+    monkeypatch.delenv("SUPERTREND_GUARDS_ENABLED", raising=False)
+    monkeypatch.delenv("SUPERTREND_GUARDS_REQUIRE_LOAD", raising=False)
+
+    import sys as _sys
+    real = _sys.modules.get("guards.pipeline")
+    _sys.modules["guards.pipeline"] = None  # force ImportError
+    try:
+        result, _tg, journal = _call_confirm(strategy)
+    finally:
+        if real is not None:
+            _sys.modules["guards.pipeline"] = real
+        else:
+            _sys.modules.pop("guards.pipeline", None)
+    # Entry NOT rejected by guard layer; no R97 SkippedEvent.
+    assert not any(
+        getattr(e, "reason", "").startswith("R97 guard") for e in journal
+    )
+
+
+def test_require_load_on_blocks_entry_on_import_error(strategy, monkeypatch):
+    """R105: with require_load=1, import failure becomes a hard rejection.
+    This is the LIVE-mode setting that prevents the R104 silent failure."""
+    monkeypatch.delenv("SUPERTREND_GUARDS_ENABLED", raising=False)
+    monkeypatch.setenv("SUPERTREND_GUARDS_REQUIRE_LOAD", "1")
+
+    import sys as _sys
+    real = _sys.modules.get("guards.pipeline")
+    _sys.modules["guards.pipeline"] = None
+    try:
+        result, _tg, journal = _call_confirm(strategy)
+    finally:
+        if real is not None:
+            _sys.modules["guards.pipeline"] = real
+        else:
+            _sys.modules.pop("guards.pipeline", None)
+    # MUST be blocked
+    assert result is False
+    assert any(
+        "guards_unavailable_strict" in getattr(e, "reason", "")
+        for e in journal
+    )
+
+
+def test_require_load_irrelevant_when_import_succeeds(strategy, monkeypatch):
+    """When guards import normally, REQUIRE_LOAD has no effect (whether
+    on or off, the pipeline.run() result decides)."""
+    for require_load in ("0", "1"):
+        monkeypatch.delenv("SUPERTREND_GUARDS_ENABLED", raising=False)
+        monkeypatch.setenv("SUPERTREND_GUARDS_REQUIRE_LOAD", require_load)
+        fake_pipeline = MagicMock()
+        fake_pipeline.run.return_value = None  # all guards pass
+        with patch(
+            "guards.pipeline.create_default_pipeline",
+            return_value=fake_pipeline,
+        ):
+            result, _tg, journal = _call_confirm(strategy)
+        # Guard layer didn't block — pipeline.run was consulted normally
+        fake_pipeline.run.assert_called()
+        assert not any(
+            "guards_unavailable_strict" in getattr(e, "reason", "")
+            for e in journal
+        )

@@ -1321,6 +1321,136 @@ def test_operations_skip_reasons_top_works_for_non_guard_skips(monkeypatch, tmp_
     assert any("R97 guard: [L:strategy] [MaxLeverageGuard] too high" in k for k in top.keys())
 
 
+def test_operations_alerts_guards_never_fired_when_skips_no_guard_origin(monkeypatch, tmp_path):
+    """R105: many SkippedEvents but ZERO from R97 guards → silent-failure pattern.
+    This is the R104 incident exactly — pipeline rejects things but guards
+    have somehow never been invoked. Operator must verify with docker exec."""
+    from datetime import datetime, timezone
+    from unittest.mock import patch
+    from strategies.journal import TradeJournal
+
+    monkeypatch.setenv("SUPERTREND_JOURNAL_DIR", str(tmp_path))
+    j = TradeJournal(tmp_path)
+    now = datetime.now(timezone.utc).isoformat()
+    # 12 skipped events — none from R97 guards (e.g. R57, regime, R58)
+    for reason in [
+        "R57 pre-entry filter: orderbook adverse",
+        "R57 pre-entry filter: funding contra",
+        "regime: DEAD",
+        "direction_concentration: 2 open longs, cap 2",
+        "R58 correlation_block: BTC concentrated",
+    ] * 3:   # 15 events but we'll dedupe via uniqueness implicitly
+        j.write({
+            "event_type": "skipped", "timestamp": now,
+            "pair": "BTC/USDT:USDT", "side": "long",
+            "reason": reason,
+        })
+
+    mod = _import_router()
+    with patch(
+        "src.routers.supertrend._ft_get",
+        side_effect=RuntimeError("not relevant"),
+    ):
+        out = mod["operations"](eval_window_days=1, perf_window_days=7)
+
+    assert out["pipeline"]["recent_skipped"] >= 10
+    assert out["pipeline"]["guard_rejections_top"] == {}
+    nf = [a for a in out["alerts"] if "GUARDS_NEVER_FIRED" in a]
+    assert len(nf) == 1
+    assert "R104 silent-failure pattern" in nf[0]
+    assert "docker exec" in nf[0]
+
+
+def test_operations_no_guards_never_fired_alert_when_guards_active(monkeypatch, tmp_path):
+    """If at least one R97 guard rejection appears, the silent-failure
+    pattern is broken — don't alert."""
+    from datetime import datetime, timezone
+    from unittest.mock import patch
+    from strategies.journal import TradeJournal
+
+    monkeypatch.setenv("SUPERTREND_JOURNAL_DIR", str(tmp_path))
+    j = TradeJournal(tmp_path)
+    now = datetime.now(timezone.utc).isoformat()
+    # Mix: 11 non-guard skips + 1 guard skip → guards proven alive
+    for _ in range(11):
+        j.write({
+            "event_type": "skipped", "timestamp": now,
+            "reason": "R57 pre-entry filter: orderbook adverse",
+        })
+    j.write({
+        "event_type": "skipped", "timestamp": now,
+        "reason": "R97 guard: [L:trade] [CooldownGuard] 30s remaining",
+    })
+
+    mod = _import_router()
+    with patch(
+        "src.routers.supertrend._ft_get",
+        side_effect=RuntimeError("not relevant"),
+    ):
+        out = mod["operations"](eval_window_days=1, perf_window_days=7)
+    assert not any("GUARDS_NEVER_FIRED" in a for a in out["alerts"])
+
+
+def test_operations_no_guards_never_fired_alert_at_low_skip_count(monkeypatch, tmp_path):
+    """Fewer than 10 skips → too few to declare silent-failure."""
+    from datetime import datetime, timezone
+    from unittest.mock import patch
+    from strategies.journal import TradeJournal
+
+    monkeypatch.setenv("SUPERTREND_JOURNAL_DIR", str(tmp_path))
+    j = TradeJournal(tmp_path)
+    now = datetime.now(timezone.utc).isoformat()
+    for _ in range(3):
+        j.write({
+            "event_type": "skipped", "timestamp": now,
+            "reason": "R57 pre-entry filter: orderbook adverse",
+        })
+    mod = _import_router()
+    with patch(
+        "src.routers.supertrend._ft_get",
+        side_effect=RuntimeError("not relevant"),
+    ):
+        out = mod["operations"](eval_window_days=1, perf_window_days=7)
+    assert not any("GUARDS_NEVER_FIRED" in a for a in out["alerts"])
+
+
+def test_operations_switchboard_exposes_guards_safety_envs(monkeypatch, tmp_path):
+    """R105: switchboard must surface SUPERTREND_GUARDS_ENABLED and
+    SUPERTREND_GUARDS_REQUIRE_LOAD so operator can verify LIVE-mode safety
+    settings without ssh-ing into the container."""
+    from unittest.mock import patch
+    monkeypatch.setenv("SUPERTREND_JOURNAL_DIR", str(tmp_path))
+    monkeypatch.setenv("SUPERTREND_GUARDS_ENABLED", "1")
+    monkeypatch.setenv("SUPERTREND_GUARDS_REQUIRE_LOAD", "1")
+    mod = _import_router()
+    with patch(
+        "src.routers.supertrend._ft_get",
+        side_effect=RuntimeError("not relevant"),
+    ):
+        out = mod["operations"](eval_window_days=1, perf_window_days=7)
+    sw = out["switchboard"]
+    assert sw["guards_enabled"] == "1"
+    assert sw["guards_require_load"] == "1"
+
+
+def test_operations_switchboard_guards_safety_defaults(monkeypatch, tmp_path):
+    """R105 defaults: guards_enabled=1 (on), guards_require_load=0 (fail-open
+    for dry-run safety)."""
+    from unittest.mock import patch
+    monkeypatch.setenv("SUPERTREND_JOURNAL_DIR", str(tmp_path))
+    monkeypatch.delenv("SUPERTREND_GUARDS_ENABLED", raising=False)
+    monkeypatch.delenv("SUPERTREND_GUARDS_REQUIRE_LOAD", raising=False)
+    mod = _import_router()
+    with patch(
+        "src.routers.supertrend._ft_get",
+        side_effect=RuntimeError("not relevant"),
+    ):
+        out = mod["operations"](eval_window_days=1, perf_window_days=7)
+    sw = out["switchboard"]
+    assert sw["guards_enabled"] == "1"
+    assert sw["guards_require_load"] == "0"
+
+
 def test_operations_includes_guard_state_block(monkeypatch, tmp_path):
     """R98: /operations.guards must surface guard state so operator can
     see daily_loss, consecutive_losses, paused_until without VPS shell."""

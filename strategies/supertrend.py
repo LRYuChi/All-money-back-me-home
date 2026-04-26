@@ -1135,6 +1135,20 @@ class SupertrendStrategy(IStrategy):
             from guards.base import GuardContext
             from guards.pipeline import create_default_pipeline
         except Exception as e:
+            # R105: SUPERTREND_GUARDS_REQUIRE_LOAD=1 turns import failure
+            # into a fail-CLOSED rejection (must be set before going LIVE
+            # to ensure no entry slips through if guards dependency
+            # vanishes mid-deploy). Default 0 keeps fail-open so a
+            # packaging glitch doesn't take the bot offline in dry-run.
+            # See R104 incident report — silent guards failure cost a
+            # week of unprotected trading because of fail-open.
+            require_load = os.environ.get("SUPERTREND_GUARDS_REQUIRE_LOAD", "0") == "1"
+            if require_load:
+                logger.error(
+                    "guards module unavailable AND require_load=1 → BLOCKING entry: %s",
+                    e,
+                )
+                return f"guards_unavailable_strict:{type(e).__name__}"
             logger.warning("guards module unavailable, skipping checks: %s", e)
             return None
         try:
