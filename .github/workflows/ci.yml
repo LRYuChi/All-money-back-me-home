@@ -1,0 +1,37 @@
+name: CI Checks
+
+# R135: 最小 CI gate — 在 PR / push to main 時跑 preflight 防呆 +
+# preflight 自身的 regression test。把 R127 (mount 漏)、R128 (env
+# inconsistency)、R134 (cron module 不存在) class 的 silent failure
+# 擋在 merge 之前，不要等 deploy 後才被 verify_deploy 抓到。
+#
+# 故意保持輕量：只裝 pyyaml + pytest, 不裝 numpy/talib/httpx 等重型 deps
+# (那些屬於 prod runtime, dev / CI 沒裝也能跑 preflight)。
+# Tests 大部分需要重型 deps 不在 CI 跑 (104 collection errors)，
+# 只跑 test_preflight_check.py 這個 self-contained 的。
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  preflight:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install minimal deps
+        run: pip install pyyaml pytest
+
+      - name: Run preflight_check.py against actual repo state
+        run: python3 scripts/preflight_check.py
+
+      - name: Run test_preflight_check.py (regression tests)
+        run: python3 -m pytest tests/test_preflight_check.py -v
