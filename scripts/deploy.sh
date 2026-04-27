@@ -38,6 +38,20 @@ if ! git diff --quiet HEAD 2>/dev/null; then
 fi
 git pull origin main
 
+# R132: re-exec self after git pull. Bash 把 small scripts (≤8KB) 整個
+# buffer 進 memory, git pull 替換 deploy.sh 在 disk 上之後, 後面所有 step
+# 還是執行 OLD in-memory content → 第一次 deploy 永遠跑舊版邏輯,
+# 修 bug 必須 push 兩次才生效 (R131 deploy log 21 行 ERR 就是這個 bug 的
+# fingerprint - R131 fix 在 disk 上但 R130 in-memory 邏輯還在跑).
+#
+# 解法: pull 完 exec 自己, NEW deploy.sh 接手. DEPLOY_REEXEC_DONE env
+# 防無限 loop (子 exec 帶這個 env 就 skip 這段).
+if [ -z "${DEPLOY_REEXEC_DONE:-}" ]; then
+    echo "  ↻ R132: re-exec deploy.sh to load NEW post-pull content"
+    export DEPLOY_REEXEC_DONE=1
+    exec bash "$0" "$@"
+fi
+
 # 2. Check .env
 if [ ! -f .env ]; then
     echo "ERROR: .env file not found. Copy from .env.example and configure."
