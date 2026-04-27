@@ -134,6 +134,30 @@ fi
 # full restart wipes its in-memory signal history. We used to `down && up -d`
 # which disturbed freqtrade on every unrelated deploy and cost trades.
 echo "[5/7] Applying changes (reconcile, only recreate what changed)..."
+
+# R139: Pre-up cleanup of stuck containers. R116 reactive cleanup (post-
+# verify_deploy) wasn't enough — `docker compose up` itself fails with
+# "name conflict" or "Error while Stopping" if previous deploy left
+# containers half-stopped (這個 session 又 hit 一次, 看 commit ff4d3b4
+# deploy 24979783816). Detect & force-remove ONLY containers in stuck
+# states (dead/removing/created/exited), preserving running ones (don't
+# disturb freqtrade in-memory state per R47 design rule).
+echo "  Pre-checking for stuck containers (R139 — orphan cleanup)..."
+for c in $(docker ps -a --filter "name=ambmh-" --format '{{.Names}}' 2>/dev/null); do
+    state=$(docker inspect -f '{{.State.Status}}' "$c" 2>/dev/null)
+    case "$state" in
+        running|paused|restarting)
+            ;;  # leave alone
+        dead|removing|created|exited)
+            echo "    R139: force-removing stuck $c (state=$state)"
+            docker rm -f "$c" 2>/dev/null || true
+            ;;
+        *)
+            echo "    R139: $c state=$state — leaving alone"
+            ;;
+    esac
+done
+
 # --wait blocks until all services reach their healthy state (or timeout).
 # This guarantees nginx reload below sees the *final* upstream IPs.
 docker compose -f docker-compose.prod.yml up -d --build --remove-orphans --wait --wait-timeout 120
