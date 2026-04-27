@@ -224,6 +224,12 @@ services:
       # GUARDS_REQUIRE_LOAD=1: import failure → fail-CLOSED (LIVE-mode required)
       - SUPERTREND_GUARDS_ENABLED=${SUPERTREND_GUARDS_ENABLED:-1}
       - SUPERTREND_GUARDS_REQUIRE_LOAD=${SUPERTREND_GUARDS_REQUIRE_LOAD:-0}
+      # R141: 補 forward 兩個 escape hatches (R115/R112 程式裡有讀但 compose
+      # 漏掉, operator 設 .env 也沒用 — silent disable):
+      #   BACKTEST_WRITE_JOURNAL=1: backtest 模式仍寫 journal (預設 R115 阻擋)
+      #   LEVERAGE_DYNAMIC=1:        opt into R99 動態 leverage (預設 R112=1.0)
+      - SUPERTREND_BACKTEST_WRITE_JOURNAL=${SUPERTREND_BACKTEST_WRITE_JOURNAL:-0}
+      - SUPERTREND_LEVERAGE_DYNAMIC=${SUPERTREND_LEVERAGE_DYNAMIC:-0}
       # Journal location — kept on host volume so dashboard/cron sidecar can read it
       - SUPERTREND_JOURNAL_DIR=${SUPERTREND_JOURNAL_DIR:-/freqtrade/trading_log/journal}
       - SUPABASE_URL=${SUPABASE_URL}
