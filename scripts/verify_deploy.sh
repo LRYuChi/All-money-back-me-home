@@ -141,11 +141,20 @@ else
 fi
 
 # ─── Check 3: env consistency between api and freqtrade (R94 caveat) ────
+# R94 原始 7 個 entry-gate vars。R128 擴充到 16 個（涵蓋所有 compose 在 api/
+# freqtrade 兩邊都定義的 SUPERTREND_* vars）。最關鍵新增：SUPERTREND_LIVE
+# — 若 api 顯示 paper 但 freqtrade 實跑 real money 是災難性 silent failure
+# （dashboard 騙人 + 真錢風險）。其他新增包括 EVAL_JOURNAL（控制 evals 寫
+# 入）、JOURNAL_DIR（路徑分歧 → 兩邊讀不同 journal）等。
 echo
-echo "[3/6] env consistency: api vs freqtrade SUPERTREND_*"
+echo "[3/6] env consistency: api vs freqtrade SUPERTREND_* (R128: 16 vars)"
 mismatch=0
-for var in SUPERTREND_DISABLE_CONFIRMED SUPERTREND_VOL_MULT SUPERTREND_KELLY_MODE \
+for var in SUPERTREND_LIVE SUPERTREND_JOURNAL_DIR \
+           SUPERTREND_DISABLE_CONFIRMED SUPERTREND_VOL_MULT SUPERTREND_KELLY_MODE \
            SUPERTREND_QUALITY_MIN SUPERTREND_REQUIRE_ATR_RISING \
+           SUPERTREND_ADX_MIN SUPERTREND_REGIME_FILTER SUPERTREND_EXIT_MODE \
+           SUPERTREND_FR_ALPHA SUPERTREND_ORDERBOOK_CONFIRM \
+           SUPERTREND_CORRELATION_FILTER SUPERTREND_EVAL_JOURNAL \
            SUPERTREND_GUARDS_ENABLED SUPERTREND_GUARDS_REQUIRE_LOAD; do
     api_v=$(run "docker exec ambmh-api-1 sh -c 'printenv $var || echo MISSING'" 2>/dev/null | tr -d '\r')
     ft_v=$(run "docker exec ambmh-freqtrade-1 sh -c 'printenv $var || echo MISSING'" 2>/dev/null | tr -d '\r')
