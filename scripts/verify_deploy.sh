@@ -48,7 +48,7 @@ ok() { green "  ✓ $1"; }
 # defensive — explicitly diff the file md5 vs the committed content
 # md5 BEFORE running any other check. Catches "deployed but not really"
 # in 2 seconds.
-echo "[0/6] working-tree consistency (R113 — deploy lie detector)"
+echo "[0/7] working-tree consistency (R113 — deploy lie detector)"
 if [ -f /opt/ambmh/strategies/supertrend.py ]; then
     fs_md5=$(md5sum /opt/ambmh/strategies/supertrend.py | awk '{print $1}')
     git_md5=$(cd /opt/ambmh && git show HEAD:strategies/supertrend.py | md5sum | awk '{print $1}')
@@ -71,7 +71,7 @@ fi
 # container restart. Symptom would be identical to R104 (deploy looks
 # done, prod runs old code).
 echo
-echo "[0b/6] strategies/supertrend.py mtime ≤ freqtrade container start (R118)"
+echo "[0b/7] strategies/supertrend.py mtime ≤ freqtrade container start (R118)"
 file_mtime_iso=$(run "stat -c %y /opt/ambmh/strategies/supertrend.py 2>/dev/null | cut -d. -f1" 2>/dev/null || echo "")
 container_start_iso=$(run "docker inspect -f '{{.State.StartedAt}}' ambmh-freqtrade-1 2>/dev/null" 2>/dev/null | cut -d. -f1)
 if [ -z "$file_mtime_iso" ] || [ -z "$container_start_iso" ]; then
@@ -90,7 +90,7 @@ fi
 
 # ─── Check 1: container health ──────────────────────────────────────────
 echo
-echo "[1/6] Container health"
+echo "[1/7] Container health"
 ps_out=$(run "docker ps --format '{{.Names}}|{{.Status}}'" 2>/dev/null || true)
 for svc in api freqtrade telegram-bot supertrend-cron smart-money smart-money-shadow; do
     line=$(echo "$ps_out" | grep "ambmh-${svc}-1" || true)
@@ -109,7 +109,7 @@ done
 
 # ─── Check 2: freqtrade can import guards (R104 root cause check) ──────
 echo
-echo "[2/6] freqtrade container can import guards (R104 fix)"
+echo "[2/7] freqtrade container can import guards (R104 fix)"
 guards_check=$(run "docker exec ambmh-freqtrade-1 sh -c 'cd /freqtrade/user_data/strategies && python3 -c \"from guards.pipeline import create_default_pipeline; print(len(create_default_pipeline().guards))\" 2>&1'" 2>/dev/null || echo "EXEC_FAILED")
 if echo "$guards_check" | grep -qE "^[0-9]+$"; then
     n=$(echo "$guards_check" | head -1)
@@ -130,7 +130,7 @@ fi
 # operator sees "0 trades" thinking strategy stuck when actually it's
 # trading but not recording. Guard against this with explicit verify.
 echo
-echo "[2b/6] R115 backtest detection NOT mis-firing in prod"
+echo "[2b/7] R115 backtest detection NOT mis-firing in prod"
 r115_check=$(run "docker exec ambmh-freqtrade-1 sh -c 'cd /freqtrade/user_data/strategies && python3 -c \"from supertrend import _IS_BACKTEST; print(_IS_BACKTEST)\" 2>&1'" 2>/dev/null || echo "EXEC_FAILED")
 if [ "$r115_check" = "False" ]; then
     ok "_IS_BACKTEST=False (prod trade mode, journal writes ENABLED)"
@@ -151,7 +151,7 @@ fi
 # 最關鍵保留：SUPERTREND_LIVE — 若 api 顯示 paper 但 freqtrade 實跑 real
 # money 是災難性 silent failure (dashboard 騙人 + 真錢風險)。
 echo
-echo "[3/6] env consistency: api vs freqtrade SUPERTREND_* (R130: 15 behavior vars)"
+echo "[3/7] env consistency: api vs freqtrade SUPERTREND_* (R130: 15 behavior vars)"
 mismatch=0
 for var in SUPERTREND_LIVE \
            SUPERTREND_DISABLE_CONFIRMED SUPERTREND_VOL_MULT SUPERTREND_KELLY_MODE \
@@ -176,7 +176,7 @@ done
 # times now (R104 incident, R112 verify, this session). Auto-detect and
 # reload nginx in-line so verify doesn't FAIL just because of stale DNS.
 echo
-echo "[4/6] /api/supertrend/operations alert check (auto-recover from nginx 502)"
+echo "[4/7] /api/supertrend/operations alert check (auto-recover from nginx 502)"
 nginx_status=$(run "curl -sS -m 5 -o /dev/null -w '%{http_code}' http://localhost/api/supertrend/operations" 2>/dev/null || echo "000")
 if [ "$nginx_status" = "502" ] || [ "$nginx_status" = "504" ]; then
     yellow "  nginx returned $nginx_status — auto-reloading upstream DNS"
@@ -213,7 +213,7 @@ fi
 
 # ─── Check 5: guards state from freqtrade (truth source) ─────────────────
 echo
-echo "[5/6] freqtrade-side guards state (authoritative)"
+echo "[5/7] freqtrade-side guards state (authoritative)"
 state=$(run "docker exec ambmh-freqtrade-1 sh -c 'cd /freqtrade/user_data/strategies && python3 -c \"from guards.pipeline import get_state_summary; import json; print(json.dumps(get_state_summary(), default=str))\"'" 2>/dev/null || echo "{}")
 if echo "$state" | grep -q "consecutive_losses"; then
     ok "freqtrade guards state readable: $state"
@@ -227,7 +227,7 @@ fi
 # 直接 exec 失敗 (Permission denied)，但 cron 不 alert，log 也只記一行。
 # Defensive: 每次 deploy 後審查所有 scripts/*.sh 必須 +x，缺的列出來。
 echo
-echo "[6/6] scripts/*.sh +x permission audit (R122/R123/R124 pattern)"
+echo "[6/7] scripts/*.sh +x permission audit (R122/R123/R124 pattern)"
 nox=$(run "cd /opt/ambmh && find scripts -name '*.sh' -type f ! -perm -u+x 2>/dev/null" 2>/dev/null || echo "")
 if [ -z "$nox" ]; then
     ok "all scripts/*.sh have +x permission"
@@ -236,6 +236,42 @@ else
     echo "$nox" | sed 's/^/    /'
     echo "    Fix: chmod +x <file> && git update-index --chmod=+x <file> && git commit"
 fi
+
+# ─── Check 7: freqtrade bot internal state (R142) ──────────────────────
+# R60 documented: container "Up" doesn't mean bot is "running". Bot
+# can be in "stopped" state internally (e.g. operator manually stopped
+# via UI/API after deploy, or freqtrade Worker class booted into stopped
+# despite config_dry.json saying initial_state=running). deploy.sh's R60
+# step issues /start at deploy time, but verify_deploy 沒在 deploy 後
+# probe → operator 後來改 state 永遠不被偵測。
+#
+# 從 /api/supertrend/operations response 讀 bot.state (Check 4 已查過
+# /operations 200, 直接 reuse 那個 response 抽 bot 區塊).
+echo
+echo "[7/7] freqtrade bot state (R142 — silent stop detection)"
+bot_state=$(run "docker exec ambmh-api-1 python3 -c \"
+import urllib.request, json
+try:
+    r = urllib.request.urlopen('http://localhost:8000/api/supertrend/operations', timeout=5)
+    print(json.loads(r.read()).get('bot', {}).get('state', 'unknown'))
+except Exception as e:
+    print(f'err:{e}')
+\"" 2>/dev/null | tr -d '\r' || echo "unreachable")
+case "$bot_state" in
+    running)
+        ok "freqtrade bot state=running (actually trading)"
+        ;;
+    stopped)
+        fail "freqtrade bot state=STOPPED — container Up but bot not trading. Issue /start (deploy.sh R60 logic) or check if operator manually stopped via UI."
+        ;;
+    unknown|err:*|unreachable)
+        fail "freqtrade bot state read failed ('$bot_state') — possible api↔freqtrade RPC issue"
+        ;;
+    *)
+        # Other freqtrade states (paused, etc.) — informational, not deploy-blocker
+        echo "  ⚠ freqtrade bot state='$bot_state' (non-running but non-stopped)"
+        ;;
+esac
 
 # ─── Summary ────────────────────────────────────────────────────────────
 echo
