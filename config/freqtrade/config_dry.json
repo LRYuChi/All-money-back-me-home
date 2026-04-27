@@ -29,11 +29,10 @@
         "pair_whitelist": [
             "BTC/USDT:USDT",
             "ETH/USDT:USDT",
-            "AVAX/USDT:USDT",
-            "NEAR/USDT:USDT",
-            "ATOM/USDT:USDT",
+            "SOL/USDT:USDT",
             "ADA/USDT:USDT",
-            "DOT/USDT:USDT"
+            "XRP/USDT:USDT",
+            "DOGE/USDT:USDT"
         ],
         "pair_blacklist": []
     },
@@ -55,44 +54,7 @@
     },
     "pairlists": [
         {
-            "method": "VolumePairList",
-            "number_assets": 30,
-            "sort_key": "quoteVolume",
-            "min_value": 0,
-            "refresh_period": 86400,
-            "lookback_days": 7,
-            "lookback_timeframe": "1d",
-            "lookback_period": 0
-        },
-        {
-            "method": "AgeFilter",
-            "min_days_listed": 30
-        },
-        {
-            "method": "PriceFilter",
-            "low_price_ratio": 0.001,
-            "min_price": 0.001
-        },
-        {
-            "method": "SpreadFilter",
-            "max_spread_ratio": 0.005
-        },
-        {
-            "method": "RangeStabilityFilter",
-            "lookback_days": 7,
-            "min_rate_of_change": 0.03,
-            "refresh_period": 86400
-        },
-        {
-            "method": "VolatilityFilter",
-            "lookback_days": 7,
-            "min_volatility": 0.01,
-            "max_volatility": 0.50,
-            "refresh_period": 86400
-        },
-        {
-            "method": "ShuffleFilter",
-            "seed": 42
+            "method": "StaticPairList"
         }
     ],
     "telegram": {
