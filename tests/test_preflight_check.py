@@ -25,6 +25,7 @@ services:
     image: freqtradeorg/freqtrade:stable
     volumes:
       - ./trading_log:/freqtrade/trading_log
+      - ./guards:/freqtrade/user_data/strategies/guards
     environment:
       - SUPERTREND_LIVE=0
   api:
@@ -32,6 +33,7 @@ services:
     volumes:
       - ./trading_log:/app/trading_log:ro
       - ./strategies:/app/strategies:ro
+      - ./guards:/app/guards
     environment:
       - SUPABASE_URL=${SUPABASE_URL}
       - SUPERTREND_JOURNAL_DIR=/app/trading_log/journal
@@ -40,8 +42,15 @@ services:
     volumes:
       - ./trading_log:/app/trading_log
       - ./strategies:/app/strategies:ro
+      - ./guards:/app/guards:ro
     environment:
       - SUPERTREND_JOURNAL_DIR=/app/trading_log/journal
+  telegram-bot:
+    build: ./apps/api
+    volumes:
+      - ./guards:/app/guards
+    environment:
+      - SUPABASE_URL=${SUPABASE_URL}
 """
 
 
@@ -192,3 +201,55 @@ def test_run_returns_1_when_compose_missing(fake_compose, monkeypatch):
 def test_run_returns_1_on_invalid_yaml(fake_compose):
     fake_compose.write_text("services: {api: {volumes: [unterminated\n")
     assert pf.run() == 1
+
+
+# =================================================================== #
+# R134: check_cron_module_resolution
+# =================================================================== #
+def test_cron_module_resolution_passes_for_existing_modules(tmp_path, monkeypatch):
+    """Sanity: invocations referencing modules that DO exist on the host pass."""
+    cron_file = tmp_path / "crontab"
+    # market_monitor.report_collector EXISTS in repo
+    cron_file.write_text(
+        "0 */6 * * * docker compose exec -T telegram-bot "
+        "python -m market_monitor.report_collector\n"
+    )
+    monkeypatch.setattr(pf, "CRON_PATH", cron_file)
+    errors = pf.check_cron_module_resolution()
+    assert errors == [], f"unexpected errors: {errors}"
+
+
+def test_cron_module_resolution_detects_missing_module(tmp_path, monkeypatch):
+    """R133 regression: 'python -m src.jobs.daily_report' should fail
+    because apps/api/src/jobs/daily_report.py does not exist."""
+    cron_file = tmp_path / "crontab"
+    cron_file.write_text(
+        "0 8 * * * docker compose exec -T api python -m src.jobs.daily_report\n"
+    )
+    monkeypatch.setattr(pf, "CRON_PATH", cron_file)
+    errors = pf.check_cron_module_resolution()
+    assert len(errors) == 1
+    assert "src.jobs.daily_report" in errors[0]
+    assert "missing module" in errors[0]
+    assert "R133" in errors[0]
+
+
+def test_cron_module_resolution_skips_unmapped_prefixes(tmp_path, monkeypatch):
+    """Modules outside CRON_MODULE_HOST_DIRS are skipped (no false-positive)."""
+    cron_file = tmp_path / "crontab"
+    cron_file.write_text(
+        "0 0 * * * python -m some.unknown.thing\n"
+    )
+    monkeypatch.setattr(pf, "CRON_PATH", cron_file)
+    assert pf.check_cron_module_resolution() == []
+
+
+def test_cron_module_resolution_skips_comments(tmp_path, monkeypatch):
+    """Commented-out cron lines must not trigger errors."""
+    cron_file = tmp_path / "crontab"
+    cron_file.write_text(
+        "# 0 8 * * * python -m src.jobs.daily_report\n"  # commented = OK
+        "# python -m market_monitor.does_not_exist  (yet)\n"
+    )
+    monkeypatch.setattr(pf, "CRON_PATH", cron_file)
+    assert pf.check_cron_module_resolution() == []

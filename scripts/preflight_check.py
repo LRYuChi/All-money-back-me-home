@@ -30,6 +30,22 @@ import yaml
 REPO_ROOT = Path(__file__).resolve().parent.parent
 COMPOSE_PATH = REPO_ROOT / "docker-compose.prod.yml"
 ENV_EXAMPLE_PATH = REPO_ROOT / ".env.example"
+CRON_PATH = REPO_ROOT / "cron" / "crontab"
+
+# R134: cron `python -m <module>` invocation 對應的 module 在 host 端
+# 應該存在於哪個目錄。這裡是 host-side path mapping;
+#   key = module dotted path prefix
+#   val = (host_dir, in-container note)
+# host_dir 用 pathlib relative-to REPO_ROOT 看 module 是否存在。
+# Module 在 container 裡的 path 不同但 mount 從這個 host_dir, host 端見到
+# 就證明 container 也見得到（前提 mount 正確 — REQUIRED_MOUNTS 已 cover）
+CRON_MODULE_HOST_DIRS = {
+    "src.jobs.": REPO_ROOT / "apps" / "api" / "src" / "jobs",
+    "market_monitor.": REPO_ROOT / "market_monitor",
+    "strategies.cli.": REPO_ROOT / "strategies" / "cli",
+    "polymarket.": REPO_ROOT / "polymarket",
+    "smart_money.": REPO_ROOT / "smart_money",
+}
 
 
 # Each rule is (service, mount_target_path) — these MUST be present or the
@@ -200,6 +216,56 @@ def check_cross_service_consistency(compose: dict) -> list[str]:
     return errors
 
 
+def check_cron_module_resolution() -> list[str]:
+    """R134: 對 cron/crontab 每個 'python -m <module>' invocation, 檢查
+    對應的 module 檔案是否存在 host 端。
+
+    R133 fingerprint: cron line 寫 'python -m src.jobs.daily_report' 但
+    apps/api/src/jobs/daily_report.py 不存在 → 每天 silent ModuleNotFoundError
+    無 alert。預先 fail-fast 比靠 operator 半夜爬 log 找問題好。
+
+    支援的 prefix 在 CRON_MODULE_HOST_DIRS。未 mapping 的 prefix 跳過 (避免
+    false-positive). 'bash <script>' 與 '/path/script.sh' 走 +x audit
+    (verify_deploy.sh Check 6 已 cover, 這裡 skip 避免重複)。
+    """
+    errors: list[str] = []
+    if not CRON_PATH.exists():
+        return [f"{CRON_PATH} missing — cron schedule undocumented"]
+
+    text = CRON_PATH.read_text()
+    # match `python[3] -m <dotted.module>` (with optional version suffix)
+    mod_pat = re.compile(r"\bpython3?\s+-m\s+([a-zA-Z_][\w.]+)")
+    for line_no, line in enumerate(text.splitlines(), 1):
+        # skip comments + blanks
+        s = line.strip()
+        if not s or s.startswith("#"):
+            continue
+        for m in mod_pat.finditer(line):
+            mod = m.group(1)
+            # find matching prefix
+            host_dir = None
+            for prefix, hd in CRON_MODULE_HOST_DIRS.items():
+                if mod.startswith(prefix):
+                    host_dir = hd
+                    rest = mod[len(prefix):]
+                    break
+            if host_dir is None:
+                # Unmapped prefix — record as warning not error
+                continue
+            # rest is e.g. 'daily_report' or 'foo.bar'; first segment = file
+            file_stem = rest.split(".")[0]
+            module_file = host_dir / f"{file_stem}.py"
+            module_pkg = host_dir / file_stem / "__init__.py"
+            if not (module_file.exists() or module_pkg.exists()):
+                errors.append(
+                    f"cron/crontab line {line_no}: 'python -m {mod}' references "
+                    f"missing module — expected {module_file.relative_to(REPO_ROOT)} "
+                    f"or {module_pkg.relative_to(REPO_ROOT)}. R133-class silent "
+                    f"failure (cron will ModuleNotFoundError)."
+                )
+    return errors
+
+
 # =================================================================== #
 # Entry
 # =================================================================== #
@@ -220,6 +286,7 @@ def run() -> int:
     all_errors += check_required_mounts(compose)
     all_errors += check_env_example_references()
     all_errors += check_cross_service_consistency(compose)
+    all_errors += check_cron_module_resolution()
 
     if all_errors:
         print("=== Preflight FAILED ===")
@@ -229,7 +296,7 @@ def run() -> int:
         return 1
 
     print("=== Preflight OK ===")
-    print("Compose YAML, mounts, envs, and cross-service consistency all valid.")
+    print("Compose YAML, mounts, envs, cron modules, and cross-service consistency all valid.")
     return 0
 
 
