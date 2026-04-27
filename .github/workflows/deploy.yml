@@ -9,11 +9,21 @@ jobs:
   deploy:
     runs-on: ubuntu-latest
     steps:
+      # R129: 把 SSH connection timeout 從 default 30s 拉到 120s。
+      # R122 + R128 兩次都因 'dial tcp ***:22: i/o timeout' (30s 內 connect
+      # 不到) 整個 deploy 失敗 → R128 verify_deploy Check 3 16-var 修補完全
+      # 沒到 VPS。VPS SSH 偶爾 transient slow (可能 fail2ban / load),
+      # 30s 太緊。120s 給 4x buffer，足以撐過大多數 transient slow。
+      # command_timeout 保持 default 10m (deploy.sh 平均 1m41s 跑得完)。
+      # appleboy/ssh-action v1 沒 native retry，若 transient 仍頻繁，
+      # future-R130 再用 nick-fields/retry@v3 wrapper 包這個 step。
       - name: Deploy via SSH
         uses: appleboy/ssh-action@v1
         with:
           host: ${{ secrets.VPS_HOST }}
           username: root
           key: ${{ secrets.VPS_SSH_KEY }}
+          timeout: 120s
+          command_timeout: 10m
           script: |
             cd /opt/ambmh && bash scripts/deploy.sh
