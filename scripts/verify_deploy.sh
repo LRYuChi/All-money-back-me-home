@@ -141,15 +141,19 @@ else
 fi
 
 # ─── Check 3: env consistency between api and freqtrade (R94 caveat) ────
-# R94 原始 7 個 entry-gate vars。R128 擴充到 16 個（涵蓋所有 compose 在 api/
-# freqtrade 兩邊都定義的 SUPERTREND_* vars）。最關鍵新增：SUPERTREND_LIVE
-# — 若 api 顯示 paper 但 freqtrade 實跑 real money 是災難性 silent failure
-# （dashboard 騙人 + 真錢風險）。其他新增包括 EVAL_JOURNAL（控制 evals 寫
-# 入）、JOURNAL_DIR（路徑分歧 → 兩邊讀不同 journal）等。
+# R94 原始 7 個 entry-gate vars。R128 擴充到 16 個。R130 移除 SUPERTREND_
+# JOURNAL_DIR (false positive: 它是 container-internal path，因 mount 點
+# 不同本就會異 — api 用 /app/trading_log/journal, freqtrade 用 /freqtrade/
+# trading_log/journal 但 host 都是 ./trading_log/journal 同一份資料).
+# preflight_check.py CROSS_SERVICE_CONSISTENCY 已 host 端 path-aware cross-
+# check 過,這層 runtime 檢查只比對 behavior-flag vars。
+#
+# 最關鍵保留：SUPERTREND_LIVE — 若 api 顯示 paper 但 freqtrade 實跑 real
+# money 是災難性 silent failure (dashboard 騙人 + 真錢風險)。
 echo
-echo "[3/6] env consistency: api vs freqtrade SUPERTREND_* (R128: 16 vars)"
+echo "[3/6] env consistency: api vs freqtrade SUPERTREND_* (R130: 15 behavior vars)"
 mismatch=0
-for var in SUPERTREND_LIVE SUPERTREND_JOURNAL_DIR \
+for var in SUPERTREND_LIVE \
            SUPERTREND_DISABLE_CONFIRMED SUPERTREND_VOL_MULT SUPERTREND_KELLY_MODE \
            SUPERTREND_QUALITY_MIN SUPERTREND_REQUIRE_ATR_RISING \
            SUPERTREND_ADX_MIN SUPERTREND_REGIME_FILTER SUPERTREND_EXIT_MODE \
