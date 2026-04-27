@@ -89,12 +89,24 @@ class PerformanceAggregator:
         from_date: datetime | None = None,
         to_date: datetime | None = None,
         last_n_trades: int | None = None,
+        exclude_dates: set[str] | None = None,
     ) -> PerformanceSnapshot:
         """Compute a snapshot over the configured window. last_n_trades
-        wins over date window when both supplied."""
+        wins over date window when both supplied.
+
+        exclude_dates: set of ISO YYYY-MM-DD strings; exit events whose
+        timestamp date falls in this set are dropped before aggregation.
+        Used to exclude journal pollution (e.g. backtest runs that wrote
+        into prod journal before R115, or force_entry test events).
+        """
         events = self._journal.read_range(from_date, to_date)
         # Keep only exit events (we measure *closed* trades)
         exits = [e for e in events if e.get("event_type") == "exit"]
+        if exclude_dates:
+            exits = [
+                e for e in exits
+                if str(e.get("timestamp", ""))[:10] not in exclude_dates
+            ]
         if last_n_trades is not None and last_n_trades > 0:
             exits = exits[-last_n_trades:]
         return self._aggregate(exits, from_date, to_date)

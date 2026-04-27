@@ -406,3 +406,58 @@ def test_aggregator_ignores_entry_events(tmp_path):
     snap = PerformanceAggregator(j).snapshot()
     assert snap.n_trades == 1
     assert snap.avg_win_pct == 2.0
+
+
+# ================================================================== #
+# exclude_dates — drops journal pollution (backtest / force_entry leaks)
+# ================================================================== #
+def test_exclude_dates_drops_polluted_day(tmp_path):
+    """Events on excluded dates must not count toward any aggregate."""
+    j = TradeJournal(tmp_path)
+    _seed(j, [
+        _exit("2026-04-25T22:00:00+00:00", -50.0),   # force_entry pollution
+        _exit("2026-04-26T00:35:00+00:00", -30.0),   # backtest burst
+        _exit("2026-04-26T01:34:00+00:00", -20.0),   # backtest burst
+        _exit("2026-04-27T03:00:00+00:00", 5.0),     # real trade
+    ])
+    snap = PerformanceAggregator(j).snapshot(
+        exclude_dates={"2026-04-25", "2026-04-26"},
+    )
+    assert snap.n_trades == 1
+    assert snap.n_wins == 1
+    assert snap.n_losses == 0
+    assert snap.win_rate == 1.0
+
+
+def test_exclude_dates_none_keeps_all(tmp_path):
+    """exclude_dates=None must behave identically to omitting the kwarg."""
+    j = TradeJournal(tmp_path)
+    seed = [
+        _exit("2026-04-26T00:35:00+00:00", -30.0),
+        _exit("2026-04-27T03:00:00+00:00", 5.0),
+    ]
+    _seed(j, seed)
+    base = PerformanceAggregator(j).snapshot()
+    explicit = PerformanceAggregator(j).snapshot(exclude_dates=None)
+    empty = PerformanceAggregator(j).snapshot(exclude_dates=set())
+    assert base.n_trades == explicit.n_trades == empty.n_trades == 2
+
+
+def test_exclude_dates_preserves_other_groupings(tmp_path):
+    """Per-tag / per-pair stats must reflect post-exclusion sample only."""
+    j = TradeJournal(tmp_path)
+    _seed(j, [
+        _exit("2026-04-26T00:35:00+00:00", -10.0, tag="confirmed",
+              pair="BTC/USDT:USDT"),
+        _exit("2026-04-27T03:00:00+00:00", 3.0, tag="scout",
+              pair="ETH/USDT:USDT"),
+    ])
+    snap = PerformanceAggregator(j).snapshot(
+        exclude_dates={"2026-04-26"},
+    )
+    assert snap.n_trades == 1
+    assert "confirmed" not in snap.by_tag
+    assert "scout" in snap.by_tag
+    assert snap.by_tag["scout"].n == 1
+    assert "BTC/USDT:USDT" not in snap.by_pair
+    assert "ETH/USDT:USDT" in snap.by_pair

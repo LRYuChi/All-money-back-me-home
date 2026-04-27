@@ -64,6 +64,15 @@ def _resolve_journal_dir() -> Path:
 @router.get("/snapshot")
 def supertrend_snapshot(
     days: int = Query(7, ge=1, le=365, description="Window in days"),
+    exclude_dates: str = Query(
+        "",
+        description=(
+            "Comma-separated ISO dates (YYYY-MM-DD) to exclude. Use to drop "
+            "journal pollution: 2026-04-25 had force_entry test trades, "
+            "2026-04-26 had R84/R85 backtest runs that wrote into prod "
+            "journal before R115 fixed the default."
+        ),
+    ),
 ) -> dict[str, Any]:
     """Performance snapshot over last N days."""
     try:
@@ -79,6 +88,8 @@ def supertrend_snapshot(
             "n_trades": 0,
         }
 
+    excluded = {d.strip() for d in exclude_dates.split(",") if d.strip()}
+
     try:
         journal = TradeJournal(journal_dir)
         agg = PerformanceAggregator(journal)
@@ -86,8 +97,12 @@ def supertrend_snapshot(
         snap = agg.snapshot(
             from_date=now - timedelta(days=days),
             to_date=now,
+            exclude_dates=excluded or None,
         )
-        return asdict(snap)
+        result = asdict(snap)
+        if excluded:
+            result["excluded_dates"] = sorted(excluded)
+        return result
     except Exception as e:
         logger.exception("supertrend_snapshot failed")
         return {"error": str(e), "n_trades": 0}
@@ -855,6 +870,15 @@ def _build_ops_alerts(
 def supertrend_operations(
     eval_window_days: int = Query(1, ge=1, le=7),
     perf_window_days: int = Query(7, ge=1, le=90),
+    exclude_dates: str = Query(
+        "",
+        description=(
+            "Comma-separated ISO dates (YYYY-MM-DD) to exclude from the "
+            "performance section. Overrides SUPERTREND_OPS_EXCLUDE_DATES. "
+            "Use to drop journal pollution from backtest runs / force_entry "
+            "tests that wrote into prod journal."
+        ),
+    ),
 ) -> dict[str, Any]:
     """One-stop operations snapshot — composes outputs from the 6 other
     endpoints + computes actionable alerts.
@@ -867,6 +891,15 @@ def supertrend_operations(
         "fetched_at": datetime.now(timezone.utc).isoformat(),
         "errors": {},
     }
+
+    # exclude_dates query param > env default. Env lets ops bake in
+    # known-polluted days (2026-04-25 force_entry tests, 2026-04-26 R84/R85
+    # backtest runs that wrote prod journal before R115) so dashboards
+    # don't silently mislead.
+    _excluded_raw = exclude_dates or os.environ.get(
+        "SUPERTREND_OPS_EXCLUDE_DATES", "",
+    )
+    excluded_dates = {d.strip() for d in _excluded_raw.split(",") if d.strip()}
 
     # ---- bot state (freqtrade /show_config) ---- #
     cfg = _ft_show_config_state()
@@ -1040,6 +1073,7 @@ def supertrend_operations(
             snap = agg.snapshot(
                 from_date=now - timedelta(days=perf_window_days),
                 to_date=now,
+                exclude_dates=excluded_dates or None,
             )
             # R95: per-pair productivity. R90 walk-forward found BTC=6/8
             # wins, ADA=2/8, ETH/SOL/XRP=0/0 — yet operator had no visible
@@ -1073,6 +1107,7 @@ def supertrend_operations(
 
             out["performance"] = {
                 "window_days": perf_window_days,
+                "excluded_dates": sorted(excluded_dates) if excluded_dates else [],
                 "n_trades": snap.n_trades,
                 "win_rate": snap.win_rate,
                 "sum_pnl_usd": snap.sum_pnl_usd,
