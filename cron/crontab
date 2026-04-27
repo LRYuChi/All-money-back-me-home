@@ -18,3 +18,9 @@
 # Polymarket Phase 1 — every 5 minutes
 # Logging handled internally; status at data/reports/polymarket_pipeline_status.json
 */5 * * * * /opt/ambmh/scripts/polymarket_pipeline.sh
+
+# R138: Daily log rotation — keep 14 天 cron + script logs, 防 silent disk-full.
+# polymarket 每 5 min 跑一次 (288/天), 加 hourly_scanner + daily/digest, 一週累積
+# 可達 GB 級。VPS root partition 滿了 = 所有 service 寫不進 log → cascading
+# silent failure。每天 04:30 UTC (低流量) 砍 14 天前的 .log 檔。
+30 4 * * * find /var/log/ambmh -name "*.log" -mtime +14 -delete 2>/dev/null
