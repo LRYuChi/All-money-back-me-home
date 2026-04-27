@@ -74,27 +74,37 @@ if command -v supabase &> /dev/null; then
     supabase db push || echo "  Migration skipped (check Supabase config)"
 elif docker compose -f docker-compose.prod.yml ps smart-money 2>/dev/null | grep -q " Up "; then
     echo "[4/7] Running database migrations via smart-money container..."
-    migration_count=0
-    migration_failed=0
-    for f in supabase/migrations/*.sql; do
-        [ -f "$f" ] || continue
-        migration_count=$((migration_count + 1))
-        echo "  applying $(basename "$f")..."
-        if ! cat "$f" | docker compose -f docker-compose.prod.yml exec -T smart-money python -c '
-import sys, os, psycopg
+    # R131: pre-check DATABASE_URL once before looping. 之前每個 .sql 都進
+    # container 重 import psycopg 跑 'if not url: print(...); sys.exit(1)',
+    # operator 沒設 SM_DATABASE_URL 時 → 21 行 'ERR: DATABASE_URL not set'
+    # spam, 真實根因被淹沒。一次檢查直接 skip 整個 batch + 給明確 hint。
+    db_url_check=$(docker compose -f docker-compose.prod.yml exec -T smart-money \
+        sh -c 'echo "${DATABASE_URL:-MISSING}"' 2>/dev/null | tr -d '\r')
+    if [ "$db_url_check" = "MISSING" ] || [ -z "$db_url_check" ]; then
+        echo "  ⚠️  R131: smart-money container 沒 DATABASE_URL — skip migrations"
+        echo "       Fix: 在 .env 設 SM_DATABASE_URL=postgresql://... (見 .env.example)"
+        echo "       (smart_money phase 0 stub 暫不需 DB; 但若想啟用 smart_money table"
+        echo "        相關 features 必須設這個)"
+    else
+        migration_count=0
+        migration_failed=0
+        for f in supabase/migrations/*.sql; do
+            [ -f "$f" ] || continue
+            migration_count=$((migration_count + 1))
+            echo "  applying $(basename "$f")..."
+            if ! cat "$f" | docker compose -f docker-compose.prod.yml exec -T smart-money python -c '
+import sys, psycopg, os
 sql = sys.stdin.read()
-url = os.environ.get("DATABASE_URL", "")
-if not url:
-    print("ERR: DATABASE_URL not set in container", file=sys.stderr)
-    sys.exit(1)
+url = os.environ["DATABASE_URL"]   # R131: pre-check 已驗證存在
 with psycopg.connect(url, autocommit=True) as c, c.cursor() as cur:
     cur.execute(sql)
 '; then
-            echo "    FAILED — continuing"
-            migration_failed=$((migration_failed + 1))
-        fi
-    done
-    echo "  migrations: $migration_count attempted, $migration_failed failed"
+                echo "    FAILED — continuing"
+                migration_failed=$((migration_failed + 1))
+            fi
+        done
+        echo "  migrations: $migration_count attempted, $migration_failed failed"
+    fi
 else
     echo "[4/7] No supabase CLI and smart-money container not running —"
     echo "      skipping migrations. Next deploy will pick them up once"
