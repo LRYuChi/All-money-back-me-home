@@ -9,21 +9,39 @@ jobs:
   deploy:
     runs-on: ubuntu-latest
     steps:
-      # R129: 把 SSH connection timeout 從 default 30s 拉到 120s。
-      # R122 + R128 兩次都因 'dial tcp ***:22: i/o timeout' (30s 內 connect
-      # 不到) 整個 deploy 失敗 → R128 verify_deploy Check 3 16-var 修補完全
-      # 沒到 VPS。VPS SSH 偶爾 transient slow (可能 fail2ban / load),
-      # 30s 太緊。120s 給 4x buffer，足以撐過大多數 transient slow。
-      # command_timeout 保持 default 10m (deploy.sh 平均 1m41s 跑得完)。
-      # appleboy/ssh-action v1 沒 native retry，若 transient 仍頻繁，
-      # future-R130 再用 nick-fields/retry@v3 wrapper 包這個 step。
-      - name: Deploy via SSH
+      # R129 + R137: SSH 連線兩段保險。
+      #
+      # R129 把 connection timeout 從 30s → 120s 解決大多數 transient slow,
+      # 但 R136 deploy 又因 SSH unreachable >120s fail (累積 R122/R128/R136
+      # 三次)。VPS SSH 不可預測, 純拉長 timeout 收益遞減 → R137 改用
+      # 「兩段 attempt + continue-on-error」明確 retry pattern, attempt 1
+      # fail 時 attempt 2 自動補上。
+      #
+      # 兩段 timeout 都 180s, attempt 1 fail 後最多再 180s = worst-case
+      # 6min, 仍遠低於 cron 30min 間隔。command_timeout 保留 10m。
+      # appleboy/ssh-action v1 沒 native retry, 用這個 pattern 比 wrap
+      # 第三方 action (例: nick-fields/retry) 更直接, 失敗點看得到。
+      - name: Deploy via SSH (attempt 1)
+        id: ssh1
+        uses: appleboy/ssh-action@v1
+        continue-on-error: true
+        with:
+          host: ${{ secrets.VPS_HOST }}
+          username: root
+          key: ${{ secrets.VPS_SSH_KEY }}
+          timeout: 180s
+          command_timeout: 10m
+          script: |
+            cd /opt/ambmh && bash scripts/deploy.sh
+
+      - name: Deploy via SSH (attempt 2 — retry on transient failure)
+        if: steps.ssh1.outcome == 'failure'
         uses: appleboy/ssh-action@v1
         with:
           host: ${{ secrets.VPS_HOST }}
           username: root
           key: ${{ secrets.VPS_SSH_KEY }}
-          timeout: 120s
+          timeout: 180s
           command_timeout: 10m
           script: |
             cd /opt/ambmh && bash scripts/deploy.sh
