@@ -44,6 +44,16 @@ fi
 echo "[2/6] git pull..."
 git pull origin main 2>&1 | tail -3
 
+# R136: 同 R132 fix — bash 把 small script (~6KB) 整個 buffer 進 memory,
+# git pull 替換 disk 上的 redeploy_service.sh 之後, 後續 step 還是跑 OLD
+# in-memory content。任何修改要兩次 redeploy 才生效。re-exec 讓 NEW 接手。
+# REDEPLOY_REEXEC_DONE env 防無限 loop。
+if [ -z "${REDEPLOY_REEXEC_DONE:-}" ]; then
+    echo "  ↻ R136: re-exec redeploy_service.sh to load NEW post-pull content"
+    export REDEPLOY_REEXEC_DONE=1
+    exec bash "$0" "$@"
+fi
+
 echo "[3/6] Recreating $SERVICE..."
 docker compose -f docker-compose.prod.yml up -d --no-deps $REBUILD_FLAG \
     --force-recreate "$SERVICE" 2>&1 | tail -5
