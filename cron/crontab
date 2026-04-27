@@ -5,7 +5,12 @@
 5 * * * * cd /opt/ambmh && docker compose -f docker-compose.prod.yml exec -T api python -m src.jobs.hourly_scanner >> /var/log/ambmh/scanner.log 2>&1
 
 # Daily market report — every day at 08:00 UTC (16:00 Taiwan)
-0 8 * * * cd /opt/ambmh && docker compose -f docker-compose.prod.yml exec -T api python -m src.jobs.daily_report >> /var/log/ambmh/daily.log 2>&1
+# R133: 之前是 'docker compose exec -T api python -m src.jobs.daily_report'
+# 但 apps/api/src/jobs/daily_report.py 不存在 (只有 hourly_scanner.py +
+# run_backtest.py). silent fail (ModuleNotFoundError 進 daily.log 但無 alert),
+# 不知 silent 多久 — 可能從這個 cron line 寫入起就一直壞掉. 改用 host
+# 直接 invoke scripts/daily_report.py (跟 polymarket 同 pattern).
+0 8 * * * cd /opt/ambmh && /usr/bin/python3 scripts/daily_report.py >> /var/log/ambmh/daily.log 2>&1
 
 # Institutional report collection + AI digest — every 6 hours (00/06/12/18 UTC)
 0 */6 * * * cd /opt/ambmh && docker compose -f docker-compose.prod.yml exec -T telegram-bot python -m market_monitor.report_collector >> /var/log/ambmh/digest.log 2>&1
