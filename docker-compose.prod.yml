@@ -90,6 +90,12 @@ services:
       - SUPERTREND_CORRELATION_FILTER=${SUPERTREND_CORRELATION_FILTER:-0}
       - SUPERTREND_EVAL_JOURNAL=${SUPERTREND_EVAL_JOURNAL:-1}
       - SUPERTREND_LIVE=${SUPERTREND_LIVE:-0}
+      # R140: 774cafd 加 exclude_dates filter, router 程式有 env-var 後備
+      # (SUPERTREND_OPS_EXCLUDE_DATES) 但 compose 沒 forward → operator 設了
+      # .env 也讀不到, /operations 永遠 fall through 到空 set。補 forward
+      # 讓 ops bake-in 已知污染日 (2026-04-25 force_entry tests, 2026-04-26
+      # R84/R85 backtest 污染) 而不必每次 query 帶參數。
+      - SUPERTREND_OPS_EXCLUDE_DATES=${SUPERTREND_OPS_EXCLUDE_DATES:-}
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health', timeout=3)"]
       interval: 30s
