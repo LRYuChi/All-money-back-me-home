@@ -2034,6 +2034,24 @@ class SupertrendStrategy(IStrategy):
             f"\n"
             f"策略: Supertrend 4L Scout (R48)"
         )
+
+        # Record this accepted entry into EntryRateGuard's rolling window so
+        # the wall-clock circuit breaker can fire on the (max_per_hour+1)-th
+        # entry. Mirrors the exit-side pattern at confirm_trade_exit (R99).
+        # Wrapped: a guards-module failure must not block a successful entry.
+        if os.environ.get("SUPERTREND_GUARDS_ENABLED", "1") == "1":
+            try:
+                _strat_dir = os.path.dirname(os.path.abspath(__file__))
+                if _strat_dir not in sys.path:
+                    sys.path.insert(0, _strat_dir)
+                from guards.guards import EntryRateGuard
+                from guards.pipeline import get_guard
+                erg = get_guard(EntryRateGuard)
+                if erg:
+                    erg.record_entry()
+            except Exception as e:
+                logger.warning("EntryRateGuard.record_entry failed: %s", e)
+
         return True
 
     def confirm_trade_exit(self, pair: str, trade: Trade, order_type: str,

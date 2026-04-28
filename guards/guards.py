@@ -6,10 +6,55 @@ inside Freqtrade's runtime.
 
 from __future__ import annotations
 
+import os
 import time
 from typing import Optional
 
 from guards.base import Guard, GuardContext
+
+
+class EntryRateGuard(Guard):
+    """Wall-clock circuit breaker on entry frequency.
+
+    Freqtrade's ``max_open_trades`` caps simultaneous positions but cannot
+    bound aggregate entry frequency over wall-clock time. The 04-26 burst
+    incident produced 93 entries in 1 hour while never violating
+    ``max_open_trades=3`` instantaneously (positions cycled fast). This
+    guard adds the missing dimension: at most ``max_per_hour`` accepted
+    entries within any rolling ``window_s`` seconds.
+
+    State is in-memory only (not persisted via guards.pipeline.save_state).
+    Container restart resets the window — intentional, so deploys aren't
+    flagged as bursts.
+
+    Caller responsibility: invoke ``record_entry()`` AFTER the entry
+    actually goes through (after all guards pass and the strategy returns
+    True from confirm_trade_entry). Mirrors CooldownGuard.record_trade.
+    """
+
+    def __init__(self, max_per_hour: int = 5, window_s: int = 3600):
+        env_val = os.environ.get("SUPERTREND_MAX_ENTRIES_PER_HOUR")
+        self.max_per_hour = int(env_val) if env_val else int(max_per_hour)
+        self.window_s = int(window_s)
+        self._entry_ts: list[float] = []
+
+    def check(self, ctx: GuardContext) -> Optional[str]:
+        now = time.time()
+        # Prune entries older than window first so the count is accurate
+        self._entry_ts = [t for t in self._entry_ts if now - t < self.window_s]
+        if len(self._entry_ts) >= self.max_per_hour:
+            oldest_age_min = (now - self._entry_ts[0]) / 60
+            return (
+                f"EntryRateGuard: {len(self._entry_ts)} entries in last "
+                f"{self.window_s // 60}min (cap={self.max_per_hour}); "
+                f"oldest at {oldest_age_min:.1f}min ago. Possible burst; "
+                f"blocking new entries until window slides."
+            )
+        return None
+
+    def record_entry(self) -> None:
+        """Record an accepted entry. Caller must invoke after entry confirmed."""
+        self._entry_ts.append(time.time())
 
 
 class MaxPositionGuard(Guard):

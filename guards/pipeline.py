@@ -21,6 +21,7 @@ from guards.guards import (
     DailyLossGuard,
     DirectionalExposureGuard,
     DrawdownGuard,
+    EntryRateGuard,
     LiquidationGuard,
     MaxLeverageGuard,
     MaxPositionGuard,
@@ -61,6 +62,11 @@ def create_default_pipeline() -> GuardPipeline:
                     TotalExposureGuard(max_pct=80),
                     DirectionalExposureGuard(max_same_dir=2, reduced_pct=60),
                     MaxLeverageGuard(max_leverage=5),
+                    # 04-26 burst defense: cap entries-per-hour. Freqtrade's
+                    # max_open_trades alone cannot bound frequency over wall-
+                    # clock when positions cycle fast. See guards.guards
+                    # EntryRateGuard docstring.
+                    EntryRateGuard(max_per_hour=5),
                 ],
             ),
             GuardLayer(
