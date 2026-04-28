@@ -160,11 +160,28 @@ done
 
 # --wait blocks until all services reach their healthy state (or timeout).
 # This guarantees nginx reload below sees the *final* upstream IPs.
+#
+# R143: docker compose up may return non-zero on transient docker daemon
+# races (e.g. "removal of container <hash> is already in progress" —
+# observed in 2026-04-27 + 04-28 deploys) even though all services
+# eventually reach healthy. Without `set +e`, the non-zero exit aborted
+# the script before the nginx reload below, leaving stale upstream DNS
+# → 502 on api until manual `nginx -s reload`. Trust verify_deploy (R125)
+# as the real safety net for genuine service failures; here just record
+# the up rc and continue so the reload always happens.
+set +e
 docker compose -f docker-compose.prod.yml up -d --build --remove-orphans --wait --wait-timeout 120
+up_rc=$?
+set -e
+if [ "$up_rc" -ne 0 ]; then
+    echo "  ⚠️  R143: docker compose up returned $up_rc (likely transient daemon race;"
+    echo "      verify_deploy below will catch genuine service failures). Continuing..."
+fi
 
 # After web/api get recreated their IPs change; nginx's upstream DNS cache
 # becomes stale → 502 until next resolve. Force nginx to refresh.
 # `nginx -s reload` is sub-second and keeps the container alive.
+# R143: this section is now ALWAYS reached even when up returned non-zero.
 echo "  Reloading nginx to refresh upstream DNS..."
 docker compose -f docker-compose.prod.yml exec -T nginx nginx -s reload 2>/dev/null || \
     docker compose -f docker-compose.prod.yml restart nginx
