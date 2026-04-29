@@ -17,11 +17,20 @@ CONFIG_PATH = (
     Path(__file__).resolve().parent.parent
     / "config" / "freqtrade" / "config_dry.json"
 )
+DEMO_CONFIG_PATH = (
+    Path(__file__).resolve().parent.parent
+    / "config" / "freqtrade" / "config_demo.json"
+)
 
 
 @pytest.fixture(scope="module")
 def cfg() -> dict:
     return json.loads(CONFIG_PATH.read_text())
+
+
+@pytest.fixture(scope="module")
+def demo_cfg() -> dict:
+    return json.loads(DEMO_CONFIG_PATH.read_text())
 
 
 # =================================================================== #
@@ -114,4 +123,59 @@ def test_volumepairlist_uses_candles_mode_for_okx(cfg):
         f"VolumePairList refresh_period={rp}s must be >= one "
         f"lookback_timeframe ({tf} = {tf_seconds}s) or freqtrade "
         f"refuses to start the pairlist plugin."
+    )
+
+
+# =================================================================== #
+# R150 (2026-04-29): config_demo.json must stay a minimal overlay
+# =================================================================== #
+def test_demo_overlay_dry_run_false(demo_cfg):
+    """config_demo.json sets dry_run=false so freqtrade actually sends
+    orders to OKX (the simulated-trading endpoint). Anything else and
+    the demo mode silently degrades to in-memory dry_run."""
+    assert demo_cfg.get("dry_run") is False, (
+        "config_demo.json must set dry_run=false; otherwise the "
+        "demo overlay does nothing and freqtrade simulates locally."
+    )
+
+
+def test_demo_overlay_has_simulated_trading_header(demo_cfg):
+    """The x-simulated-trading: 1 header on BOTH sync and async ccxt
+    configs is what routes requests to OKX's demo endpoint. Missing
+    on either side and authenticated calls hit live mainnet."""
+    for key in ("ccxt_config", "ccxt_async_config"):
+        headers = (
+            demo_cfg.get("exchange", {}).get(key, {}).get("headers", {})
+        )
+        assert headers.get("x-simulated-trading") == "1", (
+            f"config_demo.json exchange.{key}.headers must include "
+            f"'x-simulated-trading': '1' or auth requests hit OKX live."
+        )
+
+
+def test_demo_overlay_is_minimal(demo_cfg):
+    """config_demo.json must be a pure overlay — only the keys needed
+    to flip dry_run + inject the demo header. Everything else
+    (pair_whitelist, max_open_trades, telegram, api_server, etc.)
+    inherits from config_dry.json via freqtrade's deep-merge.
+
+    Drift here means demo and dry diverge on settings the operator
+    expected to be uniform — pair lists fork, telegram quietens, etc."""
+    allowed_top_level = {"_comment", "dry_run", "exchange"}
+    actual = set(demo_cfg.keys())
+    extra = actual - allowed_top_level
+    assert not extra, (
+        f"config_demo.json has unexpected top-level keys {extra}. "
+        f"Only {allowed_top_level} allowed — everything else must "
+        f"inherit from config_dry.json."
+    )
+
+    # Inside exchange, only the two ccxt header overrides are allowed.
+    allowed_exchange_keys = {"ccxt_config", "ccxt_async_config"}
+    exchange_keys = set(demo_cfg.get("exchange", {}).keys())
+    extra_ex = exchange_keys - allowed_exchange_keys
+    assert not extra_ex, (
+        f"config_demo.json exchange has unexpected keys {extra_ex}. "
+        f"Only {allowed_exchange_keys} allowed — pair_whitelist, "
+        f"key/secret/password etc. must come from other configs."
     )

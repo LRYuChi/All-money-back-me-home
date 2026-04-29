@@ -90,6 +90,8 @@ services:
       - SUPERTREND_CORRELATION_FILTER=${SUPERTREND_CORRELATION_FILTER:-0}
       - SUPERTREND_EVAL_JOURNAL=${SUPERTREND_EVAL_JOURNAL:-1}
       - SUPERTREND_LIVE=${SUPERTREND_LIVE:-0}
+      # R150: three-way mode switch — forwarded for dashboard badge usage
+      - SUPERTREND_MODE=${SUPERTREND_MODE:-}
       # R140: 774cafd 加 exclude_dates filter, router 程式有 env-var 後備
       # (SUPERTREND_OPS_EXCLUDE_DATES) 但 compose 沒 forward → operator 設了
       # .env 也讀不到, /operations 永遠 fall through 到空 set。補 forward
@@ -112,26 +114,55 @@ services:
   freqtrade:
     image: freqtradeorg/freqtrade:stable
     entrypoint: ["/bin/sh", "-c"]
-    # P1-6 (round 47): SUPERTREND_LIVE env toggle.
-    #   SUPERTREND_LIVE=1 → live trading (real money on OKX)
-    #   SUPERTREND_LIVE=0 (or unset) → dry_run (paper trading, $1000 sim)
-    # Translated to Freqtrade's FREQTRADE__DRY_RUN env var. The bash
-    # conditional below handles the "1" → "false" / "0" → "true" mapping.
-    # Banner echoed to stdout so `docker logs` shows the mode at startup.
+    # R150 (2026-04-29): three-way mode switch via SUPERTREND_MODE.
+    #   SUPERTREND_MODE=dry  (default) → freqtrade in-memory dry-run, $$1000 sim
+    #   SUPERTREND_MODE=demo           → OKX simulated-trading endpoint (real demo balance, no real money)
+    #   SUPERTREND_MODE=live           → real money on OKX mainnet
+    # Legacy SUPERTREND_LIVE=1 is still honoured (maps to live) but cannot
+    # coexist with SUPERTREND_MODE — entrypoint fails fast on conflict.
+    #
+    # The CCXT sed patch (fetchCurrencies True→False) is unconditional:
+    # OKX demo /api/v5/asset/currencies returns 50038 ("feature unavailable
+    # in demo trading"), and freqtrade does not need currency metadata for
+    # trading. Patching for all modes keeps behavior consistent and
+    # reproducible across container recreations.
     command:
       - >-
-        if [ "$$SUPERTREND_LIVE" = "1" ]; then
-          export FREQTRADE__DRY_RUN=false;
-          echo '⚠️  SUPERTREND_LIVE=1 → LIVE TRADING (real money)';
-        else
-          export FREQTRADE__DRY_RUN=true;
-          echo '✅ dry_run mode (paper trading $$1000 sim)';
+        if [ -n "$$SUPERTREND_LIVE" ] && [ -n "$$SUPERTREND_MODE" ] && [ "$$SUPERTREND_LIVE" != "0" ]; then
+          echo '❌ SUPERTREND_LIVE and SUPERTREND_MODE both set — choose one';
+          exit 1;
         fi;
+        if [ "$$SUPERTREND_LIVE" = "1" ]; then MODE=live;
+        elif [ -n "$$SUPERTREND_MODE" ]; then MODE=$$SUPERTREND_MODE;
+        else MODE=dry; fi;
+        case "$$MODE" in
+          dry)
+            export FREQTRADE__DRY_RUN=true;
+            CFG_OVERLAY="";
+            echo '✅ DRY mode (in-memory sim, $$1000 wallet)';
+            ;;
+          demo)
+            export FREQTRADE__DRY_RUN=false;
+            CFG_OVERLAY="-c /freqtrade/config/config_demo.json";
+            echo '🎮 DEMO mode (OKX simulated-trading endpoint, real demo balance)';
+            ;;
+          live)
+            export FREQTRADE__DRY_RUN=false;
+            CFG_OVERLAY="";
+            echo '⚠️  LIVE mode (real money on OKX mainnet)';
+            ;;
+          *)
+            echo "❌ unknown SUPERTREND_MODE=$$MODE (allowed: dry/demo/live)";
+            exit 1;
+            ;;
+        esac;
+        sed -i "s/'fetchCurrencies': True,/'fetchCurrencies': False,/" /home/ftuser/.local/lib/python*/site-packages/ccxt/okx.py /home/ftuser/.local/lib/python*/site-packages/ccxt/async_support/okx.py 2>/dev/null || true;
         pip install --no-cache-dir smartmoneyconcepts --no-deps -q 2>/dev/null;
         pip install --no-cache-dir yfinance fredapi -q 2>/dev/null;
         freqtrade trade
         --strategy SupertrendStrategy
         -c /freqtrade/config/config_dry.json
+        $$CFG_OVERLAY
         -c /freqtrade/config/config_secrets.json
         -c /freqtrade/config/config_telegram.json
         --strategy-path /freqtrade/user_data/strategies
@@ -172,8 +203,14 @@ services:
       # to opt into new alpha sources or change sizing modes. Each is
       # independently togglable and reverts to the legacy path when unset.
       # ============================================================
-      # P1-6 (R47): live mode switch — 1 = real money, 0 = dry_run paper trading
-      - SUPERTREND_LIVE=${SUPERTREND_LIVE:-0}
+      # P1-6 (R47): legacy live mode switch — 1 = real money, 0 = dry_run.
+      # Kept for backwards compat. New deployments should use SUPERTREND_MODE.
+      - SUPERTREND_LIVE=${SUPERTREND_LIVE:-}
+      # R150 (2026-04-29): three-way mode switch (dry / demo / live).
+      # When unset and SUPERTREND_LIVE is also unset, defaults to "dry" in
+      # the entrypoint script. dry = in-memory sim. demo = OKX simulated-
+      # trading endpoint (real demo balance). live = real money on OKX.
+      - SUPERTREND_MODE=${SUPERTREND_MODE:-}
       # R48: market regime gate (BTC ATR/ADX/Hurst → TRENDING/CHOPPY/DEAD).
       #   1 = active (default; sizes down in CHOPPY, blocks in DEAD)
       #   0 = bypass entirely (legacy behavior, no regime context)

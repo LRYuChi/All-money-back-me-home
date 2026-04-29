@@ -163,21 +163,30 @@ else
     ok "$ops entries in last 7d — strategy has demonstrated entry capability"
 fi
 
-# ─── Check 7: SUPERTREND_LIVE currently 0 (sanity — about to flip to 1) ─
+# ─── Check 7: current mode is dry (sanity — about to flip to live) ──────
 echo
-echo "[7/8] SUPERTREND_LIVE currently 0 (sanity — flip happens AFTER preflight)"
+echo "[7/8] current mode is dry/demo (sanity — live flip happens AFTER preflight)"
 live_now=$(docker exec ambmh-freqtrade-1 sh -c 'printenv SUPERTREND_LIVE || echo 0' 2>/dev/null | tr -d '\r')
-if [ "$live_now" = "0" ]; then
-    ok "SUPERTREND_LIVE=0 (dry-run) — preflight check valid"
-elif [ "$live_now" = "1" ]; then
-    warn "SUPERTREND_LIVE already = 1 — bot is ALREADY LIVE. preflight is moot."
+mode_now=$(docker exec ambmh-freqtrade-1 sh -c 'printenv SUPERTREND_MODE || echo' 2>/dev/null | tr -d '\r')
+# R150: derive effective mode from both vars (live takes precedence if set to 1)
+if [ "$live_now" = "1" ]; then
+    effective_mode="live"
+elif [ -n "$mode_now" ]; then
+    effective_mode="$mode_now"
 else
-    warn "SUPERTREND_LIVE='$live_now' (unexpected value)"
+    effective_mode="dry"
 fi
 
-# ─── Check 8: dry_run flag inside freqtrade matches env ─────────────────
+case "$effective_mode" in
+    dry)  ok "effective mode = dry — preflight check valid" ;;
+    demo) ok "effective mode = demo (OKX simulated trading) — preflight check valid for upcoming live flip" ;;
+    live) warn "effective mode = live ALREADY — preflight is moot" ;;
+    *)    warn "unexpected mode='$effective_mode'" ;;
+esac
+
+# ─── Check 8: dry_run flag inside freqtrade matches effective mode ──────
 echo
-echo "[8/8] freqtrade /show_config dry_run reflects SUPERTREND_LIVE"
+echo "[8/8] freqtrade /show_config dry_run reflects current mode"
 dry=$(docker exec ambmh-api-1 python3 -c "
 import urllib.request, json, os, base64
 ft_user = os.environ.get('FT_USER', 'freqtrade')
@@ -194,13 +203,30 @@ try:
 except Exception as e:
     print(f'error:{e}')
 " 2>/dev/null)
-if [ "$live_now" = "0" ] && [ "$dry" = "dry_run" ]; then
-    ok "freqtrade reports dry_run (consistent with SUPERTREND_LIVE=0)"
-elif [ "$live_now" = "1" ] && [ "$dry" = "live" ]; then
-    ok "freqtrade reports live (consistent with SUPERTREND_LIVE=1)"
-else
-    fail "inconsistency: SUPERTREND_LIVE=$live_now but freqtrade reports $dry"
-fi
+# R150: dry mode → dry_run=true; demo/live → dry_run=false (orders go to OKX)
+case "$effective_mode" in
+    dry)
+        if [ "$dry" = "dry_run" ]; then
+            ok "freqtrade reports dry_run (consistent with mode=dry)"
+        else
+            fail "inconsistency: mode=dry but freqtrade reports $dry"
+        fi
+        ;;
+    demo)
+        if [ "$dry" = "live" ]; then
+            ok "freqtrade reports dry_run=false (consistent with mode=demo — orders go to OKX simulated endpoint)"
+        else
+            fail "inconsistency: mode=demo but freqtrade reports $dry (expected dry_run=false)"
+        fi
+        ;;
+    live)
+        if [ "$dry" = "live" ]; then
+            ok "freqtrade reports live (consistent with mode=live)"
+        else
+            fail "inconsistency: mode=live but freqtrade reports $dry"
+        fi
+        ;;
+esac
 
 # ─── Summary ────────────────────────────────────────────────────────────
 echo
